@@ -1,0 +1,14 @@
+{
+  "name": "bondimals",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["glasses-web"],
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "dev": "npm run dev --workspace @bondimals/glasses-web",
+    "build": "npm run build --workspace @bondimals/glasses-web",
+    "test": "npm run test --workspace @bondimals/glasses-web",
+    "typecheck": "npm run typecheck --workspace @bondimals/glasses-web",
+    "preview": "npm run preview --workspace @bondimals/glasses-web"
+  }
+}
