@@ -45,7 +45,7 @@ The preview command serves the production build; open its reported URL with `/si
 
 See [the verification record](docs/milestone-1-verification.md) for the checks performed on this implementation.
 
-The simulator uses Three.js (WebGL 2), TypeScript strict mode, Vite 6 (compatible with the workspace's Node 22.3), and Vitest. Production output is in `glasses-web/dist/`. A static host must serve `index.html` as a fallback for `/simulator` and `/display`. Public HTTPS hosting and physical glasses testing are later work; localhost is not a glasses deployment.
+The simulator uses Three.js (WebGL 2), TypeScript strict mode, Vite 6 (compatible with the workspace's Node 22.3), and Vitest. Production output is in `glasses-web/dist/`; the root build also copies it to `dist/` for static hosting. A static host must serve `index.html` as a fallback for `/simulator` and `/display`. Physical glasses testing requires HTTPS; localhost is not a glasses deployment.
 
 ## Files and component boundaries
 

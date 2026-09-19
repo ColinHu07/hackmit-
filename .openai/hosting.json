@@ -1,6 +1,7 @@
 {
   "project_id": "appgprj_6aaec3af73a081919f60424a5695e204",
   "static": {
-    "directory": "glasses-web/dist"
+    "directory": "dist",
+    "not_found_handling": "single-page-application"
   }
 }
