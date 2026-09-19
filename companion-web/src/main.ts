@@ -65,7 +65,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h1>A very good<br><em>place to meet.</em></h1>
         <div class="invite-card" id="room-invite"><div><span class="small-label">ROOM CODE</span><button id="copy-code" class="room-code" title="Copy room code"><span id="room-code">------</span>${icon('copy')}</button></div><button id="invite-button" class="round-button" title="Invite your friend" aria-label="Invite your friend">${icon('link')}</button></div>
         <p id="invite-note" class="room-description">Share your room code. Your friend's pet will appear here.</p>
+        <button type="button" id="pair-display" class="text-button">Pair glasses display</button><p id="display-code" role="status" hidden></p>
         <div class="roster" id="roster" aria-label="Players"></div>
+        <div class="quest-card" id="high-five-card"><div class="quest-header"><span class="quest-symbol">${icon('wave')}</span><div><span class="small-label">PLAY TOGETHER</span><h2>High five</h2></div></div><p id="high-five-status" role="status">Bring your pets together to invite a high five.</p><div class="request-actions"><button type="button" id="invite-high-five" class="primary-button">Invite high five</button><button type="button" id="accept-high-five" class="primary-button" hidden>Accept</button><button type="button" id="decline-high-five" class="text-button" hidden>Decline</button></div></div>
         <div id="dap-quest" class="quest-card dap-card" hidden><div class="quest-header"><span class="quest-symbol">${icon('wave')}</span><div><span class="small-label">MEET IN REAL LIFE</span><h2>Dap them up</h2></div></div><p>Walk over, introduce yourselves, and share a dap, high-five, or wave.</p><button class="primary-button" id="confirm-dap">We said hello ${icon('check')}</button><p id="dap-status" role="status">Both players confirm after meeting in person.</p></div>
         <div class="quest-card">
           <div class="quest-header"><span class="quest-symbol">${icon('play')}</span><div><span class="small-label">YOUR FIRST LITTLE ADVENTURE</span><h2>Make a new friend</h2></div><span class="quest-count" id="quest-count">0/3</span></div>
@@ -178,6 +180,23 @@ function updateControls(): void {
     button.disabled = !connected || !!local?.action || (button.dataset.action === 'play' && !near);
   });
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
+  const interaction = snapshot?.interaction;
+  const pending = interaction?.status === 'pending';
+  const incoming = pending && interaction.targetId === membership?.playerId;
+  el<HTMLButtonElement>('invite-high-five').hidden = !!incoming;
+  el<HTMLButtonElement>('invite-high-five').disabled = !connected || !near || !!pending || !!local?.action;
+  el<HTMLButtonElement>('accept-high-five').hidden = !incoming;
+  el<HTMLButtonElement>('decline-high-five').hidden = !incoming;
+  el<HTMLButtonElement>('accept-high-five').disabled = !connected || !near;
+  el<HTMLButtonElement>('decline-high-five').disabled = !connected;
+  el('high-five-status').textContent = incoming ? `${friend?.name ?? 'Your friend'} invited you to high five. Reply soon!`
+    : pending ? 'Waiting for your friend to answer…'
+    : interaction?.status === 'accepted' ? 'High five! You shared a moment.'
+    : interaction?.status === 'declined' ? 'Your friend declined the high five.'
+    : interaction?.status === 'expired' ? 'The high five invitation expired.'
+    : interaction?.status === 'canceled' ? 'The high five was canceled.'
+    : !friend ? 'Invite a friend to join the playground.'
+    : near ? 'Your pets are close enough for a high five.' : 'Bring your pets together first.';
   el<HTMLButtonElement>('confirm-dap').disabled = !connected || !friend || !!snapshot?.encounter?.dapConfirmed.includes(membership?.playerId ?? '') || !!snapshot?.encounter?.dapComplete;
   el('scene-hint').textContent = connection === 'offline' ? 'Offline. Leave the playground to connect again.'
     : !connected ? 'Reconnecting. Your pets are waiting for you.'
@@ -228,6 +247,10 @@ function renderRoster(): void {
 const client = new RoomClient({
   state: setConnection,
   error,
+  deviceGrant(grant, expiresAt) {
+    el('display-code').hidden = false;
+    el('display-code').textContent = `Open the glasses shared view and enter ${grant}. Code expires at ${new Date(expiresAt).toLocaleTimeString()}.`;
+  },
   snapshot(next, member) {
     const entering = !membership;
     membership = member;
@@ -464,6 +487,13 @@ el('accept-meet').addEventListener('click', () => {
 });
 el('decline-meet').addEventListener('click', () => { if (pendingMeet?.incoming) nearbyClient.respond(pendingMeet.requestId, false); });
 el('confirm-dap').addEventListener('click', () => { client.confirmDap(); });
+el('pair-display').addEventListener('click', () => client.requestDisplayCode());
+el('invite-high-five').addEventListener('click', () => {
+  const friend = snapshot?.players.find(p => p.id !== membership?.playerId && p.connected);
+  if (friend) client.inviteHighFive(friend.id);
+});
+el('accept-high-five').addEventListener('click', () => { if (snapshot?.interaction?.status === 'pending') client.respondHighFive(snapshot.interaction.id, true); });
+el('decline-high-five').addEventListener('click', () => { if (snapshot?.interaction?.status === 'pending') client.respondHighFive(snapshot.interaction.id, false); });
 
 el('create-tab').addEventListener('click', () => { mode = 'create'; updateEntry(); });
 el('join-tab').addEventListener('click', () => { mode = 'join'; updateEntry(); });

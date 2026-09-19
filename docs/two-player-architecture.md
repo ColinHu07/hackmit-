@@ -1,6 +1,6 @@
 # Two-player architecture plan
 
-Status: proposed implementation plan. This document describes the target design; it does not claim that the unimplemented pieces already work.
+Status: implementation in progress. The phone high-five flow and read-only glasses virtual view are implemented. Client extraction, controller handoff, and physical alignment remain proposed work.
 
 ## Goal and first release
 
@@ -84,6 +84,8 @@ Continue server-side message validation, rate limits, bounded rooms/buffers, ori
 5. **Evaluate physical alignment.** Run the hardware measurements above. Add a physical room mode only after its pose source and failure policy are demonstrated.
 
 ## Acceptance checks
+
+Current checkpoint: `/play` sends protocol version 1, room revisions, virtual-space snapshots, and high-five invitation state. Phones can invite, accept, decline, and animate an accepted interaction. A phone controller can issue a one-use, 60-second display code; `glasses-web/shared.html` observes both pets without taking a player slot. This view remains separate from the direction-anchored local Nova display. Durable completed interaction IDs across process restarts and shared physical alignment are not implemented.
 
 - Two independent accounts join one room; each controls exactly one pet; a third account is rejected.
 - Inviting, accepting, declining, timing out, moving apart, disconnecting, and rejoining yield the same visible state on both devices.

@@ -12,10 +12,27 @@ export function parsePlayMessage(input) {
   const allowed = {
     create: ['type', 'name', 'accountToken'], join: ['type', 'roomCode', 'name', 'playerToken', 'accountToken'],
     move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'],
+    interaction_invite: ['type', 'requestId', 'kind', 'targetPlayerId'],
+    interaction_respond: ['type', 'interactionId', 'accept'],
+    device_grant: ['type'], attach_display: ['type', 'grant'],
   };
   if (typeof input.type !== 'string' || !Object.hasOwn(allowed, input.type) || Object.keys(input).some(key => !allowed[input.type].includes(key))) return null;
   if (input.type === 'leave') return { type: 'leave' };
   if (input.type === 'confirm_dap') return { type: 'confirm_dap' };
+  if (input.type === 'device_grant') return { type: 'device_grant' };
+  if (input.type === 'attach_display') return typeof input.grant === 'string' && /^[A-HJ-NP-Z2-9]{8}$/.test(input.grant)
+    ? { type: 'attach_display', grant: input.grant } : null;
+  if (input.type === 'interaction_invite') {
+    if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,100}$/.test(input.requestId)
+      || input.kind !== 'high_five' || typeof input.targetPlayerId !== 'string'
+      || !/^[a-f0-9-]{36}$/.test(input.targetPlayerId)) return null;
+    return { type: input.type, requestId: input.requestId, kind: input.kind, targetPlayerId: input.targetPlayerId };
+  }
+  if (input.type === 'interaction_respond') {
+    if (typeof input.interactionId !== 'string' || !/^[a-f0-9-]{36}$/.test(input.interactionId)
+      || typeof input.accept !== 'boolean') return null;
+    return { type: input.type, interactionId: input.interactionId, accept: input.accept };
+  }
   if (input.type === 'move') {
     if (typeof input.x !== 'number' || typeof input.z !== 'number' || !Number.isFinite(input.x) || !Number.isFinite(input.z)) return null;
     const clamp = value => Math.max(-PLAY_WORLD_LIMIT, Math.min(PLAY_WORLD_LIMIT, value));

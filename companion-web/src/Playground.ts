@@ -595,6 +595,10 @@ export class Playground {
     }
     pet.gaitStrength = THREE.MathUtils.lerp(pet.gaitStrength, reducedMotion ? 0 : Math.min(speed * 0.9, 1), 1 - Math.exp(-12 * delta));
     const action = player?.action;
+    const shared = this.snapshot?.interaction;
+    const highFiveProgress = shared?.status === 'accepted' && shared.startedAt !== undefined && shared.duration
+      && player && (player.id === shared.actorId || player.id === shared.targetId)
+      ? THREE.MathUtils.clamp((serverTime - shared.startedAt) / shared.duration, 0, 1) : 1;
     const progress = action ? THREE.MathUtils.clamp((serverTime - action.startedAt) / Math.max(1, action.duration), 0, 1) : 1;
     const active = Boolean(action && serverTime >= action.startedAt && progress < 1);
     const envelope = active ? Math.sin(progress * Math.PI) : 0;
@@ -613,6 +617,12 @@ export class Playground {
         tilt += Math.sin(progress * Math.PI * 6) * 0.055;
       }
     }
+    if (!reducedMotion && highFiveProgress < 1) {
+      lift += Math.sin(highFiveProgress * Math.PI) * 0.22;
+      tilt += Math.sin(highFiveProgress * Math.PI * 3) * 0.08;
+      const friend = this.snapshot?.players.find(candidate => candidate.id !== player?.id && candidate.connected);
+      if (friend) yaw = Math.atan2(friend.x - pet.root.position.x, friend.z - pet.root.position.z);
+    }
     pet.body.position.y = lift + (reducedMotion ? 0 : Math.sin(pet.distance / 36 * Math.PI * 4) * 0.014 * pet.gaitStrength);
     pet.body.rotation.set(0, yaw, tilt * 0.25);
     for (const head of pet.heads) head.set(tilt, bow);
@@ -626,10 +636,10 @@ export class Playground {
     }
     for (let index = 0; index < pet.hearts.length; index++) {
       const heart = pet.hearts[index]!;
-      heart.visible = active && action?.kind !== 'jump' && (reducedMotion ? index === 0 : true);
+      heart.visible = ((active && action?.kind !== 'jump') || highFiveProgress < 1) && (reducedMotion ? index === 0 : true);
       if (!heart.visible) continue;
       const phase = reducedMotion ? 0.4 : (progress * 1.6 + index * 0.24) % 1;
-      heart.material.opacity = Math.sin(phase * Math.PI) * envelope * 0.9;
+      heart.material.opacity = Math.sin(phase * Math.PI) * (highFiveProgress < 1 ? Math.sin(highFiveProgress * Math.PI) : envelope) * 0.9;
       heart.position.set((index - 1.5) * 0.22, 1.45 + phase * 0.75, 0);
       heart.quaternion.copy(this.camera.quaternion);
       heart.scale.setScalar(0.095 + Math.sin(phase * Math.PI) * 0.035);

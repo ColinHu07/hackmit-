@@ -117,6 +117,98 @@ test('two authenticated phone players persist shared play rewards and pet state'
   assert.equal((await (await fetch(origin + '/api/v1/me/friends', { headers: { authorization: `Bearer ${alice.token}` } })).json()).friends[0].count, 2);
 });
 
+test('high five requires target consent and proximity and awards each account once', async t => {
+  const { origin, connect } = await setup(t, { tickMs: 10 });
+  const register = async name => (await (await fetch(origin + '/api/v1/players', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+  })).json());
+  const alice = await register('Alice'), bob = await register('Bob');
+  const a = await connect(), b = await connect();
+  a.send({ type: 'create', name: 'Alice', accountToken: alice.token });
+  const first = await welcome(a);
+  b.send({ type: 'join', roomCode: first.roomCode, name: 'Bob', accountToken: bob.token });
+  const second = await welcome(b);
+  const requestId = 'highfive_first';
+  a.send({ type: 'interaction_invite', requestId, kind: 'high_five', targetPlayerId: second.playerId });
+  await error(a, 'friend_too_far');
+  a.send({ type: 'move', x: 0, z: 0 });
+  b.send({ type: 'move', x: 0, z: 0 });
+  await state(a, snapshot => snapshot.quest.met);
+  a.send({ type: 'interaction_invite', requestId, kind: 'high_five', targetPlayerId: second.playerId });
+  const pending = await state(b, snapshot => snapshot.interaction?.status === 'pending');
+  assert.equal(pending.interaction.actorId, first.playerId);
+  a.send({ type: 'interaction_respond', interactionId: pending.interaction.id, accept: true });
+  await error(a, 'not_target');
+  b.send({ type: 'interaction_respond', interactionId: pending.interaction.id, accept: true });
+  const accepted = await state(a, snapshot => snapshot.interaction?.status === 'accepted');
+  assert.equal(accepted.bond, 1);
+  assert.equal(accepted.interaction.rewardStatus, 'awarded');
+  b.send({ type: 'interaction_respond', interactionId: pending.interaction.id, accept: true });
+  const replay = await state(b, snapshot => snapshot.interaction?.status === 'accepted');
+  assert.equal(replay.bond, 1);
+  for (const token of [alice.token, bob.token]) {
+    const profile = await (await fetch(origin + '/api/v1/me', { headers: { authorization: `Bearer ${token}` } })).json();
+    assert.equal(profile.rewards.interactions, 1);
+  }
+});
+
+test('high five expires and a display grant gives read-only access to one player slot', async t => {
+  const { connect } = await setup(t, { tickMs: 10, interactionTtlMs: 80, displayGrantTtlMs: 1000 });
+  const a = await connect(), b = await connect();
+  a.send({ type: 'create', name: 'Alex' });
+  const first = await welcome(a);
+  b.send({ type: 'join', roomCode: first.roomCode, name: 'Blair' });
+  const second = await welcome(b);
+  a.send({ type: 'device_grant' });
+  const grant = await a.next(message => message.type === 'device_grant');
+  const display = await connect();
+  display.send({ type: 'attach_display', grant: grant.grant });
+  const attached = await display.next(message => message.type === 'display_welcome');
+  assert.equal(attached.playerId, first.playerId);
+  assert.equal(attached.snapshot.players.length, 2);
+  const replay = await connect();
+  replay.send({ type: 'attach_display', grant: grant.grant });
+  await error(replay, 'invalid_grant');
+  display.send({ type: 'move', x: 3, z: 3 });
+  await error(display, 'display_read_only');
+  a.send({ type: 'move', x: 0, z: 0 });
+  b.send({ type: 'move', x: 0, z: 0 });
+  await state(a, snapshot => snapshot.quest.met);
+  a.send({ type: 'interaction_invite', requestId: 'expire_this_one', kind: 'high_five', targetPlayerId: second.playerId });
+  const pending = await state(display, snapshot => snapshot.interaction?.status === 'pending');
+  assert.equal(pending.interaction.targetId, second.playerId);
+  const expired = await state(display, snapshot => snapshot.interaction?.status === 'expired');
+  assert.equal(expired.bond, 0);
+  b.send({ type: 'interaction_respond', interactionId: pending.interaction.id, accept: true });
+  const unchanged = await state(b, snapshot => snapshot.interaction?.status === 'expired');
+  assert.equal(unchanged.bond, 0);
+});
+
+test('decline and moving apart resolve invitations without a bond', async t => {
+  const { connect } = await setup(t, { tickMs: 10 });
+  const a = await connect(), b = await connect();
+  a.send({ type: 'create', name: 'Alex' });
+  const first = await welcome(a);
+  b.send({ type: 'join', roomCode: first.roomCode, name: 'Blair' });
+  const second = await welcome(b);
+  a.send({ type: 'move', x: 0, z: 0 });
+  b.send({ type: 'move', x: 0, z: 0 });
+  await state(a, snapshot => snapshot.quest.met);
+  a.send({ type: 'interaction_invite', requestId: 'decline_first', kind: 'high_five', targetPlayerId: second.playerId });
+  const pending = await state(b, snapshot => snapshot.interaction?.status === 'pending');
+  b.send({ type: 'interaction_respond', interactionId: pending.interaction.id, accept: false });
+  assert.equal((await state(a, snapshot => snapshot.interaction?.status === 'declined')).bond, 0);
+  a.send({ type: 'interaction_invite', requestId: 'move_apart_next', kind: 'high_five', targetPlayerId: second.playerId });
+  const pendingAgain = await state(b, snapshot => snapshot.interaction?.status === 'pending' && snapshot.interaction.id !== pending.interaction.id);
+  a.send({ type: 'move', x: -3, z: 0 });
+  b.send({ type: 'move', x: 3, z: 0 });
+  await state(b, snapshot => snapshot.revision > pendingAgain.revision
+    && Math.hypot(snapshot.players[0].x - snapshot.players[1].x, snapshot.players[0].z - snapshot.players[1].z) > 1.5);
+  b.send({ type: 'interaction_respond', interactionId: pendingAgain.interaction.id, accept: true });
+  const canceled = await state(a, snapshot => snapshot.interaction?.status === 'canceled');
+  assert.equal(canceled.bond, 0);
+});
+
 test('room membership, token rejoin, and socket replacement isolate control', async t => {
   const { connect } = await setup(t);
   const a = await connect();

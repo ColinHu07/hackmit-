@@ -52,7 +52,7 @@ function socket(index: number): MockWebSocket {
 }
 
 function setup() {
-  const callbacks = { state: vi.fn(), snapshot: vi.fn(), error: vi.fn() };
+  const callbacks = { state: vi.fn(), snapshot: vi.fn(), error: vi.fn(), deviceGrant: vi.fn() };
   const client = new RoomClient(callbacks);
   client.start('ws://play.example/play', { type: 'create', name: 'Alex' });
   return { client, callbacks, first: socket(0) };
@@ -99,6 +99,22 @@ describe('RoomClient session lifecycle', () => {
     client.action('wave');
     expect(resumed.commands().at(-1)).toEqual({ type: 'action', action: 'wave' });
     expect(callbacks.error).not.toHaveBeenCalled();
+  });
+
+  it('sends interaction commands and forwards a one-use display code', () => {
+    const { client, first, callbacks } = setup();
+    first.open();
+    first.receive(welcome);
+    client.inviteHighFive('friend-id');
+    const invite = first.commands().at(-1) as { type: string; requestId: string; kind: string; targetPlayerId: string };
+    expect(invite).toMatchObject({ type: 'interaction_invite', kind: 'high_five', targetPlayerId: 'friend-id' });
+    expect(invite.requestId).toBeTruthy();
+    client.respondHighFive('interaction-id', true);
+    expect(first.commands().at(-1)).toEqual({ type: 'interaction_respond', interactionId: 'interaction-id', accept: true });
+    client.requestDisplayCode();
+    expect(first.commands().at(-1)).toEqual({ type: 'device_grant' });
+    first.receive({ type: 'device_grant', grant: 'ABCDEFGH', expiresAt: 60000 });
+    expect(callbacks.deviceGrant).toHaveBeenCalledWith('ABCDEFGH', 60000);
   });
 
   it('ignores late events from a socket superseded by a new room request', () => {

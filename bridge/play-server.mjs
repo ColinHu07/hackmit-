@@ -17,12 +17,15 @@ export function createPlayServer(options = {}) {
   const rejoinGraceMs = options.rejoinGraceMs ?? 30_000;
   const roomIdleMs = options.roomIdleMs ?? 10 * 60_000;
   const heartbeatMs = options.heartbeatMs ?? 20_000;
+  const interactionTtlMs = options.interactionTtlMs ?? 15_000;
+  const displayGrantTtlMs = options.displayGrantTtlMs ?? 60_000;
   const maxRooms = options.maxRooms ?? 500;
   const maxConnections = options.maxConnections ?? 1200;
   const origins = new Set(options.allowedOrigins ?? []);
   const rooms = new Map();
   const connections = new Set();
   const addresses = new Map();
+  const displayGrants = new Map();
   const game = createGameServer({ database: options.database ?? ':memory:', origin: options.allowedOrigins ?? [] });
   let closing = false;
 
@@ -77,21 +80,23 @@ export function createPlayServer(options = {}) {
   function fail(ws, code, message) { send(ws, { type: 'error', code, message }); }
   function snapshot(room, now = Date.now()) {
     return {
-      roomCode: room.code, serverTime: now,
+      roomCode: room.code, serverTime: now, revision: room.revision, space: 'virtual',
       players: [...room.players.values()].sort((a, b) => a.slot - b.slot).map(player => ({
         id: player.id, name: player.name, slot: player.slot,
         x: player.x, z: player.z, targetX: player.targetX, targetZ: player.targetZ,
         yaw: player.yaw, connected: Boolean(player.socket), action: player.action,
       })),
-      bond: room.bond, quest: { ...room.quest }, notice: room.notice,
+      bond: room.bond, quest: { ...room.quest }, notice: room.notice, interaction: room.interaction,
       ...(room.encounter ? { encounter: {
         kind: 'nearby', dapConfirmed: [...room.encounter.dapConfirmed], dapComplete: room.encounter.dapComplete,
       } } : {}),
     };
   }
   function broadcast(room, now = Date.now()) {
+    room.revision += 1;
     const message = { type: 'snapshot', snapshot: snapshot(room, now) };
     for (const player of room.players.values()) send(player.socket, message);
+    for (const display of room.displays) send(display, message);
   }
   function closePlayer(player) {
     const ws = player.socket;
@@ -111,8 +116,10 @@ export function createPlayServer(options = {}) {
     player.targetX = player.x;
     player.targetZ = player.z;
     player.action = null;
+    if (room.interaction?.status === 'pending') resolveInteraction(room, 'canceled', now);
     if (intentional) {
       room.players.delete(player.id);
+      for (const display of room.displays) if (display.displaySession?.player === player) display.close(4002, 'Player left');
       room.notice = `${player.name} left the playground.`;
     } else {
       player.disconnectedAt = now;
@@ -126,6 +133,7 @@ export function createPlayServer(options = {}) {
     while (rooms.has(code));
     const room = {
       code, players: new Map(), bond: 0, quest: { met: false, waved: false, played: false },
+      revision: 0, interaction: null, interactionRequests: new Map(), lastInteractionAt: 0, displays: new Set(),
       notice: 'Invite a friend with your room code.', lastActivity: Date.now(), lastPlayAt: 0,
     };
     rooms.set(code, room);
@@ -137,7 +145,7 @@ export function createPlayServer(options = {}) {
     player.disconnectedAt = null;
     ws.session = { room, player };
     room.lastActivity = Date.now();
-    send(ws, { type: 'welcome', roomCode: room.code, playerId: player.id, playerToken: player.token, snapshot: snapshot(room) });
+    send(ws, { type: 'welcome', protocolVersion: 1, roomCode: room.code, playerId: player.id, playerToken: player.token, snapshot: snapshot(room) });
     broadcast(room);
   }
   function makePlayer(room, name, accountId = null) {
@@ -185,6 +193,33 @@ export function createPlayServer(options = {}) {
     reward(room, players[1], players[0], kind);
   }
   const together = players => players.length === 2 && Math.hypot(players[0].x - players[1].x, players[0].z - players[1].z) <= PLAY_FRIEND_DISTANCE;
+  function resolveInteraction(room, status, now) {
+    const interaction = room.interaction;
+    if (!interaction || interaction.status !== 'pending') return;
+    interaction.status = status;
+    if (status === 'accepted') {
+      interaction.startedAt = now;
+      interaction.duration = 1800;
+      room.bond += 1;
+      room.lastInteractionAt = now;
+      const actor = room.players.get(interaction.actorId);
+      const target = room.players.get(interaction.targetId);
+      let awarded = 0;
+      if (room.gameRoomId && actor?.accountId && target?.accountId) {
+        for (const [index, [from, to]] of [[actor, target], [target, actor]].entries()) {
+          try {
+            const result = game.store.interact(room.gameRoomId, from.accountId, to.accountId, 'greet', `${interaction.id}_${index}`);
+            if (result.event) game.broadcast(room.gameRoomId, result.event);
+            awarded += 1;
+          } catch {
+            // The shared animation still resolves; the snapshot reports a missing reward.
+          }
+        }
+      }
+      interaction.rewardStatus = awarded === 2 ? 'awarded' : actor?.accountId && target?.accountId ? 'unavailable' : 'not_linked';
+      room.notice = 'Your pets shared a high five!';
+    } else room.notice = status === 'declined' ? 'High five declined.' : status === 'expired' ? 'High five invitation expired.' : 'High five canceled.';
+  }
   function setAction(player, kind, now) {
     player.action = { id: randomUUID(), kind, startedAt: now, duration: PLAY_ACTION_DURATION[kind] };
     player.lastActionAt = now;
@@ -193,6 +228,17 @@ export function createPlayServer(options = {}) {
   }
   function processMessage(ws, message) {
     const now = Date.now();
+    if (message.type === 'attach_display') {
+      if (ws.session || ws.displaySession) return fail(ws, 'already_joined', 'This connection is already in a room.');
+      const grant = displayGrants.get(message.grant);
+      if (!grant || grant.expiresAt <= now || !grant.room.players.has(grant.player.id)) return fail(ws, 'invalid_grant', 'That display code expired. Request a new one on your phone.');
+      displayGrants.delete(message.grant);
+      grant.room.displays.add(ws);
+      ws.displaySession = { room: grant.room, player: grant.player };
+      send(ws, { type: 'display_welcome', protocolVersion: 1, roomCode: grant.room.code, playerId: grant.player.id, snapshot: snapshot(grant.room, now) });
+      return;
+    }
+    if (ws.displaySession) return fail(ws, 'display_read_only', 'Use your phone to control this pet.');
     if (message.type === 'create' || message.type === 'join') {
       if (ws.session) return fail(ws, 'already_joined', 'Leave your current room before joining another.');
       if (!consume(ws.quota.admissions, 60, 0.5, now)) return fail(ws, 'rate_limited', 'Too many room requests. Try again shortly.');
@@ -230,6 +276,47 @@ export function createPlayServer(options = {}) {
     if (!ws.session) return fail(ws, 'not_joined', 'Create or join a room first.');
     const { room, player } = ws.session;
     room.lastActivity = now;
+    if (message.type === 'device_grant') {
+      if (displayGrants.size >= 1000) return fail(ws, 'server_full', 'Too many pending display codes.');
+      let grant;
+      do { grant = Array.from({ length: 8 }, () => PLAY_ROOM_ALPHABET[randomInt(PLAY_ROOM_ALPHABET.length)]).join(''); }
+      while (displayGrants.has(grant));
+      const expiresAt = now + displayGrantTtlMs;
+      displayGrants.set(grant, { room, player, expiresAt });
+      send(ws, { type: 'device_grant', grant, expiresAt });
+      return;
+    }
+    if (message.type === 'interaction_invite') {
+      const key = `${player.id}:${message.requestId}`;
+      const existing = room.interactionRequests.get(key);
+      if (existing) {
+        if (existing.targetId !== message.targetPlayerId || existing.kind !== message.kind) return fail(ws, 'request_conflict', 'That request ID was used for another invitation.');
+        return send(ws, { type: 'snapshot', snapshot: snapshot(room, now) });
+      }
+      const target = room.players.get(message.targetPlayerId);
+      if (!target || target === player || !target.socket) return fail(ws, 'friend_disconnected', 'Your friend must be here to interact.');
+      if (room.interaction?.status === 'pending') return fail(ws, 'interaction_busy', 'Answer the current invitation first.');
+      if (now - room.lastInteractionAt < 5000) return fail(ws, 'interaction_cooldown', 'Wait a moment before another high five.');
+      if (!together(friends(room))) return fail(ws, 'friend_too_far', 'Bring both pets close together.');
+      room.interaction = { id: randomUUID(), kind: message.kind, actorId: player.id, targetId: target.id, status: 'pending', expiresAt: now + interactionTtlMs };
+      room.interactionRequests.set(key, room.interaction);
+      if (room.interactionRequests.size > 128) room.interactionRequests.delete(room.interactionRequests.keys().next().value);
+      room.notice = `${player.name} invited ${target.name} to high five.`;
+      broadcast(room, now);
+      return;
+    }
+    if (message.type === 'interaction_respond') {
+      const interaction = room.interaction;
+      if (!interaction || interaction.id !== message.interactionId) return fail(ws, 'interaction_not_found', 'That invitation is no longer active.');
+      if (interaction.targetId !== player.id) return fail(ws, 'not_target', 'Only the invited player can answer.');
+      if (interaction.status !== 'pending') return send(ws, { type: 'snapshot', snapshot: snapshot(room, now) });
+      if (now >= interaction.expiresAt) resolveInteraction(room, 'expired', now);
+      else if (!message.accept) resolveInteraction(room, 'declined', now);
+      else if (!together(friends(room))) resolveInteraction(room, 'canceled', now);
+      else resolveInteraction(room, 'accepted', now);
+      broadcast(room, now);
+      return;
+    }
     if (message.type === 'confirm_dap') {
       if (!room.encounter) return fail(ws, 'not_nearby_encounter', 'This quest is available after accepting a nearby invitation.');
       if (friends(room).length !== 2) return fail(ws, 'friend_disconnected', 'Both people need to be connected to confirm this quest.');
@@ -285,6 +372,7 @@ export function createPlayServer(options = {}) {
   wss.on('connection', (ws, _request, quota) => {
     connections.add(ws);
     ws.session = null;
+    ws.displaySession = null;
     ws.quota = quota;
     ws.alive = true;
     ws.connectedAt = Date.now();
@@ -292,7 +380,7 @@ export function createPlayServer(options = {}) {
     ws.strikes = 0;
     ws.on('pong', () => { ws.alive = true; });
     ws.on('error', () => {});
-    ws.on('close', () => { connections.delete(ws); detach(ws); });
+    ws.on('close', () => { connections.delete(ws); if (ws.displaySession) ws.displaySession.room.displays.delete(ws); detach(ws); });
     ws.on('message', (data, binary) => {
       if (!consume(ws.bucket, 40, 20)) {
         fail(ws, 'rate_limited', 'Too many updates. Please slow down.');
@@ -326,6 +414,7 @@ export function createPlayServer(options = {}) {
     lastTick = now;
     for (const room of rooms.values()) {
       reapPlayers(room, now);
+      if (room.interaction?.status === 'pending' && now >= room.interaction.expiresAt) resolveInteraction(room, 'expired', now);
       const connected = friends(room);
       if (connected.length === 0 && now - room.lastActivity >= roomIdleMs) { rooms.delete(room.code); continue; }
       for (const player of connected) {
@@ -349,11 +438,12 @@ export function createPlayServer(options = {}) {
   const heartbeat = setInterval(() => {
     const now = Date.now();
     for (const ws of connections) {
-      if (!ws.alive || (!ws.session && now - ws.connectedAt > 30_000)) { ws.terminate(); continue; }
+      if (!ws.alive || (!ws.session && !ws.displaySession && now - ws.connectedAt > 30_000)) { ws.terminate(); continue; }
       ws.alive = false;
       ws.ping();
     }
     for (const [address, quota] of addresses) if (now - Math.max(quota.at, quota.admissions.at) > 120_000) addresses.delete(address);
+    for (const [code, grant] of displayGrants) if (grant.expiresAt <= now) displayGrants.delete(code);
   }, heartbeatMs);
   tick.unref();
   heartbeat.unref();

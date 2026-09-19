@@ -6,6 +6,7 @@ interface Callbacks {
   state: (state: ConnectionState) => void;
   snapshot: (snapshot: PlaySnapshot, membership: Membership) => void;
   error: (message: string, terminal?: boolean) => void;
+  deviceGrant?: (grant: string, expiresAt: number) => void;
 }
 type Entry = { type: 'create'; name: string } | { type: 'join'; name: string; roomCode: string; playerToken?: string };
 
@@ -35,6 +36,7 @@ export class RoomClient {
   private url = '';
   private lastMove = 0;
   private lastSnapshotTime = 0;
+  private lastRevision = 0;
   private watchdog: ReturnType<typeof setInterval> | undefined;
   private accountToken: string | null = null;
 
@@ -83,7 +85,10 @@ export class RoomClient {
         else this.callbacks.error(message.message);
         return;
       }
+      if (message.type === 'device_grant') { this.callbacks.deviceGrant?.(message.grant, message.expiresAt); return; }
       if (message.type === 'welcome') {
+        if (message.protocolVersion !== undefined && message.protocolVersion !== 1) { this.fail('This playground needs a newer app version.'); return; }
+        this.lastRevision = message.snapshot.revision ?? 0;
         clearTimeout(this.timeout);
         this.membership = {
           roomCode: message.roomCode, playerId: message.playerId,
@@ -99,6 +104,8 @@ export class RoomClient {
         }, 2000);
         this.callbacks.snapshot(message.snapshot, this.membership);
       } else if (message.type === 'snapshot' && this.membership && this.connected) {
+        if ((message.snapshot.revision ?? 0) < (this.lastRevision ?? 0)) return;
+        this.lastRevision = message.snapshot.revision ?? 0;
         this.lastSnapshotTime = performance.now();
         this.callbacks.snapshot(message.snapshot, this.membership);
       }
@@ -132,6 +139,9 @@ export class RoomClient {
     this.send({ type: 'move', x, z });
   }
   action(action: PetActionKind): void { this.send({ type: 'action', action }); }
+  inviteHighFive(targetPlayerId: string): void { this.send({ type: 'interaction_invite', requestId: crypto.randomUUID(), kind: 'high_five', targetPlayerId }); }
+  respondHighFive(interactionId: string, accept: boolean): void { this.send({ type: 'interaction_respond', interactionId, accept }); }
+  requestDisplayCode(): void { this.send({ type: 'device_grant' }); }
   confirmDap(): void { this.send({ type: 'confirm_dap' }); }
   private send(message: object): void {
     if (this.connected && this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
@@ -152,6 +162,7 @@ export class RoomClient {
     this.socket = null;
     socket?.close();
     this.membership = null;
+    this.lastRevision = 0;
     this.entry = null;
     this.callbacks.state('idle');
   }
