@@ -11,11 +11,15 @@ export function parsePlayMessage(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const allowed = {
     create: ['type', 'name'], join: ['type', 'roomCode', 'name', 'playerToken'],
-    move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'],
+    heading: ['type', 'yaw'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'],
   };
   if (typeof input.type !== 'string' || !Object.hasOwn(allowed, input.type) || Object.keys(input).some(key => !allowed[input.type].includes(key))) return null;
   if (input.type === 'leave') return { type: 'leave' };
   if (input.type === 'confirm_dap') return { type: 'confirm_dap' };
+  if (input.type === 'heading') {
+    if (typeof input.yaw !== 'number' || !Number.isFinite(input.yaw)) return null;
+    return { type: 'heading', yaw: Math.atan2(Math.sin(input.yaw), Math.cos(input.yaw)) };
+  }
   if (input.type === 'move') {
     if (typeof input.x !== 'number' || typeof input.z !== 'number' || !Number.isFinite(input.x) || !Number.isFinite(input.z)) return null;
     const clamp = value => Math.max(-PLAY_WORLD_LIMIT, Math.min(PLAY_WORLD_LIMIT, value));

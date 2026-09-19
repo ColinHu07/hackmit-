@@ -193,3 +193,18 @@ test('configured browser origins are enforced before websocket admission', async
   accepted.send({ type: 'create', name: 'Alex' });
   await welcome(accepted);
 });
+
+test('compass heading changes shared facing without moving the pet', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'create', name: 'Walker' });
+  const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'join', roomCode: first.roomCode, name: 'Friend' }); await welcome(b);
+  a.send({ type: 'heading', yaw: Math.PI });
+  const next = await state(b, snapshot => Math.abs(snapshot.players[0].yaw - Math.PI) < 0.001);
+  assert.equal(next.players[0].x, first.snapshot.players[0].x);
+  assert.equal(next.players[0].z, first.snapshot.players[0].z);
+  assert.equal(next.bond, 0);
+  assert.equal(parsePlayMessage({ type: 'heading', yaw: 'north' }), null);
+  assert.equal(parsePlayMessage({ type: 'heading', yaw: Infinity }), null);
+  assert.equal(parsePlayMessage({ type: 'heading', yaw: 0, latitude: 42 }), null);
+});

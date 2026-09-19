@@ -1,9 +1,13 @@
+import '@fontsource-variable/dm-sans';
+import '@fontsource-variable/manrope';
 import './style.css';
 import { Playground } from './Playground';
 import { RoomClient, normalizeServerUrl } from './RoomClient';
 import { NearbyClient } from './NearbyClient';
 import { LocationDiscovery } from './LocationDiscovery';
 import { DevelopmentLocation } from './DevelopmentLocation';
+import { isNativePhone, nativeCommand, nativeFix, NativeLocation, onNativeEvent } from './NativePhone';
+import { WalkingTracker } from './WalkingTracker';
 import type { LocationFix } from './LocationDiscovery';
 import type { NearbyPet, MeetRequest } from '../../shared/nearby-protocol';
 import type { ConnectionState, Membership } from './RoomClient';
@@ -84,6 +88,13 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="action-bar"><button data-action="wave">${icon('wave')}<span>Wave</span></button><button data-action="feed">${icon('treat')}<span>Treat</span></button><button data-action="jump">${icon('jump')}<span>Jump</span></button><button data-action="play" class="co-op-action">${icon('play')}<span>Play together</span></button></div>
         <p class="action-notice" id="action-notice" role="status" aria-live="polite">Your little adventure starts here.</p>
       </div>
+      <div id="native-tools" class="native-tools" hidden>
+        <div class="native-walking-heading"><strong>Walk with your pet</strong><span id="compass-reading">N ↑ · compass off</span></div>
+        <p id="walking-status" role="status">Use your iPhone’s location and compass. Movement is scaled to the meadow.</p>
+        <div class="native-buttons"><button id="walk-toggle">Start walking</button><button id="walk-recenter" disabled>Recenter</button></div>
+        <div class="native-buttons"><button id="record-clip">Record quest clip</button><button id="review-clip">Review clip</button><button id="delete-clip">Delete clip</button></div>
+        <p id="recording-status" role="status">Record up to 10 seconds. AI verification comes later.</p>
+      </div>
       <div class="meadow-footer"><span>01 / THE FIRST HELLO</span><span>A WORLD WE MAKE TOGETHER</span></div>
     </section>
   </main>
@@ -107,8 +118,10 @@ function readResume(): (Membership & { serverUrl: string }) | null {
 }
 const params = new URLSearchParams(location.search);
 const devServer = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}${import.meta.env.DEV ? ':8788' : location.port ? `:${location.port}` : ''}${import.meta.env.DEV ? '' : '/play'}`;
-let serverUrl = params.get('server') || stored('bondimals:server') || import.meta.env.VITE_PLAY_SERVER_URL || devServer;
+let serverUrl = params.get('server') || stored('bondimals:server') || window.bondimalsNative?.serverURL || import.meta.env.VITE_PLAY_SERVER_URL || devServer;
 let mode: 'nearby' | 'create' | 'join' = params.has('room') ? 'join' : 'nearby';
+let walking = false;
+const walkingTracker = new WalkingTracker();
 let ready = false;
 let connection: ConnectionState = 'idle';
 let membership: Membership | null = null;
@@ -174,7 +187,7 @@ function updateControls(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     button.disabled = !connected || !!local?.action || (button.dataset.action === 'play' && !near);
   });
-  el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
+  el<HTMLButtonElement>('meet-button').disabled = !connected || !friend || walking;
   el<HTMLButtonElement>('confirm-dap').disabled = !connected || !friend || !!snapshot?.encounter?.dapConfirmed.includes(membership?.playerId ?? '') || !!snapshot?.encounter?.dapComplete;
   el('scene-hint').textContent = connection === 'offline' ? 'Offline. Leave the playground to connect again.'
     : !connected ? 'Reconnecting. Your pets are waiting for you.'
@@ -183,6 +196,7 @@ function updateControls(): void {
 }
 function setConnection(state: ConnectionState): void {
   connection = state;
+  if (state === 'offline' || state === 'reconnecting') stopWalking();
   const labels: Record<ConnectionState, string> = { idle: 'Pet preview', connecting: 'Connecting', connected: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
   el('connection-status').dataset.state = state;
   el('connection-label').textContent = labels[state];
@@ -230,6 +244,7 @@ const client = new RoomClient({
     membership = member;
     snapshot = next;
     if (entering) {
+      stopWalking();
       try { sessionStorage.setItem(resumeKey, JSON.stringify({ ...member, serverUrl })); } catch { /* Reconnect still works without persistent storage. */ }
     }
     el('home-panel').hidden = true;
@@ -391,8 +406,9 @@ const locationCallbacks = {
 };
 const locationTracker = import.meta.env.DEV && params.get('demo') === 'nearby'
   ? new DevelopmentLocation(locationCallbacks, params.get('player') === '2')
-  : new LocationDiscovery(locationCallbacks);
+  : isNativePhone() ? new NativeLocation(locationCallbacks) : new LocationDiscovery(locationCallbacks);
 function startNearby(): void {
+  stopWalking();
   serverUrl = normalizeServerUrl(serverUrl);
   nearbyActive = true;
   locationActive = true;
@@ -414,6 +430,7 @@ function startNearby(): void {
   renderNearby();
 }
 function stopNearby(): void {
+  stopWalking();
   nearbyActive = false;
   locationActive = false;
   locationTracker.stop();
@@ -461,6 +478,7 @@ el('entry-form').addEventListener('submit', event => {
   } catch (cause) { error(cause instanceof Error ? cause.message : 'Check the multiplayer server address.'); }
 });
 el('leave-button').addEventListener('click', () => {
+  stopWalking();
   clearResume();
   membership = null;
   snapshot = null;
@@ -492,7 +510,7 @@ canvas.addEventListener('keydown', event => {
   const direction: Record<string, [number, number]> = { ArrowUp: [0, -0.5], ArrowDown: [0, 0.5], ArrowLeft: [-0.5, 0], ArrowRight: [0.5, 0] };
   const delta = direction[event.key];
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
-  if (delta && local && connection === 'connected') {
+  if (delta && local && connection === 'connected' && !walking) {
     event.preventDefault();
     client.move(Math.max(-3, Math.min(3, local.targetX + delta[0])), Math.max(-3, Math.min(3, local.targetZ + delta[1])));
   }
@@ -554,6 +572,7 @@ window.addEventListener('pageshow', event => {
 updateEntry();
 try {
   playground = new Playground(canvas, (x, z) => {
+    if (walking) return;
     el('error-message').hidden = true;
     client.move(x, z);
   });
@@ -575,4 +594,69 @@ try {
   el('scene-loading').textContent = 'The meadow couldn’t load. Refresh to try again.';
   el('enter-label').textContent = 'Pet unavailable';
   error('We couldn’t load the 3D playground. Check your connection and WebGL support, then refresh.');
+}
+
+function stopWalking(): void {
+  if (!walking) return;
+  walking = false;
+  nativeCommand('stopLocation', { purpose: 'walking' });
+  playground?.setWalkingPose(null);
+  el('walk-toggle').textContent = 'Start walking';
+  el<HTMLButtonElement>('walk-recenter').disabled = true;
+  el('walking-status').textContent = 'Walking paused. Tap Start walking to resume.';
+  el('compass-reading').textContent = 'N ↑ · compass off';
+  updateControls();
+}
+function publishWalking(moved = false): void {
+  if (!walking) return;
+  playground?.setWalkingPose(walkingTracker.pose);
+  if (membership && connection === 'connected') {
+    if (moved) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
+    client.heading(walkingTracker.pose.yaw);
+  }
+}
+if (isNativePhone()) {
+  el('native-tools').hidden = false;
+  el('walk-toggle').addEventListener('click', () => {
+    if (walking) { stopWalking(); return; }
+    walking = true;
+    const local = snapshot?.players.find(p => p.id === membership?.playerId);
+    walkingTracker.reset(local?.x ?? 0, local?.z ?? 0);
+    el('walk-toggle').textContent = 'Pause walking';
+    el<HTMLButtonElement>('walk-recenter').disabled = false;
+    el('walking-status').textContent = 'Finding your position and north…';
+    publishWalking();
+    updateControls();
+    nativeCommand('startLocation', { purpose: 'walking' });
+  });
+  el('walk-recenter').addEventListener('click', () => {
+    if (!walking) return;
+    walkingTracker.reset(); publishWalking(true);
+    el('walking-status').textContent = 'Recentered. Finding a fresh starting position…';
+  });
+  for (const [id, command] of [['record-clip', 'recordClip'], ['review-clip', 'reviewClip'], ['delete-clip', 'deleteClip']] as const) {
+    el(id).addEventListener('click', () => nativeCommand(command));
+  }
+  onNativeEvent(event => {
+    if (event.type === 'recording') el('recording-status').textContent = event.message ?? '';
+    if (event.type === 'paused' || event.type === 'unavailable') {
+      stopWalking();
+      if (event.message) el('walking-status').textContent = event.message;
+    }
+    if (!walking) return;
+    if (event.type === 'status') el('walking-status').textContent = event.message ?? '';
+    if (event.type === 'heading') {
+      if (walkingTracker.heading(event.degrees ?? -1, event.accuracy ?? -1)) {
+        el('compass-reading').textContent = `N ↑ · ${Math.round(event.degrees!)}° ${event.reference === 'true' ? 'true' : 'magnetic'}`;
+        publishWalking();
+      } else el('compass-reading').textContent = 'Compass uncertain · move away from metal';
+    }
+    const fix = nativeFix(event);
+    if (fix) {
+      const result = walkingTracker.location(fix);
+      el('walking-status').textContent = result.message;
+      publishWalking(result.moved);
+    }
+  });
+  nativeCommand('ready');
 }

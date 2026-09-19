@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
 import { SoftHead } from '../../glasses-web/src/rendering/SoftHead';
+import type { WalkingPose } from './WalkingTracker';
 import type { PlayPlayer, PlaySnapshot } from '../../shared/play-protocol';
 
 const WORLD_LIMIT = 3;
@@ -53,6 +54,7 @@ export class Playground {
   private nearby: NearbyPet[] | null = null;
   private onSelectNearby: ((peerId: string) => void) | undefined;
   private snapshotReceivedAt = 0;
+  private walkingPose: WalkingPose | null = null;
   private enabled = false;
   private disposed = false;
   private visible = true;
@@ -116,6 +118,12 @@ export class Playground {
     this.refreshAnimation();
   }
 
+  setWalkingPose(pose: WalkingPose | null): void {
+    this.walkingPose = pose ? { ...pose } : null;
+    this.camera.position.set(pose ? 0 : 8, pose ? 13 : 10, pose ? 10 : 12);
+    this.camera.lookAt(0, 0, 0);
+  }
+
   async load(): Promise<void> {
     const gltf = await new GLTFLoader().loadAsync(`${import.meta.env.BASE_URL}models/nova.glb`);
     // Build the shared playground pair and two discovery visitors once. Each
@@ -152,8 +160,7 @@ export class Playground {
       pet.root.visible = isPreview || Boolean(player?.connected);
       if (isPreview) {
         pet.playerId = null;
-        pet.root.position.set(0, 0.035, 0);
-        pet.yaw = 0.35;
+        if (!this.walkingPose) { pet.root.position.set(0, 0.035, 0); pet.yaw = 0.35; }
       } else if (player && pet.playerId !== player.id) {
         pet.playerId = player.id;
         pet.root.position.set(player.x, 0.035, player.z);
@@ -201,8 +208,7 @@ export class Playground {
       if (index === 0) {
         pet.playerId = null;
         pet.root.visible = true;
-        pet.root.position.set(0, 0.035, 0);
-        pet.yaw = 0.35;
+        if (!this.walkingPose) { pet.root.position.set(0, 0.035, 0); pet.yaw = 0.35; }
       } else {
         pet.playerId ??= unassigned.next().value?.id ?? null;
         const peer = this.nearby.find((candidate) => candidate.id === pet.playerId);
@@ -564,7 +570,14 @@ export class Playground {
     for (let index = 0; index < this.pets.length; index++) {
       const pet = this.pets[index]!;
       if (!pet.root.visible) continue;
-      const player = this.snapshot?.players.find((candidate) => candidate.id === pet.playerId);
+      let player = this.snapshot?.players.find((candidate) => candidate.id === pet.playerId);
+      if (this.walkingPose && ((!this.snapshot && index === 0) || player?.id === this.localPlayerId)) {
+        const pose = this.walkingPose;
+        player = player ? { ...player, yaw: pose.yaw } : {
+          id: 'local-walk', name: '', slot: 0, ...pose, targetX: pose.x, targetZ: pose.z,
+          connected: true, action: null,
+        };
+      }
       this.animatePet(pet, player, delta, now / 1000, serverTime, reducedMotion);
     }
     const local = this.snapshot?.players.find((player) => player.id === this.localPlayerId);

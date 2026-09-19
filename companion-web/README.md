@@ -74,3 +74,7 @@ For a repeatable local browser demo, open `http://localhost:5217/?demo=nearby&pl
 ## Glasses integration later
 
 `shared/play-protocol.ts` defines destinations, actions, and snapshots independently of the renderer. A glasses client can join the same room and render those snapshots when its input/display path is ready. Correct placement against real-world surfaces while walking additionally requires verified spatial tracking; the shared protocol alone does not provide it.
+
+## Native iPhone app
+
+The same interface is now bundled in an installable iPhone app with native GPS, compass, walking controls, and camera recording. See [native iPhone setup](../phone-ios/README.md). Browser location and room-code play remain available.

@@ -214,6 +214,10 @@ export function createPlayServer(options = {}) {
       broadcast(room, now);
       return;
     }
+    if (message.type === 'heading') {
+      if (!player.action && Math.hypot(player.targetX - player.x, player.targetZ - player.z) < 0.05) player.yaw = message.yaw;
+      return;
+    }
     if (message.type === 'move') {
       if (player.action?.kind === 'play' && now < player.action.startedAt + player.action.duration) return;
       player.targetX = message.x;

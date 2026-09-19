@@ -34,6 +34,7 @@ export interface PlaySnapshot {
 export type PlayClientMessage =
   | { type: 'create'; name: string }
   | { type: 'join'; roomCode: string; name: string; playerToken?: string }
+  | { type: 'heading'; yaw: number }
   | { type: 'move'; x: number; z: number }
   | { type: 'action'; action: PetActionKind }
   | { type: 'confirm_dap' }

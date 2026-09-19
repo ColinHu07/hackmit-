@@ -1,8 +1,23 @@
 # Bondimals
 
+## iPhone app — start here
+
+**The installable iPhone app is in [`phone-ios/`](phone-ios/README.md).** It includes native camera recording, location-based nearby discovery, compass facing, and walking-driven pet movement.
+
+**[Install on your iPhone →](phone-ios/README.md#download-and-install)** · [Download source ZIP (Mac + Xcode required)](https://github.com/ColinHu07/hackmit-/archive/refs/heads/main.zip)
+
+**Distribution: Xcode development build.** Download the repository on a Mac, then build and sign for your iPhone using the guide. There is currently no public TestFlight/App Store link or universal tap-to-install IPA.
+
+| Version | Folder | Use it for |
+| --- | --- | --- |
+| **iPhone app** | [`phone-ios/`](phone-ios/README.md) | Install Bondimals on an iPhone with native camera, GPS, and compass. |
+| Browser companion | [`companion-web/`](companion-web/README.md) | Run the phone playground in a web browser. |
+| Glasses camera bridge | [`glasses-ios/`](docs/hand-camera-bridge.md) | Connect the glasses camera; this is a separate app. |
+| Shared game server | [`bridge/play-server.mjs`](docs/phone-server.md) | Run multiplayer and nearby discovery for both phone clients. |
+
 ## Phone-first shared playground
 
-The phone companion discovers opted-in nearby pets (an approximate 10-meter GPS filter), lets two players agree to meet, and opens a shared 3D meadow automatically. Both can confirm a real-world hello and play together; room codes remain a fallback. Run `HOST=0.0.0.0 npm run play:server` and `npm run dev:phone` in separate terminals. Physical-phone location requires HTTPS and WSS, with both `/play` and `/nearby` forwarded to the server. See the [phone guide](companion-web/README.md) and [server deployment guide](docs/phone-server.md), including a clearly labeled local location demo. A server URL can be entered in app settings or configured at build time. Real-world AR alignment and joining from glasses remain later work.
+The phone companion discovers opted-in nearby pets (an approximate 10-meter GPS filter), lets two players agree to meet, and opens a shared 3D meadow automatically. Both can confirm a real-world hello and play together; room codes remain a fallback. Run `HOST=0.0.0.0 npm run play:server` and `npm run dev:phone` in separate terminals. In the browser version, physical-phone location requires HTTPS and WSS, with both `/play` and `/nearby` forwarded to the server. See the [phone guide](companion-web/README.md) and [server deployment guide](docs/phone-server.md), including a clearly labeled local location demo. A server URL can be entered in app settings or configured at build time. Real-world AR alignment and joining from glasses remain later work.
 
 ## Glasses prototype
 
@@ -14,7 +29,7 @@ A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 
 
 The original Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, and an optional desktop camera preview are implemented; follow the [camera setup guide](docs/hand-camera-bridge.md). Physical camera/display concurrency still needs a device test. Supabase and visual object anchors remain future work.
 
-## Run locally
+## Run the glasses prototype locally
 
 Node.js 22+ and a WebGL 2 browser are required. No secrets, backend, or account are needed.
 
@@ -74,7 +89,8 @@ glasses-web/src/input/HeadOrientation.ts      Permissions, calibration, sensor f
 glasses-web/src/input/SimulatedOrientation.ts  Desktop head-motion controls
 glasses-web/src/anchor/PseudoWorldAnchor.ts   Placement and pure angular projection
 glasses-web/public/models/nova.glb            Optimized supplied character
-companion-web/                               Placeholder for phone/web companion
+phone-ios/                                   Native iPhone app: camera, GPS, compass
+companion-web/                               Shared phone UI and browser companion
 backend/                                     Placeholder for authoritative Supabase state
 glasses-android/                             Placeholder for DAT camera bridge
 ```

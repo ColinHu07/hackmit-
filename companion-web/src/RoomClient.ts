@@ -128,6 +128,7 @@ export class RoomClient {
     this.lastMove = performance.now();
     this.send({ type: 'move', x, z });
   }
+  heading(yaw: number): void { if (Number.isFinite(yaw)) this.send({ type: 'heading', yaw }); }
   action(action: PetActionKind): void { this.send({ type: 'action', action }); }
   confirmDap(): void { this.send({ type: 'confirm_dap' }); }
   private send(message: object): void {
