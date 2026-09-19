@@ -111,3 +111,24 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .shell { padding: 0 16px; }.site-header { height: 76px; }.header-meta { font-size: 0; gap: 0; }.header-meta .status-dot, .header-divider { display: none; }.version { font-size: 8px; }.brand { font-size: 22px; }.intro { padding: 26px 0 22px; flex-direction: column; gap: 14px; }h1 { font-size: 28px; max-width: 300px; line-height: 1.2; }.eyebrow { font-size: 8px; }.intro-copy { max-width: 340px; font-size: 11px; }.workspace { grid-template-columns: minmax(0, 1fr); gap: 14px; }.preview-panel { width: 100%; }.simulator-mode .display-surface { width: 100%; height: auto; aspect-ratio: 1; }.simulator-mode #nova-canvas { width: 100%; height: auto; }.preview-footer { padding: 8px 12px; }.preview-footer > span { max-width: 160px; line-height: 1.6; }.controls-panel { display: block; }.nova-info, .anchor-controls { border-right: 0; }.orientation-controls { border-top: 1px solid #eceee7; }.inspector { flex-wrap: wrap; gap: 20px; padding: 14px; }.inspector-label { flex-basis: 100%; }.inspector > div:not(:first-child) { flex-basis: 42%; }.bottom-notes { font-size: 8px; line-height: 1.6; }.site-footer { font-size: 8px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+
+/* The action rail is keyboard/EMG focusable; every hardware target is 88px high. */
+.glasses-display { position: relative; }
+#display-notice { position: absolute; top: 24px; left: 28px; right: 28px; margin: 0; color: #f3eaff; font-size: 18px; text-align: center; line-height: 1.5; pointer-events: none; }
+#hardware-controls { position: absolute; left: 24px; right: 24px; bottom: 24px; color: #fff; text-align: center; }
+#tracking-note { font-size: 16px; line-height: 1.45; margin: 0 0 16px; }
+#hardware-controls button { min-height: 88px; border: 1px solid #747079; border-radius: 20px; background: #1c1b21; color: #fff; padding: 12px 16px; font-size: 18px; }
+#hardware-controls button:focus { outline: 3px solid #e0ccff; outline-offset: 3px; background: #342742; }
+#hardware-controls button:active { background: #57416d; }
+#hardware-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+#calibrate, #tracking-start { width: 100%; }
+.interaction-buttons { display: flex; gap: 8px; margin-top: 18px; }
+.interaction-buttons button { flex: 1; border: 1px solid #dbd2e8; border-radius: 10px; min-height: 42px; background: #f7f2fc; color: #594573; font-size: 12px; }
+#reaction-note { min-height: 32px; font-size: 11px; line-height: 1.5; }
+.simulator-mode #nova-canvas { cursor: pointer; }
+
+#calibration-guides { position: absolute; inset: 0; color: #fff; font: 24px/1 monospace; pointer-events: none; }
+#calibration-guides span { position: absolute; transform: translate(-50%, -50%); }
+.guide-center { left: 300px; top: 300px; }
+.guide-left { left: 16px; top: 300px; }
+.guide-bottom { left: 300px; top: 584px; }

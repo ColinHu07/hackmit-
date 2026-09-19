@@ -1,12 +1,16 @@
 # Bondimals
 
-A shared little creature, seen through Meta Ray-Ban Display glasses. **Milestones 0 and 1 only:** capability verification and a locally runnable glasses simulator. Nova is an original procedural Three.js creature with idle breathing, bobbing, and blinking.
+A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 character**, adds **Pet / Feed / Play** reactions, and supports a calibrated **direction anchor** through the glasses' documented orientation events.
 
-**Stop point:** do not start Milestone 2 until the user confirms the simulator works.
+- [Glasses app](https://colinhu07.github.io/bondimals-display/)
+- [Desktop simulator](https://colinhu07.github.io/bondimals-display/?simulator)
+- [Full source repository](https://github.com/ColinHu07/hackmit-)
+
+The original Milestone 1 simulator has been extended at the user's request. Companion, Supabase, DAT camera, MediaPipe hands, and visual object anchors remain future work.
 
 ## Run locally
 
-Requirements: **Node.js 22+** and npm. WebGL 2 must be enabled in your browser. Dependencies are locked in `package-lock.json`; no account, environment configuration, backend, glasses, camera permission, or API key is required.
+Node.js 22+ and a WebGL 2 browser are required. No secrets, backend, or account are needed.
 
 ```sh
 git clone https://github.com/ColinHu07/hackmit-.git
@@ -15,25 +19,47 @@ npm ci
 npm run dev
 ```
 
-Open **[the desktop simulator](http://127.0.0.1:5173/simulator)**. If Vite reports a different port, use that port with `/simulator`.
+Open the printed Vite URL with **`?simulator`** (usually `http://127.0.0.1:5173/?simulator`). `/simulator` also works on the development server. Query routing works on GitHub Pages without SPA rewrites.
 
-If you already have the repository checked out, run `npm ci` and `npm run dev` from its root. The full source repository is `ColinHu07/hackmit-`; `ColinHu07/bondimals-display` contains only the compiled GitHub Pages demo. See [the hardware-test notes](docs/glasses-hardware-test.md) for the current glasses URL.
+- **Simulator:** click Pet, Feed, Play, or the character. Enter pets, F feeds, P plays. Arrows/WASD simulate head motion. Space places Nova, R faces the saved direction, 0 resets the anchor. Native control keyboard behavior is preserved.
+- **Glasses (`/`):** calibrated orientation input, bright focusable buttons, and a black 600×600 surface. Swipe to choose; pinch/Enter to activate. See [hardware instructions](docs/glasses-hardware-test.md).
 
-- `/simulator`: desktop controls, 600×600 render buffer, anchor telemetry, and local transition log. On a narrow browser the preview scales visually to fit; its drawing buffer remains 600×600.
-- `/display` or `/`: **only** the fixed 600×600 black canvas and Nova. No debugging controls or telemetry are mounted. In this milestone it is an idle display preview at the initial simulated orientation, not live head tracking.
+## Glasses calibration
 
-The explicit simulator route prevents debugging UI from appearing on a glasses URL. No user-agent or device-size detection is used. The page and canvas are pure `#000000` in display mode; black contributes no light on an additive display. The desktop simulator's surrounding controls are outside that display surface.
+1. Center a stationary, distant point on the **middle +**, keeping the glasses level. Select **Enable head tracking**; allow motion access if requested.
+2. Turn your head **right** until the same point reaches the **left +**, then confirm. This measures horizontal response and sign.
+3. Recenter the same point; tilt **up** until it reaches the **bottom +**, then confirm. This measures vertical response and sign.
+4. Look at the direction where Nova should appear. Select **Place Nova here**.
+5. Swipe between **Pet**, **Feed**, **Play**, and **Move here**. Looking away hides Nova; looking back should restore the same saved direction.
 
-## Manual test checklist
+Choose a distant reference to reduce parallax during calibration. Stay in the same physical position and keep head roll small. Calibration estimates the effective horizontal/vertical FOV from the point's angular movement to markers 16px inside the display. The simulator retains its configurable 60° default. No hardware FOV is hard-coded or claimed as measured before calibration.
 
-1. Open `/simulator`. Nova should be small, centered near `(300, 300)`, gently breathing/bobbing on a black square. Status: **In view**. Stored heading: **0.0°**. Most pixels remain black.
-2. Click the black preview to move focus away from controls, then hold **Right arrow** (or **D**). Yaw increases; Nova moves **left**. With the default 60° simulated FOV, she disappears once yaw passes **+30°**. The stored heading stays **0.0°**. **Out of view** and `ANCHOR_LOST` appear in the desktop status/log.
-3. Hold **Left arrow** (or **A**) to reverse. Nova enters from the **left**, returning to center at yaw 0°. Press **R** to look exactly at the saved anchor. Turning left from 0° instead moves Nova to the right. The buttons turn in 15° steps and the slider allows exact angles.
-4. Set yaw to about **90°**, then click **Place Nova here** (or focus the preview and press **Space**). Stored heading becomes 90° and Nova appears at center. Look away, then press **R**: she returns to that saved direction. Placement is the only action that moves the anchor, apart from reset.
-5. Expand **Fine-tune the simulation**. Adjust pitch: looking up moves Nova down. Change FOV to **20°**; Nova now disappears beyond ±10° relative to her anchor. Test yaw wrap by placing near +175°, then crossing +180°/−180°: she stays nearby, with no full-circle jump. Reset with **Reset simulation** or **0** while the preview has focus.
-6. Open **Open display view**. It should show only the black 600×600 surface with idle Nova, without controls, telemetry, page chrome, or session notes. Return to the simulator to continue testing. Reloading starts a fresh local simulation.
+No sensor API, denied permission, null readings, or a stream without updates produces a visible status instead of a falsely anchored character. A gap longer than 1.2 seconds or page suspension invalidates placement and requires explicit restart/calibration. Permission is requested only after selection; listeners stop on page exit/backgrounding.
 
-Native slider keyboard behavior is retained while sliders have focus. Click the black preview before using the simulation keyboard shortcuts. If reduced motion is enabled in your OS, idle movement is intentionally disabled. If WebGL is unavailable or its context is lost, the app displays a clear error instead of silently failing.
+**Scope:** this is approximate yaw/pitch direction anchoring. It does not compensate for translation or roll, reconstruct the room, recognize objects, or pin a pet to a physical table. It can drift. On-glasses optics, sensor reference frame, latency, and drift still require the user's hardware test. Camera/MediaPipe tracking is not implemented by this update.
+
+## Character and interactions
+
+The supplied model was reduced from **1,972,568 triangles / 35.5 MB** to a **190 KB runtime GLB**; see [model processing](docs/character-model.md). It has no rig, textures, or animation clips. Reactions animate the mesh as a whole: a petting lean with hearts, a treat with a nibbling motion, and a happy hop/spin. Reduced-motion mode suppresses large movements. The model remains still between interactions; unchanged frames skip WebGL rendering.
+
+Connections are local feedback for this visit, reset on reload. Actions cannot stack while a reaction is playing or target Nova when she is out of view. Petting/feed/play never alter the saved anchor. The future backend remains authoritative for persistent pet state.
+
+## Team boundaries
+
+```text
+glasses-web/src/main.ts                      App/input/UI integration
+glasses-web/src/rendering/NovaRenderer.ts     GLTF loading, reactions, WebGL lifecycle
+glasses-web/src/interaction/CreatureSession.ts  Typed pet/feed/play actions, temporary state
+glasses-web/src/input/HeadOrientation.ts      Permissions, calibration, sensor freshness
+glasses-web/src/input/SimulatedOrientation.ts  Desktop head-motion controls
+glasses-web/src/anchor/PseudoWorldAnchor.ts   Placement and pure angular projection
+glasses-web/public/models/nova.glb            Optimized supplied character
+companion-web/                               Placeholder for phone/web companion
+backend/                                     Placeholder for authoritative Supabase state
+glasses-android/                             Placeholder for DAT camera bridge
+```
+
+MediaPipe contributors can use `CreatureAction` and `CreatureSession.perform()` as the interaction boundary. Future observations must be mapped into that API through explicit app wiring; no camera/hand pipeline currently calls it. Keep camera/native transport separate from the renderer. See [Meta capability audit](docs/meta-capabilities.md), especially the unresolved native-camera/Web-App concurrency test.
 
 ## Verify and build
 
@@ -44,48 +70,6 @@ npm run build
 npm run preview
 ```
 
-The preview command serves the production build; open its reported URL with `/simulator`. The test suite covers projection direction, unchanged-anchor re-entry, yaw wrap, pitch, inclusive FOV boundaries, low confidence, and invalid inputs. Run the manual checklist for actual rendering and input behavior.
+The **64 tests** cover projection signs, unchanged-anchor return, wraparound, invalid inputs, calibration/FOV, permissions, stale data, listener cleanup, and interaction gating. Browser checks confirm GLB rendering, all three reactions, opposite motion, re-placement/return, and the no-sensor fallback. Physical glasses behavior is **not yet verified**.
 
-See [the verification record](docs/milestone-1-verification.md) for the checks performed on this implementation.
-
-The simulator uses Three.js (WebGL 2), TypeScript strict mode, Vite 6 (compatible with the workspace's Node 22.3), and Vitest. Production output is in `glasses-web/dist/`; the root build also copies it to `dist/` for static hosting. A static host must serve `index.html` as a fallback for `/simulator` and `/display`. Physical glasses testing requires HTTPS; localhost is not a glasses deployment.
-
-## Files and component boundaries
-
-```text
-glasses-web/
-  index.html                         HTML entry, black display shell
-  package.json, tsconfig.json         Vite / strict TypeScript / tests
-  public/favicon.svg                 Original small creature icon
-  src/main.ts                        App wiring, desktop UI, transition logging
-  src/style.css                      Simulator shell + isolated display styling
-  src/input/SimulatedOrientation.ts   Keyboard yaw/pitch source
-  src/anchor/PseudoWorldAnchor.ts     Pure placement + angular projection
-  src/anchor/PseudoWorldAnchor.test.ts
-  src/rendering/NovaRenderer.ts       Geometry, idle animation, WebGL lifecycle
-glasses-android/README.md             Reserved for Milestone 4
-companion-web/README.md               Reserved for Milestone 2
-backend/README.md                     Reserved for Supabase in Milestone 3
-docs/meta-capabilities.md             Official evidence + device-test gates
-docs/milestone-1-verification.md       Build, test, and browser-check results
-package.json, package-lock.json       npm workspace and locked dependencies
-.env.example, .gitignore              No secrets needed in this milestone
-```
-
-`PseudoWorldAnchor` stores yaw, pitch, ID, and confidence independently of head orientation. Each frame derives a transient projection containing screen X/Y, angular offsets, visibility, and confidence. It uses shortest-path yaw differences and tangent projection within a configurable rectangular FOV. FOV defaults to 60° horizontally and vertically **for simulation**, not as a hardware specification. Boundary centers are visible; beyond the cone the entire creature is hidden. At the boundary its geometry naturally clips against the canvas.
-
-This is **direction anchoring**, not 6DoF, object recognition, SLAM, or a native spatial anchor. It ignores translation and does not attach Nova to an actual object. Confidence is synthetic; no sensor is consulted. All state is ephemeral and browser-local, with no claims of multiplayer or persistence. The future backend is authoritative for persistent game state.
-
-## Meta capability baseline
-
-See [the capability audit](docs/meta-capabilities.md) for official source links and evidence retrieved on September 19, 2026.
-
-- No installed Meta Wearables plugin was found in this environment. Meta's official public documentation MCP and GitHub repositories were consulted directly.
-- The exact future Android DAT target is **0.9.0**; **no DAT SDK is used by Milestone 1**.
-- The documented native camera path is `DeviceSession.addCamera(StreamConfiguration)` → `Camera.stream`. Removed `addStream(...)` APIs must not be used.
-- Meta documents 600×600 additive display rendering and standard orientation events for Web Apps. This milestone deliberately uses simulated orientation; glasses axis mapping, drift, sensor availability, and calibration require hardware testing.
-- Web App camera access is not supported in the documentation reviewed. Native DAT streaming is a separate future milestone.
-- Concurrent Display Web App + native DAT camera operation: **`NEEDS_DEVICE_TEST`**. No concurrency support is assumed.
-- Mock Device Kit currently does not support Display glasses. Browser rendering simulation does not verify native camera/display concurrency.
-
-Milestones 2–8 (phone companion, Supabase, DAT camera, hands, petting, visual anchors, and shared quests) are intentionally unimplemented.
+The build produces `glasses-web/dist/` and stages a copy to root `dist/`. GitHub Pages publishes compiled output in the separate `ColinHu07/bondimals-display` repository. Rebuild with `--base=/bondimals-display/`; see [deployment instructions](docs/glasses-hardware-test.md).

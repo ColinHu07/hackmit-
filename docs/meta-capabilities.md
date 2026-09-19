@@ -66,3 +66,9 @@ The MCP tools accept `query` and optional `max_results` (maximum 10). Relevant s
 - `search_webapps_docs`: `DeviceOrientationEvent alpha beta gamma axes orientation compass permissions timestamp motion sensors glasses capabilities`
 
 Milestone 1 may proceed using simulated yaw, a fixed 600×600 black WebGL surface, and a software direction anchor. Hardware integration remains gated on the checks above.
+
+## Interactive extension — September 19, 2026
+
+The user subsequently requested their GLB, interactions, and head-based anchoring. `HeadOrientation` now consumes the documented orientation API after explicit activation, calibrates yaw/pitch signs and effective FOV against a distant point, and rejects stale or invalid readings. The HTML includes the documented glasses capability metadata; focusable buttons support arrows/Enter. The supplied mesh is optimized and loaded with Three.js GLTFLoader.
+
+This extends the earlier simulator without asserting 6DoF or visual anchoring. No camera, MediaPipe, translation, or roll correction is present. Direction projection remains approximate. All previously listed **NEEDS_DEVICE_TEST** items remain open until physically tested; software tests only validate the implemented math, lifecycle, and UI behavior. Full launch/calibration steps are in `glasses-hardware-test.md`.

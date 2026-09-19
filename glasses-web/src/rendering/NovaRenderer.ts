@@ -1,84 +1,129 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import type { AnchorProjection } from '../anchor/PseudoWorldAnchor';
+import type { Reaction } from '../interaction/CreatureSession';
 
-interface CreatureProjection {
-  visible: boolean;
-  x: number;
-  y: number;
-  confidence: number;
-}
-
-const DISPLAY_SIZE = 600;
-
-/** A small, original geometry creature on the display's unlit black background. */
+/** User-supplied GLB, normalized once; reactions never move the saved anchor. */
 export class NovaRenderer {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.OrthographicCamera(-300, 300, 300, -300, 0.1, 1_000);
+  private readonly camera = new THREE.OrthographicCamera(-300, 300, 300, -300, 0.1, 1000);
   private readonly anchor = new THREE.Group();
   private readonly creature = new THREE.Group();
-  private readonly eyes: THREE.Group[] = [];
-  private readonly star = new THREE.Group();
+  private readonly effects = new THREE.Group();
+  private readonly hearts: THREE.Mesh[] = [];
+  private readonly treat: THREE.Mesh;
   private readonly geometries = new Set<THREE.BufferGeometry>();
   private readonly materials = new Set<THREE.Material>();
   private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   private disposed = false;
+  private lastFrame = '';
+  ready = false;
+  facing = 0;
 
   constructor(canvas: HTMLCanvasElement) {
-    // Allow construction errors to reach the app's friendly WebGL fallback.
-    this.renderer = new THREE.WebGLRenderer({
-      canvas,
-      alpha: false,
-      antialias: true,
-      powerPreference: 'low-power',
-    });
-    // The display is exactly 600 × 600; avoid allocating a larger Retina buffer.
+    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: true, powerPreference: 'low-power' });
     this.renderer.setPixelRatio(1);
-    this.renderer.setSize(DISPLAY_SIZE, DISPLAY_SIZE, false);
+    this.renderer.setSize(600, 600, false);
     this.renderer.setClearColor(0x000000, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = 1.1;
     this.camera.position.set(0, 0, 400);
-
-    this.scene.add(new THREE.HemisphereLight(0xf4eeff, 0x5a367a, 2.2));
-    const keyLight = new THREE.DirectionalLight(0xfff4eb, 3.1);
-    keyLight.position.set(-100, 150, 220);
-    this.scene.add(keyLight);
-    const rimLight = new THREE.DirectionalLight(0xadcaff, 2);
-    rimLight.position.set(150, 30, -70);
-    this.scene.add(rimLight);
-
+    this.scene.add(new THREE.HemisphereLight(0xf4eeff, 0x423056, 2));
+    const key = new THREE.DirectionalLight(0xfff4eb, 3.2);
+    key.position.set(-100, 160, 220);
+    this.scene.add(key);
+    const rim = new THREE.DirectionalLight(0xb9a4ff, 2);
+    rim.position.set(150, 60, -90);
+    this.scene.add(rim);
     this.scene.add(this.anchor);
-    this.anchor.add(this.creature);
-    this.buildCreature();
+    this.anchor.add(this.creature, this.effects);
+
+    const heart = new THREE.Shape();
+    heart.moveTo(0, -5);
+    heart.bezierCurveTo(-15, 4, -8, 16, 0, 8);
+    heart.bezierCurveTo(8, 16, 15, 4, 0, -5);
+    const geometry = new THREE.ShapeGeometry(heart);
+    this.geometries.add(geometry);
+    const pink = new THREE.MeshBasicMaterial({ color: 0xffc4e4, side: THREE.DoubleSide });
+    this.materials.add(pink);
+    for (let i = 0; i < 5; i++) {
+      const mesh = new THREE.Mesh(geometry, pink);
+      this.effects.add(mesh);
+      this.hearts.push(mesh);
+    }
+    const treatGeometry = new THREE.IcosahedronGeometry(8, 0);
+    const treatMaterial = new THREE.MeshStandardMaterial({ color: 0xffdda0, emissive: 0xffaa33, emissiveIntensity: 0.2 });
+    this.geometries.add(treatGeometry);
+    this.materials.add(treatMaterial);
+    this.treat = new THREE.Mesh(treatGeometry, treatMaterial);
+    this.effects.add(this.treat);
     this.anchor.visible = false;
     this.renderer.render(this.scene, this.camera);
   }
 
-  render(elapsedSeconds: number, projection: CreatureProjection): void {
+  async load(): Promise<void> {
+    const gltf = await new GLTFLoader().loadAsync(`${import.meta.env.BASE_URL}models/nova.glb`);
+    gltf.scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      if (!object.geometry.getAttribute('normal')) object.geometry.computeVertexNormals();
+      if (this.disposed) {
+        object.geometry.dispose();
+        for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose();
+        return;
+      }
+      this.geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) this.materials.add(material);
+    });
     if (this.disposed) return;
+    const bounds = new THREE.Box3().setFromObject(gltf.scene);
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const scale = 142 / Math.max(size.x, size.y, size.z);
+    gltf.scene.scale.setScalar(scale);
+    gltf.scene.position.copy(center).multiplyScalar(-scale);
+    this.creature.add(gltf.scene);
+    this.ready = true;
+  }
 
-    this.anchor.visible = projection.visible
-      && projection.confidence > 0
-      && Number.isFinite(projection.x)
-      && Number.isFinite(projection.y);
-    // Projection uses top-left screen coordinates; Three's camera uses Y-up.
-    this.anchor.position.set(projection.x - DISPLAY_SIZE / 2, DISPLAY_SIZE / 2 - projection.y, 0);
-
-    const time = Number.isFinite(elapsedSeconds) ? Math.max(0, elapsedSeconds) : 0;
-    const breath = this.reducedMotion ? 0 : Math.sin(time * 1.8);
-    this.creature.position.y = this.reducedMotion ? 0 : Math.sin(time * 1.35) * 2.5;
-    this.creature.scale.set(1 - breath * 0.009, 1 + breath * 0.014, 1);
-    this.creature.rotation.set(0, this.reducedMotion ? 0 : Math.sin(time * 0.7) * 0.045,
-      this.reducedMotion ? 0 : Math.sin(time * 0.9) * 0.016);
-
-    const blinkPhase = time % 5.6;
-    const blink = !this.reducedMotion && blinkPhase >= 5.05 && blinkPhase <= 5.35
-      ? Math.max(0.08, 1 - Math.sin(((blinkPhase - 5.05) / 0.3) * Math.PI))
-      : 1;
-    for (const eye of this.eyes) eye.scale.y = blink;
-
-    this.star.rotation.z = this.reducedMotion ? 0 : Math.sin(time * 1.3) * 0.06;
+  render(time: number, projection: AnchorProjection, reaction: Reaction | null): void {
+    if (this.disposed) return;
+    const frame = `${this.ready}:${projection.visible}:${projection.x.toFixed(2)}:${projection.y.toFixed(2)}:${this.facing}:${reaction ? time : 'idle'}`;
+    if (frame === this.lastFrame) return;
+    this.lastFrame = frame;
+    this.anchor.visible = this.ready && projection.visible && projection.confidence > 0;
+    this.anchor.position.set(projection.x - 300, 300 - projection.y, 0);
+    this.creature.position.set(0, 0, 0);
+    this.creature.scale.setScalar(1);
+    this.creature.rotation.set(0, this.facing, 0);
+    const active = reaction && time - reaction.startedAt < reaction.duration;
+    this.effects.visible = !!active;
+    this.treat.visible = !!active && reaction.action === 'feed';
+    this.hearts.forEach((heart) => { heart.visible = !!active && reaction.action !== 'feed'; });
+    if (active) {
+      const t = Math.max(0, (time - reaction.startedAt) / reaction.duration);
+      const envelope = Math.sin(t * Math.PI);
+      if (!this.reducedMotion) {
+        if (reaction.action === 'pet') {
+          this.creature.rotation.z = Math.sin(t * Math.PI * 4) * 0.1 * envelope;
+          this.creature.scale.set(1 + envelope * 0.04, 1 - envelope * 0.03, 1);
+        } else if (reaction.action === 'feed') {
+          this.creature.rotation.x = Math.sin(t * Math.PI * 6) * 0.12 * envelope;
+        } else {
+          this.creature.rotation.y += Math.PI * 2 * (t * t * (3 - 2 * t));
+          this.creature.position.y = Math.abs(Math.sin(t * Math.PI * 3)) * 24 * envelope;
+        }
+      }
+      this.hearts.forEach((heart, i) => {
+        const phase = (t + i * 0.17) % 1;
+        heart.position.set((i - 2) * 23, 55 + (this.reducedMotion ? 10 : phase * 55), 90);
+        heart.scale.setScalar(this.reducedMotion ? 0.7 : Math.sin(phase * Math.PI) * 0.85);
+      });
+      this.treat.position.set(28 * (1 - t), -18 + (this.reducedMotion ? 0 : Math.sin(t * Math.PI) * 24), 90);
+      this.treat.scale.setScalar(Math.max(0, 1 - Math.max(0, t - 0.55) / 0.35));
+      this.treat.rotation.y = t * 5;
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -90,107 +135,5 @@ export class NovaRenderer {
     this.scene.clear();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
-  }
-
-  private buildCreature(): void {
-    const lavender = this.material({ color: 0xa887ef, roughness: 0.53 });
-    const lightLavender = this.material({ color: 0xbba3f5, roughness: 0.58 });
-    const earPink = this.material({ color: 0xf4c7e5, roughness: 0.7 });
-    const cream = this.material({ color: 0xf4e8ff, roughness: 0.72 });
-    const blush = this.material({ color: 0xf6a7cc, roughness: 0.7 });
-    const ink = this.material({ color: 0x17132c, roughness: 0.16, metalness: 0.08 });
-    const white = this.material({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.2 });
-    const mint = this.material({
-      color: 0xd5ffb6,
-      emissive: 0xacec73,
-      emissiveIntensity: 0.22,
-      roughness: 0.44,
-    });
-
-    // Shared geometry keeps this tiny scene inexpensive on a wearable browser.
-    const sphere = this.geometry(new THREE.SphereGeometry(1, 40, 28));
-    const ellipsoid = (
-      parent: THREE.Object3D,
-      material: THREE.Material,
-      position: [number, number, number],
-      scale: [number, number, number],
-    ): THREE.Mesh => {
-      const mesh = new THREE.Mesh(sphere, material);
-      mesh.position.set(...position);
-      mesh.scale.set(...scale);
-      parent.add(mesh);
-      return mesh;
-    };
-
-    for (const side of [-1, 1]) {
-      const ear = new THREE.Group();
-      ear.position.set(side * 23, 32, -1);
-      ear.rotation.z = side * -0.25;
-      this.creature.add(ear);
-      ellipsoid(ear, lavender, [0, 0, 0], [10, 23, 8]);
-      ellipsoid(ear, earPink, [0, 4, 6], [5.1, 13.2, 2]);
-
-      const arm = ellipsoid(this.creature, lavender, [side * 34, -8, 0], [8, 12.5, 8]);
-      arm.rotation.z = side * 0.3;
-      ellipsoid(this.creature, lightLavender, [side * 17, -33, 9], [12, 7, 13]);
-    }
-
-    ellipsoid(this.creature, lavender, [0, 0, 0], [37, 36, 29]);
-    // The chest follows the front curve of the body without a surrounding plate.
-    ellipsoid(this.creature, cream, [0, -15, 25], [15.5, 12, 4.5]);
-
-    for (const side of [-1, 1]) {
-      const eye = new THREE.Group();
-      eye.position.set(side * 12.5, 8, 27.5);
-      this.creature.add(eye);
-      this.eyes.push(eye);
-      ellipsoid(eye, ink, [0, 0, 0], [4.5, 6.1, 3.3]);
-      ellipsoid(eye, white, [-1.2, 2.1, 2.85], [1.4, 1.65, 0.65]);
-      ellipsoid(eye, white, [1.3, -1.9, 3], [0.65, 0.7, 0.35]);
-      ellipsoid(this.creature, blush, [side * 23, -1, 22.8], [5.4, 2.4, 1.5]);
-    }
-
-    const smileCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-4, -3, 29.5),
-      new THREE.Vector3(-2, -5, 29.8),
-      new THREE.Vector3(0, -4, 30),
-      new THREE.Vector3(2, -5, 29.8),
-      new THREE.Vector3(4, -3, 29.5),
-    ]);
-    this.creature.add(new THREE.Mesh(this.geometry(new THREE.TubeGeometry(smileCurve, 24, 0.7, 8, false)), ink));
-
-    // A little four-point sprout is Nova's own identifying feature.
-    const starShape = new THREE.Shape();
-    starShape.moveTo(0, 10);
-    starShape.lineTo(3, 3);
-    starShape.lineTo(8, 0);
-    starShape.lineTo(3, -3);
-    starShape.lineTo(0, -9);
-    starShape.lineTo(-3, -3);
-    starShape.lineTo(-8, 0);
-    starShape.lineTo(-3, 3);
-    starShape.closePath();
-    const starGeometry = this.geometry(new THREE.ExtrudeGeometry(starShape, {
-      depth: 2,
-      bevelEnabled: true,
-      bevelThickness: 1,
-      bevelSize: 0.8,
-      bevelSegments: 2,
-      steps: 1,
-    }));
-    this.star.position.set(0, 48, 6);
-    this.star.add(new THREE.Mesh(starGeometry, mint));
-    this.creature.add(this.star);
-  }
-
-  private material(parameters: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
-    const material = new THREE.MeshStandardMaterial(parameters);
-    this.materials.add(material);
-    return material;
-  }
-
-  private geometry<T extends THREE.BufferGeometry>(geometry: T): T {
-    this.geometries.add(geometry);
-    return geometry;
   }
 }
