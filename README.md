@@ -9,12 +9,15 @@ A shared little creature, seen through Meta Ray-Ban Display glasses. **Milestone
 Requirements: **Node.js 22+** and npm. WebGL 2 must be enabled in your browser. Dependencies are locked in `package-lock.json`; no account, environment configuration, backend, glasses, camera permission, or API key is required.
 
 ```sh
-cd /Users/colinhu/Documents/ChatGPT/hackmit
+git clone https://github.com/ColinHu07/bondimals.git
+cd bondimals
 npm ci
 npm run dev
 ```
 
 Open **[the desktop simulator](http://127.0.0.1:5173/simulator)**. If Vite reports a different port, use that port with `/simulator`.
+
+If you already have the repository checked out, run `npm ci` and `npm run dev` from its root. The full source repository is `ColinHu07/bondimals`; `ColinHu07/bondimals-display` contains only the compiled GitHub Pages demo. See [the hardware-test notes](docs/glasses-hardware-test.md) for the current glasses URL.
 
 - `/simulator`: desktop controls, 600×600 render buffer, anchor telemetry, and local transition log. On a narrow browser the preview scales visually to fit; its drawing buffer remains 600×600.
 - `/display` or `/`: **only** the fixed 600×600 black canvas and Nova. No debugging controls or telemetry are mounted. In this milestone it is an idle display preview at the initial simulated orientation, not live head tracking.
