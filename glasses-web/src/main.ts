@@ -1,6 +1,10 @@
 import './style.css';
 import { placeAnchor, projectAnchor, type AnchorProjection } from './anchor/PseudoWorldAnchor';
 import { SimulatedOrientation, isEditingControl } from './input/SimulatedOrientation';
+import { CameraHands, parsePairing } from './hand/CameraHands';
+import { CameraPreview } from './hand/CameraPreview';
+import { HandInteraction } from './hand/HandInteraction';
+import { PointerPetting } from './hand/PointerPetting';
 import { HeadOrientation } from './input/HeadOrientation';
 import { CreatureSession, type CreatureAction } from './interaction/CreatureSession';
 import { NovaRenderer } from './rendering/NovaRenderer';
@@ -18,13 +22,13 @@ function element<T extends HTMLElement>(selector: string): T {
 }
 
 const sparkle = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.5 14.8 9.2 21.5 12l-6.7 2.8-2.8 6.7-2.8-6.7L2.5 12l6.7-2.8L12 2.5Z" fill="currentColor"/></svg>';
-const canvasMarkup = '<div class="display-surface"><canvas id="nova-canvas" width="600" height="600" role="img" aria-label="Nova, your 3D character on a black display"></canvas><p id="render-error" role="alert" hidden></p><p id="display-notice" role="status">Loading your character…</p></div>';
+const canvasMarkup = '<div class="display-surface"><canvas id="nova-canvas" width="600" height="600" role="img" aria-label="Nova, your 3D character on a black display"></canvas><p id="render-error" role="alert" hidden></p><span id="hand-cursor" aria-hidden="true" hidden></span><span id="hand-target" aria-hidden="true" hidden>+</span><p id="display-notice" role="status">Loading your character…</p></div>';
 
 element('#app').innerHTML = simulator ? `
   <div class="shell">
     <header class="site-header">
       <a class="brand" href="?simulator" aria-label="Bondimals simulator"><span class="brand-icon">${sparkle}</span>bondimals<span class="brand-dot">.</span></a>
-      <div class="header-meta"><span class="status-dot"></span> a shared little world <span class="header-divider"></span><span class="version">BUILD 002</span></div>
+      <div class="header-meta"><span class="status-dot"></span> a shared little world <span class="header-divider"></span><span class="version">BUILD 003</span></div>
     </header>
     <main>
       <section class="intro">
@@ -38,7 +42,8 @@ element('#app').innerHTML = simulator ? `
           <div class="preview-footer"><span><span class="status-dot purple"></span> Nova’s world, through your eyes</span><a href="./" target="_blank" rel="noopener">Open display view <span aria-hidden="true">↗</span></a></div>
         </section>
         <aside class="controls-panel" aria-label="Desktop simulator controls">
-          <section class="nova-info"><div class="nova-title"><div><p class="eyebrow">YOUR FIRST BONDIMAL</p><h2>Nova <span>✦</span></h2></div><span id="visibility-status" class="visibility-badge" role="status">In view</span></div><p>A curious little spirit, waiting to meet you.</p><div class="creature-traits"><span id="bond-count">0 connections this visit</span><span>Your GLB</span></div><div class="interaction-buttons"><button data-action="pet" type="button">♡ Pet</button><button data-action="feed" type="button">✦ Feed</button><button data-action="play" type="button">↻ Play</button></div><p id="reaction-note" role="status">Select an action or click Nova. Enter pets, F feeds, P plays.</p></section>
+          <section class="nova-info"><div class="nova-title"><div><p class="eyebrow">YOUR FIRST BONDIMAL</p><h2>Nova <span>✦</span></h2></div><span id="visibility-status" class="visibility-badge" role="status">In view</span></div><p>A curious little spirit, waiting to meet you.</p><div class="creature-traits"><span id="bond-count">0 connections this visit</span><span>Your GLB</span></div><div class="interaction-buttons"><button data-action="pet" type="button">♡ Pet</button><button data-action="feed" type="button">✦ Feed</button><button data-action="play" type="button">↻ Play</button></div><div class="movement-buttons"><button id="run-around" type="button">Run around <kbd>L</kbd></button><button id="jump" type="button">Jump <kbd>J</kbd></button></div><p class="movement-hint">Click the ground beside Nova to run there. Stroke her head or tap her to pet.</p><p id="reaction-note" role="status">Enter pets, F feeds, P plays. J jumps, L runs.</p></section>
+          <section class="camera-controls"><h3>Glasses-camera petting</h3><p id="camera-status" role="status">Open the paired link to connect your glasses camera.</p><button id="align-hands" type="button" class="secondary-button">Align hand with Nova</button><button id="confirm-hand" type="button" class="secondary-button" hidden>Fingertip on + · Confirm</button><p id="hand-instructions">Align at the distance where you’ll pet Nova.</p><button id="show-camera" type="button" class="secondary-button" aria-pressed="false">Show glasses camera</button><p id="camera-preview-status" role="status">Camera preview is off.</p><canvas id="camera-preview" width="320" height="240" aria-label="Live glasses camera with hand landmarks" hidden></canvas><p class="control-hint">Optional 4 fps preview. Nova’s glasses display receives hand points only.</p></section>
           <section class="orientation-controls"><div class="section-title"><h3>Look around</h3><span class="tiny-label">SIMULATED HEAD</span></div>
             <div class="compass" aria-hidden="true"><span class="compass-north">0°</span><span class="compass-west">−90°</span><span class="compass-east">90°</span><span class="compass-south">180°</span><div id="heading-cone"><div class="cone-fill"></div><div class="view-ray"></div></div><div id="anchor-bearing"><span>${sparkle}</span></div><div class="compass-center"></div></div>
             <div class="range-heading"><label for="yaw">Head yaw</label><output id="yaw-value" for="yaw">0.0°</output></div>
@@ -56,17 +61,25 @@ element('#app').innerHTML = simulator ? `
       <section class="activity" aria-label="Local simulation events"><h2>Session notes <span>LOCAL ONLY</span></h2><ol id="event-log" aria-live="polite" aria-relevant="additions"></ol></section>
     </main>
     <footer class="site-footer"><span>Small creatures. Shared connections.</span><span>BONDIMALS / HACKMIT</span></footer>
-  </div>` : `<main class="glasses-display" aria-label="Bondimals display">${canvasMarkup}<div id="calibration-guides" aria-hidden="true"><span class="guide-center">+</span><span class="guide-left">+</span><span class="guide-bottom">+</span></div><section id="hardware-controls" aria-label="Glasses controls"><p id="tracking-note">Direction tracking needs a brief calibration.</p><button id="tracking-start" type="button">Enable head tracking</button><button id="calibrate" type="button" hidden>Confirm right turn</button><div id="hardware-actions" hidden><button data-action="pet" type="button">♡ Pet</button><button data-action="feed" type="button">✦ Feed</button><button data-action="play" type="button">↻ Play</button><button id="move-here" type="button">Move here</button></div></section></main>`;
+  </div>` : `<main class="glasses-display" aria-label="Bondimals display">${canvasMarkup}<div id="calibration-guides" aria-hidden="true"><span class="guide-center">+</span><span class="guide-left">+</span><span class="guide-bottom">+</span></div><section data-glasses-control id="hardware-controls" aria-label="Glasses controls"><p id="tracking-note">Direction tracking needs a brief calibration.</p><button id="tracking-start" type="button">Enable head tracking</button><button id="calibrate" type="button" hidden>Confirm right turn</button><div id="hardware-actions" hidden><button data-action="pet" type="button">♡ Pet</button><button data-action="feed" type="button">✦ Feed</button><button data-action="play" type="button">↻ Play</button><button id="move-here" type="button">Move here</button><button id="align-hands" type="button">Hands</button></div></section><section data-glasses-control id="hand-controls" hidden><p id="camera-status" role="status"></p><p id="hand-instructions">Hold your index fingertip over the +, then pinch Confirm.</p><button id="confirm-hand" type="button">Fingertip on + · Confirm</button><button id="cancel-hand" type="button">Back</button></section></main>`;
 
 const canvas = element<HTMLCanvasElement>('#nova-canvas');
 const errorMessage = element<HTMLParagraphElement>('#render-error');
 const input = simulator ? new SimulatedOrientation() : null;
 const head = simulator ? null : new HeadOrientation();
 const session = new CreatureSession();
+const handInput = new HandInteraction();
+const pointerInput = simulator ? new PointerPetting() : null;
+const pairing = parsePairing(location.hash);
+const cameraHands = pairing ? new CameraHands(pairing) : null;
+const cameraPreview = simulator ? new CameraPreview(element<HTMLCanvasElement>('#camera-preview'), element('#camera-preview-status')) : null;
+const handCursor = element('#hand-cursor');
+const handTarget = element('#hand-target');
 const notice = element('#display-notice');
 let noticeUntil = Infinity;
 let hasHardwareAnchor = false;
 let currentProjection: AnchorProjection = { visible: false, x: 300, y: 300, deltaYaw: 0, deltaPitch: 0, confidence: 0 };
+let characterProjection: AnchorProjection = { ...currentProjection };
 let lastTrackingState = '';
 let lastHardwareMessage = '';
 let loading = true;
@@ -110,6 +123,8 @@ function logEvent(type: string, message: string): void {
 function placeNova(): void {
   if (!input && head?.status !== 'live') return;
   anchor = placeAnchor(input?.current ?? head!.current);
+  renderer?.resetLocomotion();
+  clearPointer();
   if (head) hasHardwareAnchor = true;
   tell('Nova’s direction is saved. Look away, then back.');
   logEvent('ANCHOR_PLACED', `Nova placed at ${anchor.yaw.toFixed(1)}° yaw, ${anchor.pitch.toFixed(1)}° pitch.`);
@@ -121,6 +136,8 @@ function lookBack(): void {
 
 function reset(): void {
   input?.set({ yaw: 0, pitch: 0 });
+  renderer?.resetLocomotion();
+  clearPointer();
   anchor = placeAnchor({ yaw: 0, pitch: 0 });
   fov = 60;
   if (ui) ui.fov.value = '60';
@@ -130,7 +147,7 @@ function reset(): void {
 function onShortcut(event: KeyboardEvent): void {
   if (event.repeat || isEditingControl(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
   if (!simulator) {
-    const controls = [...document.querySelectorAll<HTMLButtonElement>('#hardware-controls button')].filter(button => !button.closest('[hidden]'));
+    const controls = [...document.querySelectorAll<HTMLButtonElement>('[data-glasses-control] button')].filter(button => !button.closest('[hidden]'));
     if (event.key.startsWith('Arrow')) {
       event.preventDefault();
       const index = controls.indexOf(document.activeElement as HTMLButtonElement);
@@ -151,6 +168,8 @@ function onShortcut(event: KeyboardEvent): void {
   if (!hasNativeActivation && event.key === 'Enter') { event.preventDefault(); interact('pet'); }
   if (event.key.toLowerCase() === 'f') interact('feed');
   if (event.key.toLowerCase() === 'p') interact('play');
+  if (event.key.toLowerCase() === 'j') moveNova('jump');
+  if (event.key.toLowerCase() === 'l') moveNova('run');
 }
 
 if (ui && input) {
@@ -162,6 +181,8 @@ if (ui && input) {
   element('#place-anchor').addEventListener('click', placeNova);
   element('#return-to-anchor').addEventListener('click', lookBack);
   element('#reset').addEventListener('click', reset);
+  element('#run-around').addEventListener('click', () => moveNova('run'));
+  element('#jump').addEventListener('click', () => moveNova('jump'));
   element<HTMLInputElement>('#model-facing').addEventListener('input', (event) => { if (renderer) renderer.facing = Number((event.target as HTMLInputElement).value) * Math.PI / 180; });
 }
 
@@ -176,23 +197,88 @@ function tell(message: string): void {
 
 function interact(action: CreatureAction): void {
   if (!renderer?.ready) { tell('Your character is still loading.'); return; }
-  const result = session.perform(action, elapsedSeconds, currentProjection.visible && (simulator || hasHardwareAnchor));
+  const result = session.perform(action, elapsedSeconds, characterProjection.visible && (simulator || hasHardwareAnchor));
   tell(result.message);
   if (result.accepted) {
+    if (action === 'play') renderer.runAround();
+    else renderer.stop();
     logEvent('INTERACTION', `${action}: ${session.bonds} connections this visit.`);
     if (simulator) element('#bond-count').textContent = `${session.bonds} connection${session.bonds === 1 ? '' : 's'} this visit`;
   }
 }
+function moveNova(action: 'run' | 'jump'): void {
+  if (!renderer?.ready) { tell('Your character is still loading.'); return; }
+  if (!currentProjection.visible) { tell('Look back at Nova first.'); return; }
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { tell('Movement is paused by your reduced-motion preference. Pet or feed Nova for a gentle response.'); return; }
+  if (action === 'run') {
+    if (renderer.runAround()) tell('Off she goes! Tap Nova to stop and pet her.');
+  } else if (renderer.jump()) tell('Up she goes!');
+}
+
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-action]')) {
   button.addEventListener('click', () => interact(button.dataset.action as CreatureAction));
 }
-canvas.addEventListener('click', (event) => {
-  if (!simulator || !currentProjection.visible) return;
+function pointerAvailable(now: number): boolean {
+  return !!pointerInput && !!renderer?.ready && running && !document.hidden && !pageSuspended
+    && characterProjection.visible && !handInput.calibrating && !cameraHands?.inbox.fresh(now);
+}
+
+function pointerPoint(event: PointerEvent): { x: number; y: number } {
   const bounds = canvas.getBoundingClientRect();
-  const x = (event.clientX - bounds.left) * 600 / bounds.width;
-  const y = (event.clientY - bounds.top) * 600 / bounds.height;
-  if (Math.hypot(x - currentProjection.x, y - currentProjection.y) < 100) interact('pet');
-});
+  return { x: (event.clientX - bounds.left) * 600 / bounds.width, y: (event.clientY - bounds.top) * 600 / bounds.height };
+}
+
+function clearPointer(): void {
+  const id = pointerInput?.activePointerId;
+  pointerInput?.clear();
+  if (id != null && canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (!event.isPrimary || event.button !== 0 || !pointerAvailable(performance.now())) return;
+  if (pointerInput?.begin(pointerPoint(event), event.pointerId)) {
+    canvas.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (!event.isPrimary) return;
+  if (!pointerAvailable(performance.now())) { clearPointer(); return; }
+  if (pointerInput?.activePointerId === event.pointerId && (event.buttons & 1) === 0) { clearPointer(); return; }
+  pointerInput?.move(pointerPoint(event), event.pointerId);
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (!event.isPrimary) return;
+  if (!pointerAvailable(performance.now())) { clearPointer(); return; }
+  const point = pointerPoint(event);
+  const action = pointerInput?.finishAction(point, event.pointerId, characterProjection, currentProjection.y + 45);
+  if (action === 'pet') interact('pet');
+  if (action === 'move') {
+    tell(renderer?.moveTo(point.x - currentProjection.x) ? 'Coming over!' : 'Movement is paused by your reduced-motion preference.');
+  }
+  if (event.pointerType !== 'mouse') clearPointer();
+}
+
+function onPointerLeave(): void {
+  if (pointerInput?.activePointerId == null) clearPointer();
+}
+
+function onPointerCancel(event: PointerEvent): void {
+  if (pointerInput?.activePointerId === event.pointerId) clearPointer();
+}
+
+if (simulator) {
+  canvas.style.touchAction = 'none';
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointerleave', onPointerLeave);
+  canvas.addEventListener('pointercancel', onPointerCancel);
+  canvas.addEventListener('lostpointercapture', onPointerCancel);
+  window.addEventListener('blur', clearPointer);
+}
 
 if (head) {
   element('#tracking-start').addEventListener('click', () => {
@@ -208,6 +294,71 @@ if (head) {
   });
   element('#move-here').addEventListener('click', placeNova);
   element('#tracking-start').focus();
+}
+
+function endHandAlignment(): void {
+  element<HTMLButtonElement>('#confirm-hand').hidden = simulator;
+  if (simulator) element('#hand-instructions').textContent = handInput.ready ? 'Hand aligned. Stroke gently across Nova’s head.' : 'Align at the distance where you’ll pet Nova.';
+  if (!simulator) {
+    element('#hand-controls').hidden = true;
+    element('#hardware-controls').hidden = false;
+    element('#align-hands').focus();
+  }
+}
+handInput.onPet = () => interact('pet');
+if (cameraHands) {
+  cameraHands.onFrame = frame => {
+    handInput.ingest(frame, characterProjection, performance.now());
+    void cameraPreview?.ingest(frame);
+  };
+  cameraHands.onReset = () => { handInput.reset(); cameraPreview?.clear(); endHandAlignment(); };
+  cameraHands.connect();
+}
+if (simulator) element('#show-camera').addEventListener('click', () => {
+  if (!cameraHands) { tell('Open the paired desktop link to connect the glasses camera.'); return; }
+  const button = element<HTMLButtonElement>('#show-camera');
+  const enabled = button.getAttribute('aria-pressed') !== 'true';
+  button.setAttribute('aria-pressed', String(enabled));
+  button.textContent = enabled ? 'Hide glasses camera' : 'Show glasses camera';
+  cameraPreview?.setEnabled(enabled);
+  cameraHands.setPreview(enabled);
+});
+element('#align-hands').addEventListener('click', () => {
+  if (!cameraHands || !cameraHands.inbox.fresh(performance.now())) {
+    tell('Open the paired glasses link and start the iPhone camera bridge first.');
+    return;
+  }
+  handInput.beginCalibration();
+  element('#confirm-hand').hidden = false;
+  if (!simulator) {
+    element('#hardware-controls').hidden = true;
+    element('#hand-controls').hidden = false;
+  }
+  element('#confirm-hand').focus();
+});
+element('#confirm-hand').addEventListener('click', () => {
+  const error = handInput.confirm(performance.now());
+  if (error) tell(error);
+  else if (handInput.ready) {
+    tell('Hand aligned. Stroke gently across Nova’s head.');
+    endHandAlignment();
+  }
+});
+if (!simulator) element('#cancel-hand').addEventListener('click', () => { handInput.reset(); endHandAlignment(); });
+function updateHands(now: number): void {
+  handInput.expire(now);
+  cameraPreview?.expire(now);
+  const target = handInput.target;
+  handTarget.hidden = !target;
+  if (target) { handTarget.style.left = `${target.x}px`; handTarget.style.top = `${target.y}px`; }
+  // A small dot makes camera/display alignment reviewable; it disappears with stale data.
+  const point = handInput.pointer;
+  handCursor.hidden = !point || !handInput.ready || !characterProjection.visible;
+  if (point) { handCursor.style.left = `${point.x}px`; handCursor.style.top = `${point.y}px`; }
+  const fresh = cameraHands?.inbox.fresh(now);
+  const status = !cameraHands ? 'Open the paired link to connect the glasses camera.' : !fresh ? cameraHands.status === 'Glasses camera live' ? 'Glasses camera paused · No fresh hand data' : cameraHands.status : handInput.ready ? 'Glasses camera live · Hand aligned' : 'Glasses camera live · Align your hand';
+  element('#camera-status').textContent = status;
+  if (handInput.calibrating) element('#hand-instructions').textContent = `${handInput.calibrationIndex + 1} / 3 · Hold your index fingertip over the + at petting distance, then confirm.`;
 }
 
 function updateHardware(): void {
@@ -270,7 +421,10 @@ function updateUi(projection: AnchorProjection): void {
 
 function showError(message: string): void {
   running = false;
+  cameraHands?.stop();
+  head?.stop();
   cancelAnimationFrame(animationId);
+  clearPointer();
   errorMessage.textContent = message;
   errorMessage.hidden = false;
   canvas.hidden = true;
@@ -288,6 +442,7 @@ function animate(time: number): void {
   const projection = projectAnchor(anchor, input?.current ?? head?.current ?? { yaw: 0, pitch: 0 }, head?.tracker.horizontalFov ?? fov, head?.tracker.verticalFov ?? fov);
   if (head && (!hasHardwareAnchor || head.status !== 'live')) projection.visible = false;
   currentProjection = projection;
+  characterProjection = renderer.interactionProjection(projection);
   if (!loading && elapsedSeconds > noticeUntil) notice.hidden = true;
   if (projection.visible !== previousVisibility) {
     logEvent(projection.visible ? 'ANCHOR_VISIBLE' : 'ANCHOR_LOST', projection.visible
@@ -296,11 +451,17 @@ function animate(time: number): void {
     previousVisibility = projection.visible;
     canvas.setAttribute('aria-label', projection.visible ? 'Nova, your 3D character on a black display' : 'Black display. Nova is outside view or tracking is not ready.');
   }
-  try { renderer.render(elapsedSeconds, projection, session.active(elapsedSeconds)); }
+  handInput.expire(time);
+  const usePointer = pointerAvailable(time);
+  if (!usePointer) clearPointer();
+  const handResponse = usePointer ? pointerInput!.update(characterProjection, time) : handInput.response;
+  if (usePointer && handResponse.pet) interact('pet');
+  try { renderer.render(elapsedSeconds, projection, session.active(elapsedSeconds), handResponse); }
   catch (error) { console.error(error); showError('The display could not render. Reload to try again.'); return; }
+  characterProjection = renderer.interactionProjection(projection);
   frames += 1;
   if (time - fpsWindow >= 1000) { fps = Math.round(frames * 1000 / (time - fpsWindow)); frames = 0; fpsWindow = time; }
-  if (time - lastUiUpdate > 50) { updateHardware(); updateUi(projection); lastUiUpdate = time; }
+  if (time - lastUiUpdate > 50) { updateHardware(); updateHands(time); updateUi(projection); lastUiUpdate = time; }
   scheduleFrame();
 }
 
@@ -320,6 +481,7 @@ function pauseFrames(): void {
   cancelAnimationFrame(animationId);
   animationId = 0;
   input?.stopTurning();
+  clearPointer();
 }
 
 function resumeFrames(): void {
@@ -334,7 +496,7 @@ try {
   void renderer.load().then(() => {
     if (!running) return;
     loading = false;
-    tell(simulator ? 'Nova is here. Try Pet, Feed, or Play.' : 'Your character is ready. Enable head tracking to place Nova.');
+    tell(simulator ? 'Nova is here. Pet her, click the ground to run, or press J to jump.' : 'Your character is ready. Enable head tracking to place Nova.');
     logEvent('MODEL_READY', 'Your GLB character is ready.');
   }).catch((error: unknown) => {
     if (!running) return;
@@ -348,21 +510,22 @@ try {
 }
 
 function onVisibilityChange(): void {
-  if (document.hidden) { pauseFrames(); head?.stop(); hasHardwareAnchor = false; }
-  else resumeFrames();
+  if (document.hidden) { pauseFrames(); head?.stop(); cameraHands?.stop(); hasHardwareAnchor = false; }
+  else { cameraHands?.connect(); resumeFrames(); }
 }
 document.addEventListener('visibilitychange', onVisibilityChange);
 
 function onPageHide(event: PageTransitionEvent): void {
   pageSuspended = true;
   head?.stop();
+  cameraHands?.stop();
   hasHardwareAnchor = false;
   if (event.persisted) pauseFrames();
   else dispose();
 }
 
 function onPageShow(event: PageTransitionEvent): void {
-  if (event.persisted) { pageSuspended = false; resumeFrames(); }
+  if (event.persisted) { pageSuspended = false; cameraHands?.connect(); resumeFrames(); }
 }
 window.addEventListener('pagehide', onPageHide);
 window.addEventListener('pageshow', onPageShow);
@@ -371,7 +534,15 @@ function dispose(): void {
   running = false;
   pauseFrames();
   canvas.removeEventListener('webglcontextlost', onContextLost);
+  canvas.removeEventListener('pointerdown', onPointerDown);
+  canvas.removeEventListener('pointermove', onPointerMove);
+  canvas.removeEventListener('pointerup', onPointerUp);
+  canvas.removeEventListener('pointerleave', onPointerLeave);
+  canvas.removeEventListener('pointercancel', onPointerCancel);
+  canvas.removeEventListener('lostpointercapture', onPointerCancel);
+  window.removeEventListener('blur', clearPointer);
   input?.dispose();
+  cameraHands?.stop();
   head?.stop();
   renderer?.dispose();
   window.removeEventListener('keydown', onShortcut);

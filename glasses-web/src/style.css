@@ -124,6 +124,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 #calibrate, #tracking-start { width: 100%; }
 .interaction-buttons { display: flex; gap: 8px; margin-top: 18px; }
 .interaction-buttons button { flex: 1; border: 1px solid #dbd2e8; border-radius: 10px; min-height: 42px; background: #f7f2fc; color: #594573; font-size: 12px; }
+.movement-buttons { display: flex; gap: 8px; margin-top: 8px; }
+.movement-buttons button { display: flex; align-items: center; justify-content: center; gap: 12px; flex: 1; border: 1px solid #d8ded1; border-radius: 10px; min-height: 38px; background: #f4f7ef; color: #526147; font-size: 12px; }
+.nova-info .movement-hint { font-size: 11px; line-height: 1.5; margin: 12px 0 0; }
 #reaction-note { min-height: 32px; font-size: 11px; line-height: 1.5; }
 .simulator-mode #nova-canvas { cursor: pointer; }
 
@@ -132,3 +135,18 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .guide-center { left: 300px; top: 300px; }
 .guide-left { left: 16px; top: 300px; }
 .guide-bottom { left: 300px; top: 584px; }
+.camera-controls { padding: 20px 22px; border-top: 1px solid #e6e3eb; font-size: 12px; line-height: 1.5; }
+.camera-controls h3 { margin: 0 0 10px; font-size: 14px; }
+.camera-controls button { width: 100%; margin-top: 8px; }
+#hand-cursor { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: #deffbd; transform: translate(-50%, -50%); pointer-events: none; }
+#hand-target { position: absolute; color: white; font: 32px/1 monospace; transform: translate(-50%, -50%); pointer-events: none; }
+#hand-controls { position: absolute; bottom: 24px; left: 24px; right: 24px; color: #fff; font-size: 16px; text-align: center; }
+#hand-controls button { min-height: 88px; border: 1px solid #747079; border-radius: 20px; background: #1c1b21; color: #fff; padding: 12px 16px; font-size: 18px; }
+#hand-controls button:focus { outline: 3px solid #e0ccff; outline-offset: 3px; background: #342742; }
+#hand-controls #confirm-hand { width: 75%; }
+#hand-controls #cancel-hand { width: 20%; margin-left: 3%; }
+#hardware-actions { grid-template-columns: repeat(5, 1fr); gap: 10px; }
+#hardware-actions button { padding: 12px 5px; font-size: 16px; }
+
+#camera-preview { width: 100%; height: auto; background: #111; border-radius: 8px; }
+#camera-preview-status { font-size: 11px; }

@@ -6,7 +6,7 @@ A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 
 - [Desktop simulator](https://colinhu07.github.io/bondimals-display/?simulator)
 - [Full source repository](https://github.com/ColinHu07/hackmit-)
 
-The original Milestone 1 simulator has been extended at the user's request. Companion, Supabase, DAT camera, MediaPipe hands, and visual object anchors remain future work.
+The original Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, and an optional desktop camera preview are implemented; follow the [camera setup guide](docs/hand-camera-bridge.md). Physical camera/display concurrency still needs a device test. Supabase and visual object anchors remain future work.
 
 ## Run locally
 
@@ -21,7 +21,7 @@ npm run dev
 
 Open the printed Vite URL with **`?simulator`** (usually `http://127.0.0.1:5173/?simulator`). `/simulator` also works on the development server. Query routing works on GitHub Pages without SPA rewrites.
 
-- **Simulator:** click Pet, Feed, Play, or the character. Enter pets, F feeds, P plays. Arrows/WASD simulate head motion. Space places Nova, R faces the saved direction, 0 resets the anchor. Native control keyboard behavior is preserved.
+- **Simulator:** hold and stroke across Nova’s head to pet her, or click Pet, Feed, Play, or the character. Hover near her head to invite a lean. Click empty ground beside her to run there, **L** / **Run around** starts a short run with hops, and **J** / **Jump** jumps. Enter pets, F feeds, P plays. Arrows/WASD simulate head motion. Space places Nova, R faces the saved direction, 0 resets the anchor. Native control keyboard behavior is preserved.
 - **Glasses (`/`):** calibrated orientation input, bright focusable buttons, and a black 600×600 surface. Swipe to choose; pinch/Enter to activate. See [hardware instructions](docs/glasses-hardware-test.md).
 
 ## Glasses calibration
@@ -36,11 +36,15 @@ Choose a distant reference to reduce parallax during calibration. Stay in the sa
 
 No sensor API, denied permission, null readings, or a stream without updates produces a visible status instead of a falsely anchored character. A gap longer than 1.2 seconds or page suspension invalidates placement and requires explicit restart/calibration. Permission is requested only after selection; listeners stop on page exit/backgrounding.
 
-**Scope:** this is approximate yaw/pitch direction anchoring. It does not compensate for translation or roll, reconstruct the room, recognize objects, or pin a pet to a physical table. It can drift. On-glasses optics, sensor reference frame, latency, and drift still require the user's hardware test. Camera/MediaPipe tracking is not implemented by this update.
+**Scope:** this is approximate yaw/pitch direction anchoring. It does not compensate for translation or roll, reconstruct the room, recognize objects, or pin a pet to a physical table. It can drift. On-glasses optics, sensor reference frame, latency, and drift still require the user's hardware test. The separate camera pipeline uses calibrated 2D hand points; it does not add depth or room tracking.
 
 ## Character and interactions
 
-The supplied model was reduced from **1,972,568 triangles / 35.5 MB** to a **190 KB runtime GLB**; see [model processing](docs/character-model.md). It has no rig, textures, or animation clips. Reactions animate the mesh as a whole: a petting lean with hearts, a treat with a nibbling motion, and a happy hop/spin. Reduced-motion mode suppresses large movements. The model remains still between interactions; unchanged frames skip WebGL rendering.
+The supplied **colored** model was reduced from **1,972,568 triangles / 51.3 MB** to **23,670 triangles / 475 KB**, preserving its vertex colors and material; see [model processing](docs/character-model.md). It has no rig, textures, or embedded animation clips. Runtime-generated morph targets add a soft head tilt, bow, and alternating foot motion without modifying the source. Nova breathes between interactions, nuzzles with hearts when petted, nods toward a treat when fed, and runs and hops when playing. Hand and pointer proximity smoothly invite a lean. Visible animation renders at up to 30 Hz; hidden or unchanged reduced-motion scenes skip rendering. Reduced-motion mode keeps the character still and uses static hearts or a treat for feedback.
+
+Running uses a 120 Hz physics step with acceleration, speed limits, braking before turns, conserved horizontal momentum during jumps, gravity, and floor/stage-edge collisions. Foot contact accounts for the animated mesh so leaning, landing squash, and foot swings stay above the floor. A contact shadow shrinks in opacity during flight. Movement is local to the saved anchor and pauses out of view. The ground and stage bounds are simulated: there is no detected real-world floor, furniture collision, or room reconstruction.
+
+No animation software is required for these reactions. For independently moving eyes, mouth, or limbs, use the [Blender animation workflow](docs/character-animation.md). The renderer also accepts optional embedded `Idle`, `Pet`, `Feed`, and `Play` clips, blends between them, and uses procedural reactions when a clip is missing.
 
 Connections are local feedback for this visit, reset on reload. Actions cannot stack while a reaction is playing or target Nova when she is out of view. Petting/feed/play never alter the saved anchor. The future backend remains authoritative for persistent pet state.
 
@@ -48,7 +52,13 @@ Connections are local feedback for this visit, reset on reload. Actions cannot s
 
 ```text
 glasses-web/src/main.ts                      App/input/UI integration
-glasses-web/src/rendering/NovaRenderer.ts     GLTF loading, reactions, WebGL lifecycle
+glasses-web/src/rendering/NovaRenderer.ts     GLTF loading, effects, WebGL lifecycle
+glasses-web/src/rendering/NovaMotion.ts       Breathing, reach smoothing, procedural poses
+glasses-web/src/rendering/SoftHead.ts         Generated head morph targets for the static asset
+glasses-web/src/rendering/SoftGait.ts         Speed-matched foot deformation
+glasses-web/src/rendering/NovaLocomotion.ts   Fixed-step movement, gravity, ground contact state
+glasses-web/src/rendering/GroundContact.ts    Animated-mesh floor correction
+glasses-web/src/rendering/CharacterClips.ts   Optional authored GLB animation playback
 glasses-web/src/interaction/CreatureSession.ts  Typed pet/feed/play actions, temporary state
 glasses-web/src/input/HeadOrientation.ts      Permissions, calibration, sensor freshness
 glasses-web/src/input/SimulatedOrientation.ts  Desktop head-motion controls
@@ -59,7 +69,7 @@ backend/                                     Placeholder for authoritative Supab
 glasses-android/                             Placeholder for DAT camera bridge
 ```
 
-MediaPipe contributors can use `CreatureAction` and `CreatureSession.perform()` as the interaction boundary. Future observations must be mapped into that API through explicit app wiring; no camera/hand pipeline currently calls it. Keep camera/native transport separate from the renderer. See [Meta capability audit](docs/meta-capabilities.md), especially the unresolved native-camera/Web-App concurrency test.
+Hand observations now reach `CreatureSession.perform()` through `HandInteraction`. The iPhone uses Apple Vision on the glasses camera stream. Android MediaPipe contributors can publish the same shared 21-point protocol; Rohan’s native Android prototype remains on `rohan`. See [camera transport, pairing, and calibration](docs/hand-camera-bridge.md). Keep camera/native transport separate from the renderer. See [Meta capability audit](docs/meta-capabilities.md), especially the unresolved native-camera/Web-App concurrency test.
 
 ## Verify and build
 
@@ -70,6 +80,6 @@ npm run build
 npm run preview
 ```
 
-The **64 tests** cover projection signs, unchanged-anchor return, wraparound, invalid inputs, calibration/FOV, permissions, stale data, listener cleanup, and interaction gating. Browser checks confirm GLB rendering, all three reactions, opposite motion, re-placement/return, and the no-sensor fallback. Physical glasses behavior is **not yet verified**.
+The tests cover projection signs, unchanged-anchor return, wraparound, invalid inputs, calibration/FOV, permissions, stale data, listener cleanup, interaction gating, pointer strokes/ground clicks, animation transitions, reduced-motion poses, generated deformation, actual-asset vertex color preservation and floor clearance, and physics invariants across frame rates. Browser checks cover the colored GLB, running, jumping, ground-click movement, and reactions. Physical glasses behavior is **not yet verified**.
 
 The build produces `glasses-web/dist/` and stages a copy to root `dist/`. GitHub Pages publishes compiled output in the separate `ColinHu07/bondimals-display` repository. Rebuild with `--base=/bondimals-display/`; see [deployment instructions](docs/glasses-hardware-test.md).

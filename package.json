@@ -2,13 +2,19 @@
   "name": "bondimals",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["glasses-web"],
-  "engines": { "node": ">=22.0.0" },
+  "workspaces": [
+    "glasses-web",
+    "bridge"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "npm run dev --workspace @bondimals/glasses-web",
     "build": "npm run build --workspace @bondimals/glasses-web && node scripts/stage-display.mjs",
-    "test": "npm run test --workspace @bondimals/glasses-web",
+    "test": "npm run test --workspace @bondimals/glasses-web && npm run test --workspace @bondimals/bridge",
     "typecheck": "npm run typecheck --workspace @bondimals/glasses-web",
-    "preview": "npm run preview --workspace @bondimals/glasses-web"
+    "preview": "npm run preview --workspace @bondimals/glasses-web",
+    "bridge": "npm run start --workspace @bondimals/bridge"
   }
 }
