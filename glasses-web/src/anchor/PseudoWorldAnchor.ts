@@ -19,6 +19,8 @@ export interface AnchorProjection {
   deltaYaw: number;
   deltaPitch: number;
   confidence: number;
+  /** Apparent size relative to the reference viewing distance. Omitted when distance is unknown. */
+  scale?: number;
 }
 
 const DEFAULT_VIEWPORT = 600;

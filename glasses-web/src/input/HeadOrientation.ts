@@ -4,6 +4,10 @@ export interface SensorSample { alpha: number | null; beta: number | null }
 export type TrackingStatus = 'off' | 'waiting' | 'live' | 'stale' | 'denied' | 'unavailable';
 export type CalibrationStep = 'right' | 'up' | 'place' | 'done';
 const FRESH_MS = 1200;
+const MAX_SPEED = 650; // degrees/second; faster changes need a second sensor sample.
+const PREDICTION_MS = 30;
+const MAX_PREDICTION = 3;
+const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
 
 /** Relative IMU directions, not a position/SLAM tracker. Calibrate signs on-device. */
 export class OrientationTracker {
@@ -11,6 +15,10 @@ export class OrientationTracker {
   private raw: Orientation | null = null;
   private calibrationBaseline: Orientation | null = null;
   private lastSample = -Infinity;
+  private rendered: Orientation | null = null;
+  private lastFrame = -Infinity;
+  private velocity: Orientation = { yaw: 0, pitch: 0 };
+  private pendingJump: { pose: Orientation; at: number } | null = null;
   horizontalFov = 60;
   verticalFov = 60;
   private yawSign = 1;
@@ -18,11 +26,40 @@ export class OrientationTracker {
   step: CalibrationStep = 'right';
 
   accept(sample: SensorSample, now: number): boolean {
-    if (sample.alpha === null || sample.beta === null || !Number.isFinite(sample.alpha) || !Number.isFinite(sample.beta)) return false;
-    this.raw = { yaw: normalizeDegrees(sample.alpha), pitch: normalizeDegrees(sample.beta) };
+    if (sample.alpha === null || sample.beta === null || !Number.isFinite(sample.alpha) || !Number.isFinite(sample.beta) || !Number.isFinite(now) || now < this.lastSample) return false;
+    const pose = { yaw: normalizeDegrees(sample.alpha), pitch: normalizeDegrees(sample.beta) };
+    const elapsed = now - this.lastSample;
+    const delta = this.raw ? angularDelta(pose, this.raw) : { yaw: 0, pitch: 0 };
+    const limit = Math.max(12, MAX_SPEED * elapsed / 1000);
+    let confirmedJump = false;
+    // Keep calibration measurements immediate. Once placed, an isolated IMU
+    // discontinuity must not fling the animal across the display.
+    if (this.raw && (this.step === 'place' || this.step === 'done') && Math.max(Math.abs(delta.yaw), Math.abs(delta.pitch)) > limit) {
+      const pending = this.pendingJump;
+      const pendingDelta = pending ? angularDelta(pose, pending.pose) : null;
+      confirmedJump = !!pending && now - pending.at <= 150 && !!pendingDelta &&
+        Math.max(Math.abs(pendingDelta.yaw), Math.abs(pendingDelta.pitch)) <= Math.max(4, MAX_SPEED * (now - pending.at) / 1000);
+      if (!confirmedJump) {
+        this.pendingJump = { pose, at: now };
+        return false;
+      }
+    }
+    this.pendingJump = null;
+    // Advance using the previous target before changing it, so interpolation is
+    // independent of whether an event arrives just before or after a frame.
+    if (this.raw) this.sample(now);
+    if (this.raw && elapsed > 0 && elapsed <= 150 && !confirmedJump) {
+      const blend = 1 - Math.exp(-elapsed / 24);
+      for (const axis of ['yaw', 'pitch'] as const) {
+        const measured = clamp(delta[axis] * 1000 / elapsed, MAX_SPEED);
+        this.velocity[axis] = Math.abs(delta[axis]) < 0.03 ? 0 : this.velocity[axis] + blend * (measured - this.velocity[axis]);
+      }
+    } else this.velocity = { yaw: 0, pitch: 0 };
+    this.raw = pose;
     if (!this.origin) {
       this.origin = { ...this.raw };
       this.calibrationBaseline = { ...this.raw };
+      this.resetRendering(now);
     }
     this.lastSample = now;
     return true;
@@ -32,10 +69,41 @@ export class OrientationTracker {
 
   get current(): Orientation {
     if (!this.raw || !this.origin) return { yaw: 0, pitch: 0 };
+    return this.relative(this.raw);
+  }
+
+  /** Sample at display cadence, filling the gaps between slower sensor events. */
+  sample(now: number): Orientation {
+    if (!this.raw || !this.origin || !this.rendered) return { yaw: 0, pitch: 0 };
+    if (!Number.isFinite(now) || now <= this.lastFrame || now - this.lastSample > FRESH_MS) return this.relative(this.rendered);
+    const elapsed = Math.min(100, now - this.lastFrame);
+    const age = Math.max(0, now - this.lastSample);
+    // Short prediction reduces motion latency; taper it away on a stalled stream
+    // instead of integrating stale velocity indefinitely.
+    const prediction = Math.min(age, PREDICTION_MS) * Math.max(0, 1 - Math.max(0, age - 50) / 70) / 1000;
+    const speed = Math.max(Math.abs(this.velocity.yaw), Math.abs(this.velocity.pitch));
+    const smoothingMs = Math.max(18, 70 / (1 + speed / 30));
+    const blend = 1 - Math.exp(-elapsed / smoothingMs);
+    for (const axis of ['yaw', 'pitch'] as const) {
+      const target = this.raw[axis] + clamp(this.velocity[axis] * prediction, MAX_PREDICTION);
+      this.rendered[axis] = normalizeDegrees(this.rendered[axis] + blend * normalizeDegrees(target - this.rendered[axis]));
+    }
+    this.lastFrame = now;
+    return this.relative(this.rendered);
+  }
+
+  private relative(pose: Orientation): Orientation {
+    if (!this.origin) return { yaw: 0, pitch: 0 };
     return {
-      yaw: normalizeDegrees(this.yawSign * normalizeDegrees(this.raw.yaw - this.origin.yaw)),
-      pitch: Math.max(-90, Math.min(90, this.pitchSign * normalizeDegrees(this.raw.pitch - this.origin.pitch))),
+      yaw: normalizeDegrees(this.yawSign * normalizeDegrees(pose.yaw - this.origin.yaw)),
+      pitch: clamp(this.pitchSign * normalizeDegrees(pose.pitch - this.origin.pitch), 90),
     };
+  }
+
+  private resetRendering(now: number): void {
+    this.rendered = this.raw && { ...this.raw };
+    this.lastFrame = now;
+    this.velocity = { yaw: 0, pitch: 0 };
   }
 
   confirm(now: number): string | null {
@@ -54,10 +122,15 @@ export class OrientationTracker {
       this.verticalFov = measuredFov(Math.abs(tilt));
       // Set the angular origin at this calibrated pose, avoiding beta's wrap boundary.
       this.origin = { ...this.raw };
+      this.resetRendering(now);
       this.step = 'place';
     } else if (this.step === 'place') this.step = 'done';
     return null;
   }
+}
+
+function angularDelta(pose: Orientation, reference: Orientation): Orientation {
+  return { yaw: normalizeDegrees(pose.yaw - reference.yaw), pitch: normalizeDegrees(pose.pitch - reference.pitch) };
 }
 
 // Calibration markers sit 16px inside the 600px canvas. Recover full angular FOV.
@@ -97,7 +170,8 @@ export class HeadOrientation {
     if (this.state === 'waiting' && this.now() - this.startedAt > 5000) return 'unavailable';
     return this.state;
   }
-  get current(): Orientation { return this.tracker.current; }
+  get current(): Orientation { return this.sample(this.now()); }
+  sample(now = this.now()): Orientation { return this.tracker.sample(now); }
 
   async start(): Promise<void> {
     this.stop();

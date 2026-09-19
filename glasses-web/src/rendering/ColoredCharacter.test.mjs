@@ -56,3 +56,33 @@ it('preserves the supplied palette while foot motion and body tilt stay above th
   character.geometry.dispose();
   character.material.dispose();
 });
+
+it('keeps facial distances unchanged throughout a snuggle, including intermediate angles', async () => {
+  const bytes = readFileSync(new URL('../../public/models/nova.glb', import.meta.url));
+  const gltf = await new GLTFLoader().parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '');
+  let mesh;
+  gltf.scene.traverse(object => { if (object instanceof THREE.Mesh) mesh = object; });
+  const positions = mesh.geometry.getAttribute('position');
+  const bounds = new THREE.Box3().setFromBufferAttribute(positions);
+  const threshold = bounds.min.y + (bounds.max.y - bounds.min.y) * 0.61;
+  const facial = [];
+  for (let i = 0; i < positions.count; i++) {
+    if (positions.getY(i) > threshold && positions.getZ(i) > 0.3) facial.push(i);
+  }
+  expect(facial.length).toBeGreaterThan(50);
+  const head = new SoftHead(mesh);
+  const a = new THREE.Vector3(), b = new THREE.Vector3();
+  for (const [tilt, bow] of [[0, 0], [0.04, 0.02], [-0.085, 0.055], [0.085, 0.055]]) {
+    head.set(tilt, bow);
+    for (let j = 0; j < 40; j++) {
+      const first = facial[j * 7 % facial.length];
+      const second = facial[(j * 19 + 41) % facial.length];
+      const restDistance = a.fromBufferAttribute(positions, first).distanceTo(b.fromBufferAttribute(positions, second));
+      mesh.getVertexPosition(first, a);
+      mesh.getVertexPosition(second, b);
+      expect(a.distanceTo(b)).toBeCloseTo(restDistance, 6);
+    }
+  }
+  mesh.geometry.dispose();
+  mesh.material.dispose();
+});

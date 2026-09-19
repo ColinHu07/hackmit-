@@ -77,18 +77,18 @@ try {
   const candidate = join(temporary, "nova.glb");
   const result = spawnSync("npx", [
     "--yes", "--package=@gltf-transform/cli@4.5.0", "--package=meshoptimizer@1.2.0",
-    "gltf-transform", "simplify", input, candidate,
-    "--ratio", "0.012", "--error", "0.001",
+    "node", join(root, "scripts/simplify-colored-character.mjs"), input, candidate,
   ], { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Simplification exited with ${result.status}.`);
   const after = inspect(candidate);
-  if (after.triangles > 30_000 || after.triangles < 15_000 || after.bytes > 1_000_000) {
+  if (after.triangles > 70_000 || after.triangles < 60_000 || after.bytes > 2_000_000) {
     throw new Error("Output exceeded the intended geometry/size budget.");
   }
   if (JSON.stringify(before.material) !== JSON.stringify(after.material)
       || after.requiredExtensions.length || after.animations !== before.animations
-      || after.skins !== before.skins || after.color.distinct < 1_000) {
+      || after.skins !== before.skins || after.color.distinct < 25_000
+      || after.color.min[3] !== 1 || after.color.max[3] !== 1) {
     throw new Error("Output failed material, color, or decoder compatibility checks.");
   }
   for (let axis = 0; axis < 3; axis++) {
@@ -97,7 +97,7 @@ try {
       if (Math.abs(before.bounds[end][axis] - after.bounds[end][axis]) > extent * 0.002) {
         throw new Error("Simplification changed the character bounds too much.");
       }
-      if (Math.abs(before.color[end][axis] - after.color[end][axis]) > 0.015) {
+      if (Math.abs(before.color[end][axis] - after.color[end][axis]) > 0.001) {
         throw new Error("Simplification changed the color range too much.");
       }
     }

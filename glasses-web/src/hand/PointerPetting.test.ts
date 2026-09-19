@@ -5,6 +5,40 @@ const target = { x: 300, y: 300, visible: true };
 const headPoint = (x: number) => ({ x, y: 252 });
 
 describe('simulator pointer petting', () => {
+  it.each([0.5, 2])('scales hover, held strokes, and body taps together at %sx apparent size', scale => {
+    const scaledTarget = { ...target, scale };
+    const point = (x: number, y = -48) => ({ x: 300 + x * scale, y: 300 + y * scale });
+    const pointer = new PointerPetting();
+    pointer.move(point(30), 1);
+    const hover = pointer.update(scaledTarget, 0);
+    expect(hover).toMatchObject({ near: true, pet: false });
+    expect(hover.reachX).toBeCloseTo(5.4);
+    expect(hover.reachY).toBeCloseTo(0);
+    pointer.begin(point(-30), 1);
+    let pets = 0;
+    for (let at = 0; at <= 480; at += 8) {
+      pointer.move(point(-30 + at / 8), 1);
+      if (pointer.update(scaledTarget, at).pet) pets += 1;
+    }
+    expect(pets).toBe(1);
+    expect(pointer.finish(point(30), 1, scaledTarget)).toBe(false);
+    pointer.begin(point(0, 80), 1);
+    expect(pointer.finish(point(5, 80), 1, scaledTarget)).toBe(true);
+    pointer.begin(point(110, 0), 1);
+    expect(pointer.finish(point(110, 0), 1, scaledTarget)).toBe(false);
+    pointer.begin(point(0, 0), 1);
+    pointer.move(point(8, 0), 1);
+    expect(pointer.finish(point(0, 0), 1, scaledTarget)).toBe(false);
+  });
+
+  it('does not turn a size change during a press into a release tap', () => {
+    const pointer = new PointerPetting();
+    pointer.begin(target, 1);
+    pointer.update(target, 0);
+    pointer.update({ ...target, scale: 2 }, 20);
+    expect(pointer.finish(target, 1, { ...target, scale: 2 })).toBe(false);
+  });
+
   it('lets Nova lean toward hover without counting unpressed movement as petting', () => {
     const pointer = new PointerPetting();
     for (let i = 0; i < 7; i++) {

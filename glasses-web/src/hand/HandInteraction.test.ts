@@ -35,6 +35,40 @@ describe('camera alignment', () => {
 });
 
 describe('petting motion', () => {
+  it.each([0.5, 2])('preserves stroke and hover behavior at %sx apparent size', scale => {
+    const scaledTarget = { ...target, scale };
+    const detector = new PettingGesture();
+    const replies = [-30, -20, -10, 0, 10].map((x, i) => detector.observe(
+      { x: target.x + x * scale, y: target.y - 48 * scale }, scaledTarget, i * 80, 'right',
+    ));
+    expect(replies.filter(reply => reply.pet)).toHaveLength(1);
+    expect(replies.at(-1)?.reachX).toBeCloseTo(1.8);
+    const hover = detector.observe({ x: target.x + 80 * scale, y: target.y - 48 * scale }, scaledTarget, 400, 'right');
+    expect(hover).toMatchObject({ near: true, pet: false, reachX: 12 });
+    expect(hover.reachY).toBeCloseTo(0);
+    expect(detector.observe({ x: target.x + 100 * scale, y: target.y - 48 * scale }, scaledTarget, 480, 'right').near).toBe(false);
+  });
+  it.each([0.5, 2])('does not mistake shared camera motion or a moving target for a stroke at %sx', scale => {
+    for (const stationaryHand of [false, true]) {
+      const detector = new PettingGesture();
+      for (let i = 0; i < 12; i++) {
+        const offset = i * 4 * scale;
+        expect(detector.observe(
+          { x: target.x + (stationaryHand ? 0 : offset), y: target.y - 48 * scale },
+          { ...target, x: target.x + offset, scale }, i * 80, 'right',
+        ).pet).toBe(false);
+      }
+    }
+  });
+  it('restarts stroke accumulation when apparent size changes', () => {
+    const detector = new PettingGesture();
+    [-30, -20, -10].forEach((x, i) => detector.observe({ x: 300 + x, y: 252 }, target, i * 80, 'right'));
+    const replies = [0, 10, 20, 30].map((x, i) => detector.observe(
+      { x: 300 + x * 2, y: 204 }, { ...target, scale: 2 }, 240 + i * 80, 'right',
+    ));
+    expect(replies.every(reply => !reply.pet)).toBe(true);
+    expect(detector.observe({ x: 380, y: 204 }, { ...target, scale: 2 }, 560, 'right').pet).toBe(true);
+  });
   it('makes a stroke react while preserving the caller’s anchor', () => {
     const detector = new PettingGesture();
     const frozen = Object.freeze({...target});

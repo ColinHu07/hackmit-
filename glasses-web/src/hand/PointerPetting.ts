@@ -1,4 +1,5 @@
 import type { Point } from './HandCalibration';
+import { projectionScale } from '../anchor/ViewingDistance';
 import { PettingGesture, type HandResponse, type PetTarget } from './PettingGesture';
 
 const inactive = (): HandResponse => ({ near: false, pet: false, reachX: 0, reachY: 0 });
@@ -10,6 +11,8 @@ export class PointerPetting {
   private start: Point | null = null;
   private pointerId: number | null = null;
   private dragged = false;
+  private maxDisplacement = 0;
+  private strokeScale: number | null = null;
   private lastSampleAt = -Infinity;
   private response = inactive();
 
@@ -23,13 +26,15 @@ export class PointerPetting {
     this.point = { ...point };
     this.start = { ...point };
     this.dragged = false;
+    this.maxDisplacement = 0;
+    this.strokeScale = null;
     return true;
   }
 
   move(point: Point, id: number): void {
     if (this.pointerId !== null && this.pointerId !== id) return;
     this.point = { ...point };
-    if (this.start && Math.hypot(point.x - this.start.x, point.y - this.start.y) > 6) this.dragged = true;
+    if (this.start) this.maxDisplacement = Math.max(this.maxDisplacement, Math.hypot(point.x - this.start.x, point.y - this.start.y));
   }
 
   /** Return a tap once; a stroke never becomes a second pet on release. */
@@ -41,8 +46,9 @@ export class PointerPetting {
   finishAction(point: Point, id: number, target: PetTarget, groundY?: number): 'pet' | 'move' | null {
     if (id !== this.pointerId) return null;
     this.move(point, id);
+    const scale = this.contactScale(target);
     const hit = (sample: Point): 'pet' | 'move' | null => {
-      if (Math.hypot(sample.x - target.x, sample.y - target.y) < 100) return 'pet';
+      if (Math.hypot(sample.x - target.x, sample.y - target.y) / scale < 100) return 'pet';
       if (groundY !== undefined && sample.y >= groundY && sample.y <= 600
         && sample.x >= 0 && sample.x <= 600) return 'move';
       return null;
@@ -58,6 +64,7 @@ export class PointerPetting {
 
   update(target: PetTarget, at: number): HandResponse {
     if (!target.visible || !this.point) { this.clear(); return inactive(); }
+    if (this.pointerId !== null) this.contactScale(target);
     if (this.pointerId === null) {
       // Hover can invite Nova to lean closer, but only a held stroke pets her.
       this.gesture.reset();
@@ -78,8 +85,22 @@ export class PointerPetting {
     this.start = null;
     this.pointerId = null;
     this.dragged = false;
+    this.maxDisplacement = 0;
+    this.strokeScale = null;
     this.lastSampleAt = -Infinity;
     this.response = inactive();
     this.gesture.reset();
+  }
+
+  private contactScale(target: PetTarget): number {
+    const scale = projectionScale(target.scale);
+    if (this.strokeScale !== null && this.strokeScale !== scale) {
+      this.dragged = true;
+      this.gesture.reset();
+      this.lastSampleAt = -Infinity;
+    }
+    this.strokeScale = scale;
+    if (this.maxDisplacement / scale > 6) this.dragged = true;
+    return scale;
   }
 }

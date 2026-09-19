@@ -1,5 +1,8 @@
 import './style.css';
 import { placeAnchor, projectAnchor, type AnchorProjection } from './anchor/PseudoWorldAnchor';
+import { AnchorTravel } from './anchor/AnchorTravel';
+import { relocationStart } from './anchor/RelocationBearing';
+import { distanceScale, projectionScale, REFERENCE_DISTANCE_METERS } from './anchor/ViewingDistance';
 import { SimulatedOrientation, isEditingControl } from './input/SimulatedOrientation';
 import { CameraHands, parsePairing } from './hand/CameraHands';
 import { CameraPreview } from './hand/CameraPreview';
@@ -8,6 +11,7 @@ import { PointerPetting } from './hand/PointerPetting';
 import { HeadOrientation } from './input/HeadOrientation';
 import { CreatureSession, type CreatureAction } from './interaction/CreatureSession';
 import { NovaRenderer } from './rendering/NovaRenderer';
+import { NOVA_LOCOMOTION_SETTINGS } from './rendering/NovaLocomotion';
 
 // Explicit route: never guess a glasses device from viewport size or user agent.
 // The root and /display routes are safe, debug-free black display surfaces.
@@ -28,7 +32,7 @@ element('#app').innerHTML = simulator ? `
   <div class="shell">
     <header class="site-header">
       <a class="brand" href="?simulator" aria-label="Bondimals simulator"><span class="brand-icon">${sparkle}</span>bondimals<span class="brand-dot">.</span></a>
-      <div class="header-meta"><span class="status-dot"></span> a shared little world <span class="header-divider"></span><span class="version">BUILD 003</span></div>
+      <div class="header-meta"><span class="status-dot"></span> a shared little world <span class="header-divider"></span><span class="version">BUILD 004</span></div>
     </header>
     <main>
       <section class="intro">
@@ -51,8 +55,12 @@ element('#app').innerHTML = simulator ? `
             <div class="range-labels"><span>−180°</span><span>0°</span><span>180°</span></div>
             <div class="turn-buttons"><button id="turn-left" type="button" aria-label="Turn head left 15 degrees">← <span>Look left</span></button><button id="turn-right" type="button" aria-label="Turn head right 15 degrees"><span>Look right</span> →</button></div>
             <p class="control-hint">Or hold <kbd>←</kbd> <kbd>→</kbd> to turn your head.</p>
+            <div class="range-heading"><label for="distance">Distance to Nova</label><output id="distance-value" for="distance">2.0 m</output></div>
+            <input id="distance" type="range" min="0.7" max="6" step="0.05" value="2" />
+            <div class="range-labels"><span>Closer · bigger</span><span>Farther · smaller</span></div>
+            <p class="control-hint">Simulated distance. Glasses need a position source to measure walking closer.</p>
           </section>
-          <section class="anchor-controls"><div class="section-title"><h3>Nova’s anchor</h3><span class="anchor-type">DIRECTION</span></div><div class="anchor-readout"><span>Stored heading</span><strong id="anchor-value">0.0°</strong></div><button id="place-anchor" class="primary-button" type="button">${sparkle} Place Nova here <kbd>SPACE</kbd></button><button id="return-to-anchor" class="text-button" type="button">↶ &nbsp; Look back at Nova <kbd>R</kbd></button></section>
+          <section class="anchor-controls"><div class="section-title"><h3>Nova’s anchor</h3><span class="anchor-type">DIRECTION</span></div><div class="anchor-readout"><span>Stored heading</span><strong id="anchor-value">0.0°</strong></div><button id="place-anchor" class="primary-button" type="button">${sparkle} Move Nova here <kbd>SPACE</kbd></button><button id="return-to-anchor" class="text-button" type="button">↶ &nbsp; Look back at Nova <kbd>R</kbd></button></section>
           <details class="advanced"><summary>Fine-tune the simulation <span aria-hidden="true">+</span></summary><div class="advanced-body"><div class="range-heading"><label for="pitch">Head pitch</label><output id="pitch-value" for="pitch">0.0°</output></div><input id="pitch" type="range" min="-80" max="80" step="0.1" value="0" /><div class="range-heading"><label for="fov">Field of view</label><output id="fov-value" for="fov">60°</output></div><input id="fov" type="range" min="20" max="100" step="2" value="60" /><p>Simulation cone, not a measured hardware FOV. Use ↑ / ↓ to try pitch.</p><div class="range-heading"><label for="model-facing">Character facing</label></div><input id="model-facing" type="range" min="-180" max="180" value="0" step="15" /><button id="reset" class="secondary-button" type="button">Reset simulation <kbd>0</kbd></button></div></details>
         </aside>
       </div>
@@ -84,7 +92,9 @@ let lastTrackingState = '';
 let lastHardwareMessage = '';
 let loading = true;
 let anchor = placeAnchor({ yaw: 0, pitch: 0 });
+const anchorTravel = new AnchorTravel(anchor);
 let fov = 60;
+let viewingDistance = REFERENCE_DISTANCE_METERS;
 let renderer: NovaRenderer | undefined;
 let previousVisibility: boolean | undefined;
 let animationId = 0;
@@ -99,6 +109,7 @@ let lastUiUpdate = 0;
 
 const ui = simulator ? {
   yaw: element<HTMLInputElement>('#yaw'), pitch: element<HTMLInputElement>('#pitch'),
+  distance: element<HTMLInputElement>('#distance'), distanceValue: element<HTMLOutputElement>('#distance-value'),
   fov: element<HTMLInputElement>('#fov'), yawValue: element<HTMLOutputElement>('#yaw-value'),
   pitchValue: element<HTMLOutputElement>('#pitch-value'), fovValue: element<HTMLOutputElement>('#fov-value'),
   anchorValue: element('#anchor-value'), offset: element('#offset-value'), position: element('#position-value'),
@@ -122,12 +133,30 @@ function logEvent(type: string, message: string): void {
 
 function placeNova(): void {
   if (!input && head?.status !== 'live') return;
-  anchor = placeAnchor(input?.current ?? head!.current);
-  renderer?.resetLocomotion();
+  if (!renderer?.ready) { tell('Your character is still loading.'); return; }
+  const orientation = input?.current ?? head!.current;
+  const destination = placeAnchor(orientation);
+  if (input || hasHardwareAnchor) {
+    if (renderer.reducedMotion) { tell('Movement is paused by your reduced-motion preference.'); return; }
+    // Preserve the visible position if Nova has wandered from her saved bearing.
+    // Only the initial placement is instant; subsequent commands run to a target.
+    const offset = renderer.takeTravelOffset() * projectionScale(currentProjection.scale);
+    anchor = relocationStart(anchor, orientation, head?.tracker.horizontalFov ?? fov, offset);
+    const smallestFov = Math.min(head?.tracker.horizontalFov ?? fov, head?.tracker.verticalFov ?? fov);
+    const unitsPerDegree = 300 / Math.tan(smallestFov * Math.PI / 360) * Math.PI / 180
+      / projectionScale(currentProjection.scale);
+    anchorTravel.request(anchor, destination, NOVA_LOCOMOTION_SETTINGS.maxSpeed / unitsPerDegree);
+    tell('Coming over!');
+    logEvent('MOVE_REQUESTED', `Nova is running to ${destination.yaw.toFixed(1)}° yaw, ${destination.pitch.toFixed(1)}° pitch.`);
+  } else {
+    anchor = destination;
+    anchorTravel.reset(anchor);
+    renderer.resetLocomotion();
+    hasHardwareAnchor = true;
+    tell('Nova’s direction is saved. Look away, then back.');
+    logEvent('ANCHOR_PLACED', `Nova placed at ${anchor.yaw.toFixed(1)}° yaw, ${anchor.pitch.toFixed(1)}° pitch.`);
+  }
   clearPointer();
-  if (head) hasHardwareAnchor = true;
-  tell('Nova’s direction is saved. Look away, then back.');
-  logEvent('ANCHOR_PLACED', `Nova placed at ${anchor.yaw.toFixed(1)}° yaw, ${anchor.pitch.toFixed(1)}° pitch.`);
 }
 
 function lookBack(): void {
@@ -139,8 +168,10 @@ function reset(): void {
   renderer?.resetLocomotion();
   clearPointer();
   anchor = placeAnchor({ yaw: 0, pitch: 0 });
+  anchorTravel.reset(anchor);
   fov = 60;
-  if (ui) ui.fov.value = '60';
+  viewingDistance = REFERENCE_DISTANCE_METERS;
+  if (ui) { ui.fov.value = '60'; ui.distance.value = String(viewingDistance); }
   logEvent('SIMULATION_RESET', 'A fresh start. Nova’s anchor is back at 0°.');
 }
 
@@ -176,6 +207,7 @@ if (ui && input) {
   ui.yaw.addEventListener('input', () => input.set({ ...input.current, yaw: Number(ui.yaw.value) }));
   ui.pitch.addEventListener('input', () => input.set({ ...input.current, pitch: Number(ui.pitch.value) }));
   ui.fov.addEventListener('input', () => { fov = Number(ui.fov.value); });
+  ui.distance.addEventListener('input', () => { viewingDistance = Number(ui.distance.value); });
   element('#turn-left').addEventListener('click', () => input.set({ ...input.current, yaw: input.current.yaw - 15 }));
   element('#turn-right').addEventListener('click', () => input.set({ ...input.current, yaw: input.current.yaw + 15 }));
   element('#place-anchor').addEventListener('click', placeNova);
@@ -200,6 +232,7 @@ function interact(action: CreatureAction): void {
   const result = session.perform(action, elapsedSeconds, characterProjection.visible && (simulator || hasHardwareAnchor));
   tell(result.message);
   if (result.accepted) {
+    anchorTravel.reset(anchor);
     if (action === 'play') renderer.runAround();
     else renderer.stop();
     logEvent('INTERACTION', `${action}: ${session.bonds} connections this visit.`);
@@ -211,6 +244,7 @@ function moveNova(action: 'run' | 'jump'): void {
   if (!currentProjection.visible) { tell('Look back at Nova first.'); return; }
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { tell('Movement is paused by your reduced-motion preference. Pet or feed Nova for a gentle response.'); return; }
   if (action === 'run') {
+    anchorTravel.reset(anchor);
     if (renderer.runAround()) tell('Off she goes! Tap Nova to stop and pet her.');
   } else if (renderer.jump()) tell('Up she goes!');
 }
@@ -253,10 +287,11 @@ function onPointerUp(event: PointerEvent): void {
   if (!event.isPrimary) return;
   if (!pointerAvailable(performance.now())) { clearPointer(); return; }
   const point = pointerPoint(event);
-  const action = pointerInput?.finishAction(point, event.pointerId, characterProjection, currentProjection.y + 45);
+  const action = pointerInput?.finishAction(point, event.pointerId, characterProjection, currentProjection.y + 45 * projectionScale(currentProjection.scale));
   if (action === 'pet') interact('pet');
   if (action === 'move') {
-    tell(renderer?.moveTo(point.x - currentProjection.x) ? 'Coming over!' : 'Movement is paused by your reduced-motion preference.');
+    anchorTravel.reset(anchor);
+    tell(renderer?.moveTo((point.x - currentProjection.x) / projectionScale(currentProjection.scale)) ? 'Coming over!' : 'Movement is paused by your reduced-motion preference.');
   }
   if (event.pointerType !== 'mouse') clearPointer();
 }
@@ -407,6 +442,7 @@ function updateUi(projection: AnchorProjection): void {
   ui.yawValue.value = `${orientation.yaw.toFixed(1)}°`;
   ui.pitchValue.value = `${orientation.pitch.toFixed(1)}°`;
   ui.fovValue.value = `${fov}°`;
+  ui.distanceValue.value = `${viewingDistance.toFixed(2)} m`;
   ui.anchorValue.textContent = `${anchor.yaw.toFixed(1)}°`;
   ui.offset.textContent = `${projection.deltaYaw.toFixed(1)}°`;
   ui.position.textContent = projection.visible ? `${Math.round(projection.x)}, ${Math.round(projection.y)}` : 'Outside view';
@@ -439,7 +475,12 @@ function animate(time: number): void {
   previousTime = time;
   elapsedSeconds += delta;
   input?.update(delta);
-  const projection = projectAnchor(anchor, input?.current ?? head?.current ?? { yaw: 0, pitch: 0 }, head?.tracker.horizontalFov ?? fov, head?.tracker.verticalFov ?? fov);
+  // A commanded run keeps progressing even when its starting point is offscreen.
+  if (renderer.reducedMotion) anchorTravel.reset(anchor);
+  const journey = anchorTravel.update(delta);
+  if (journey.anchor) anchor = journey.anchor;
+  const projection = projectAnchor(anchor, input?.current ?? head?.sample(time) ?? { yaw: 0, pitch: 0 }, head?.tracker.horizontalFov ?? fov, head?.tracker.verticalFov ?? fov);
+  if (simulator) projection.scale = distanceScale(viewingDistance);
   if (head && (!hasHardwareAnchor || head.status !== 'live')) projection.visible = false;
   currentProjection = projection;
   characterProjection = renderer.interactionProjection(projection);
@@ -456,7 +497,13 @@ function animate(time: number): void {
   if (!usePointer) clearPointer();
   const handResponse = usePointer ? pointerInput!.update(characterProjection, time) : handInput.response;
   if (usePointer && handResponse.pet) interact('pet');
-  try { renderer.render(elapsedSeconds, projection, session.active(elapsedSeconds), handResponse); }
+  const unitsPerDegree = 300 / Math.tan((head?.tracker.horizontalFov ?? fov) * Math.PI / 360)
+    * Math.PI / 180 / projectionScale(projection.scale);
+  try { renderer.render(elapsedSeconds, projection, session.active(elapsedSeconds), handResponse, {
+    active: journey.travelling, speed: journey.speed * unitsPerDegree,
+    velocityX: journey.yawVelocity * unitsPerDegree, velocityY: journey.pitchVelocity * unitsPerDegree,
+    distanceDelta: journey.distanceDelta * unitsPerDegree,
+  }); }
   catch (error) { console.error(error); showError('The display could not render. Reload to try again.'); return; }
   characterProjection = renderer.interactionProjection(projection);
   frames += 1;

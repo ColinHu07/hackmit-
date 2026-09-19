@@ -5,6 +5,12 @@ const advance = (body: NovaLocomotion, seconds: number, fps = 120): void => {
   for (let frame = 0; frame < Math.round(seconds * fps); frame++) body.update(1 / fps);
 };
 
+const takeOff = (body: NovaLocomotion): void => {
+  for (let step = 0; step < Math.ceil(settings.anticipationDuration / settings.fixedStep); step++) {
+    body.update(settings.fixedStep);
+  }
+};
+
 describe('character stage physics', () => {
   it('accelerates gradually, caps speed, brakes before a target, and settles', () => {
     const body = new NovaLocomotion();
@@ -42,9 +48,17 @@ describe('character stage physics', () => {
     }
   });
 
-  it('uses a ballistic arc, cannot jump again in the air, and resolves the floor', () => {
+  it('loads the jump on the floor, uses a ballistic arc, and completes a landing recovery', () => {
     const body = new NovaLocomotion();
     expect(body.jump()).toBe(true);
+    expect(body.jump()).toBe(false);
+    expect(body.state).toMatchObject({
+      grounded: true, height: 0, velocityY: 0, jumpPhase: 'anticipation', jumpPhaseTime: 0,
+    });
+    takeOff(body);
+    expect(body.state).toMatchObject({
+      grounded: false, height: 0, velocityY: settings.jumpSpeed, jumpPhase: 'airborne', jumpPhaseTime: 0,
+    });
     expect(body.jump()).toBe(false);
     advance(body, 0.25);
     expect(body.state.height).toBeCloseTo(settings.jumpSpeed * 0.25 - 0.5 * settings.gravity * 0.25 ** 2, 8);
@@ -59,16 +73,49 @@ describe('character stage physics', () => {
         landed = true;
         expect(state.velocityY).toBe(0);
         expect(state.landing).toBe(1);
+        expect(state).toMatchObject({ jumpPhase: 'landing', jumpPhaseTime: 0 });
+        expect(body.jump()).toBe(false);
       }
     }
     expect(apex).toBeCloseTo(settings.jumpSpeed ** 2 / (2 * settings.gravity), 1);
     expect(landed).toBe(true);
     expect(body.state.height).toBe(0);
     expect(body.state.landing).toBeLessThan(0.01);
+    expect(body.state).toMatchObject({ jumpPhase: 'idle', jumpPhaseTime: 0 });
     expect(body.jump()).toBe(true);
   });
 
-  it('retains horizontal momentum in flight and brakes after landing', () => {
+  it('keeps contact through anticipation and landing, and changes phase only at fixed boundaries', () => {
+    const body = new NovaLocomotion();
+    body.jump();
+    const anticipationSteps = Math.ceil(settings.anticipationDuration / settings.fixedStep);
+    for (let step = 1; step < anticipationSteps; step++) {
+      const state = body.update(settings.fixedStep);
+      expect(state).toMatchObject({ jumpPhase: 'anticipation', grounded: true, height: 0, velocityY: 0 });
+      expect(state.jumpPhaseTime).toBeCloseTo(step * settings.fixedStep, 10);
+      expect(body.jump()).toBe(false);
+    }
+    body.update(settings.fixedStep / 2);
+    expect(body.state.jumpPhase).toBe('anticipation');
+    body.update(settings.fixedStep / 2);
+    expect(body.state).toMatchObject({ jumpPhase: 'airborne', jumpPhaseTime: 0 });
+    // Advance no more than the known duration of this jump, so a failure to land
+    // fails this test instead of hanging it.
+    for (let step = 0; step < 120 && body.state.jumpPhase === 'airborne'; step++) body.update(settings.fixedStep);
+    expect(body.state).toMatchObject({ jumpPhase: 'landing', jumpPhaseTime: 0, landing: 1 });
+    const recoverySteps = Math.ceil(settings.landingDuration / settings.fixedStep);
+    for (let step = 1; step < recoverySteps; step++) {
+      const state = body.update(settings.fixedStep);
+      expect(state).toMatchObject({ jumpPhase: 'landing', grounded: true, height: 0, velocityY: 0 });
+      expect(state.jumpPhaseTime).toBeCloseTo(step * settings.fixedStep, 10);
+      expect(body.jump()).toBe(false);
+    }
+    body.update(settings.fixedStep);
+    expect(body.state).toMatchObject({ jumpPhase: 'idle', jumpPhaseTime: 0, grounded: true });
+    expect(body.jump()).toBe(true);
+  });
+
+  it('retains horizontal momentum through anticipation and flight, then brakes after landing', () => {
     const body = new NovaLocomotion();
     body.moveTo(140);
     advance(body, 0.3);
@@ -78,6 +125,7 @@ describe('character stage physics', () => {
     advance(body, 0.2);
     expect(body.state.velocityX).toBe(takeoff.velocityX);
     expect(body.state.x).toBeCloseTo(takeoff.x + takeoff.velocityX * 0.2, 8);
+    expect(body.state.jumpPhase).toBe('airborne');
     advance(body, 1);
     expect(body.state).toMatchObject({ grounded: true, velocityX: 0, velocityY: 0, running: false });
   });
@@ -99,12 +147,11 @@ describe('character stage physics', () => {
     expect(body.state).toEqual(settled);
   });
 
-  it('runs both directions and returns home within six seconds', () => {
+  it('keeps every running step grounded, runs both directions, and returns home within six seconds', () => {
     const body = new NovaLocomotion();
     body.runAround();
     let minX = 0;
     let maxX = 0;
-    let hops = 0;
     let distance = 0;
     const directions = new Set<number>();
     for (let frame = 0; frame < 720; frame++) {
@@ -113,22 +160,32 @@ describe('character stage physics', () => {
       minX = Math.min(minX, state.x);
       maxX = Math.max(maxX, state.x);
       if (state.moving) directions.add(state.facing);
-      if (previous.grounded && state.grounded) {
-        expect(Math.abs(state.velocityX - previous.velocityX)).toBeLessThanOrEqual(settings.braking * settings.fixedStep + 1e-8);
-      }
+      expect(state).toMatchObject({ grounded: true, height: 0, velocityY: 0, landing: 0 });
+      expect(Math.abs(state.velocityX - previous.velocityX)).toBeLessThanOrEqual(settings.braking * settings.fixedStep + 1e-8);
       distance += Math.abs(state.x - previous.x);
-      if (previous.grounded && !state.grounded) {
-        hops++;
-        expect(Math.abs(state.velocityX)).toBeGreaterThanOrEqual(settings.autoHopSpeed);
-      }
     }
     expect(minX).toBeLessThan(-110);
     expect(maxX).toBeGreaterThan(110);
     expect(directions).toEqual(new Set([-1, 1]));
     expect(body.state).toMatchObject({ x: 0, velocityX: 0, grounded: true, running: false, targetX: null });
-    expect(hops).toBe(2);
     expect(distance).toBeGreaterThan(580);
-    expect(body.state.strideDistance).toBeLessThan(distance - 100);
+    expect(body.state.strideDistance).toBeCloseTo(distance, 8);
+  });
+
+  it('allows an explicit jump during a running route and resumes the route after landing', () => {
+    const body = new NovaLocomotion();
+    body.runAround();
+    advance(body, 0.15);
+    const takeoff = body.state;
+    expect(body.jump()).toBe(true);
+    takeOff(body);
+    const flightStart = body.state;
+    expect(flightStart.strideDistance).toBeGreaterThan(takeoff.strideDistance);
+    advance(body, 0.1);
+    expect(body.state).toMatchObject({ grounded: false, velocityX: takeoff.velocityX });
+    expect(body.state.strideDistance).toBe(flightStart.strideDistance);
+    advance(body, 6);
+    expect(body.state).toMatchObject({ x: 0, velocityX: 0, height: 0, grounded: true, running: false, targetX: null });
   });
 
   it('stops with braking and can cancel an automatic route', () => {
@@ -164,4 +221,47 @@ describe('character stage physics', () => {
     body.reset();
     expect(body.state).toEqual(new NovaLocomotion().state);
   });
+
+  it.each(['anticipation', 'airborne', 'landing'] as const)('freezes and resets the %s jump phase', phase => {
+    const body = new NovaLocomotion();
+    body.jump();
+    for (let step = 0; step < 150 && body.state.jumpPhase !== phase; step++) body.update(settings.fixedStep);
+    expect(body.state.jumpPhase).toBe(phase);
+    body.update(settings.fixedStep);
+    const beforePause = body.state;
+    body.update(10, false);
+    expect(body.state).toEqual(beforePause);
+    body.update(settings.fixedStep);
+    expect(body.state.jumpPhaseTime).toBeCloseTo(beforePause.jumpPhaseTime + settings.fixedStep, 10);
+    body.reset();
+    expect(body.state).toEqual(new NovaLocomotion().state);
+  });
+
+  it.each(['idle', 'anticipation', 'airborne', 'landing'] as const)(
+    'transfers the local offset into an outer anchor without resetting the %s pose', phase => {
+      const body = new NovaLocomotion();
+      body.runAround();
+      advance(body, 0.15);
+      if (phase !== 'idle') {
+        body.jump();
+        for (let step = 0; step < 150 && body.state.jumpPhase !== phase; step++) body.update(settings.fixedStep);
+      }
+      expect(body.state.jumpPhase).toBe(phase);
+      const before = body.state;
+      expect(Math.abs(before.x)).toBeGreaterThan(0);
+      expect(body.rebaseHorizontal()).toBe(before.x);
+      expect(body.state).toEqual({
+        ...before, x: 0, velocityX: 0, moving: false, running: false, targetX: null,
+      });
+      expect(body.rebaseHorizontal()).toBe(0);
+      // A pending automatic route must not resume after the anchor has taken
+      // ownership of travel; a jump still completes naturally on that anchor.
+      advance(body, 6);
+      expect(body.state).toMatchObject({
+        x: 0, height: 0, velocityX: 0, velocityY: 0, grounded: true,
+        running: false, targetX: null, jumpPhase: 'idle',
+      });
+      expect(body.state.strideDistance).toBe(before.strideDistance);
+    },
+  );
 });
