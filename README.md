@@ -6,11 +6,11 @@ A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 
 - [Desktop simulator](https://colinhu07.github.io/bondimals-display/?simulator)
 - [Full source repository](https://github.com/ColinHu07/hackmit-)
 
-The original Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, and an optional desktop camera preview are implemented; follow the [camera setup guide](docs/hand-camera-bridge.md). Physical camera/display concurrency still needs a device test. Supabase and visual object anchors remain future work.
+The original Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, an optional desktop camera preview, and an optional persistent multiplayer server are implemented. Follow the [camera setup guide](docs/hand-camera-bridge.md) and [server guide](backend/README.md). Physical camera/display concurrency still needs a device test. Visual object anchors remain future work.
 
 ## Run locally
 
-Node.js 22+ and a WebGL 2 browser are required. No secrets, backend, or account are needed.
+Node.js 22+ and a WebGL 2 browser are required. The local simulation runs without an account or server. To enable rooms and persistent state, follow the [server setup](backend/README.md).
 
 ```sh
 git clone https://github.com/ColinHu07/hackmit-.git
@@ -46,7 +46,7 @@ Running uses a 120 Hz physics step with acceleration, speed limits, braking befo
 
 No animation software is required for these reactions. For independently moving eyes, mouth, or limbs, use the [Blender animation workflow](docs/character-animation.md). The renderer also accepts optional embedded `Idle`, `Pet`, `Feed`, and `Play` clips, blends between them, and uses procedural reactions when a clip is missing.
 
-Connections are local feedback for this visit, reset on reload. Actions cannot stack while a reaction is playing or target Nova when she is out of view. Petting/feed/play never alter the saved anchor. The future backend remains authoritative for persistent pet state.
+Without a server, connections are local feedback for this visit and reset on reload. With the server configured, the simulator displays persistent pet state and player interaction rewards. Actions cannot stack while a reaction is playing or target Nova when she is out of view. Petting/feed/play never alter the saved anchor.
 
 ## Team boundaries
 
@@ -65,11 +65,11 @@ glasses-web/src/input/SimulatedOrientation.ts  Desktop head-motion controls
 glasses-web/src/anchor/PseudoWorldAnchor.ts   Placement and pure angular projection
 glasses-web/public/models/nova.glb            Optimized supplied character
 companion-web/                               Placeholder for phone/web companion
-backend/                                     Placeholder for authoritative Supabase state
+backend/                                     Persistent multiplayer game server and SQLite store
 glasses-android/                             Placeholder for DAT camera bridge
 ```
 
-Hand observations now reach `CreatureSession.perform()` through `HandInteraction`. The iPhone uses Apple Vision on the glasses camera stream. Android MediaPipe contributors can publish the same shared 21-point protocol; Rohan’s native Android prototype remains on `rohan`. See [camera transport, pairing, and calibration](docs/hand-camera-bridge.md). Keep camera/native transport separate from the renderer. See [Meta capability audit](docs/meta-capabilities.md), especially the unresolved native-camera/Web-App concurrency test.
+Hand observations now reach `CreatureSession.perform()` through `HandInteraction`. The iPhone uses Apple Vision on the glasses camera stream. Android MediaPipe contributors can publish the same shared 21-point protocol. See [camera transport, pairing, and calibration](docs/hand-camera-bridge.md). Keep camera/native transport separate from the renderer. See [Meta capability audit](docs/meta-capabilities.md), especially the unresolved native-camera/Web-App concurrency test.
 
 ## Verify and build
 

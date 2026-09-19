@@ -8,6 +8,7 @@ import { PointerPetting } from './hand/PointerPetting';
 import { HeadOrientation } from './input/HeadOrientation';
 import { CreatureSession, type CreatureAction } from './interaction/CreatureSession';
 import { NovaRenderer } from './rendering/NovaRenderer';
+import { GameClient, type GameProfile, type GameRoom } from './network/GameClient';
 
 // Explicit route: never guess a glasses device from viewport size or user agent.
 // The root and /display routes are safe, debug-free black display surfaces.
@@ -43,6 +44,7 @@ element('#app').innerHTML = simulator ? `
         </section>
         <aside class="controls-panel" aria-label="Desktop simulator controls">
           <section class="nova-info"><div class="nova-title"><div><p class="eyebrow">YOUR FIRST BONDIMAL</p><h2>Nova <span>✦</span></h2></div><span id="visibility-status" class="visibility-badge" role="status">In view</span></div><p>A curious little spirit, waiting to meet you.</p><div class="creature-traits"><span id="bond-count">0 connections this visit</span><span>Your GLB</span></div><div class="interaction-buttons"><button data-action="pet" type="button">♡ Pet</button><button data-action="feed" type="button">✦ Feed</button><button data-action="play" type="button">↻ Play</button></div><div class="movement-buttons"><button id="run-around" type="button">Run around <kbd>L</kbd></button><button id="jump" type="button">Jump <kbd>J</kbd></button></div><p class="movement-hint">Click the ground beside Nova to run there. Stroke her head or tap her to pet.</p><p id="reaction-note" role="status">Enter pets, F feeds, P plays. J jumps, L runs.</p></section>
+          <section class="camera-controls" id="multiplayer" hidden><h3>Shared world</h3><p id="player-status" role="status">Connecting…</p><p id="pet-status"></p><p id="reward-status"></p><p id="room-status"></p><button id="create-room" type="button" class="secondary-button">Create room</button><label for="invite-code">Invite code</label><input id="invite-code" type="text" maxlength="10" autocomplete="off" /><button id="join-room" type="button" class="secondary-button">Join room</button><div id="room-players"></div></section>
           <section class="camera-controls"><h3>Glasses-camera petting</h3><p id="camera-status" role="status">Open the paired link to connect your glasses camera.</p><button id="align-hands" type="button" class="secondary-button">Align hand with Nova</button><button id="confirm-hand" type="button" class="secondary-button" hidden>Fingertip on + · Confirm</button><p id="hand-instructions">Align at the distance where you’ll pet Nova.</p><button id="show-camera" type="button" class="secondary-button" aria-pressed="false">Show glasses camera</button><p id="camera-preview-status" role="status">Camera preview is off.</p><canvas id="camera-preview" width="320" height="240" aria-label="Live glasses camera with hand landmarks" hidden></canvas><p class="control-hint">Optional 4 fps preview. Nova’s glasses display receives hand points only.</p></section>
           <section class="orientation-controls"><div class="section-title"><h3>Look around</h3><span class="tiny-label">SIMULATED HEAD</span></div>
             <div class="compass" aria-hidden="true"><span class="compass-north">0°</span><span class="compass-west">−90°</span><span class="compass-east">90°</span><span class="compass-south">180°</span><div id="heading-cone"><div class="cone-fill"></div><div class="view-ray"></div></div><div id="anchor-bearing"><span>${sparkle}</span></div><div class="compass-center"></div></div>
@@ -68,6 +70,10 @@ const errorMessage = element<HTMLParagraphElement>('#render-error');
 const input = simulator ? new SimulatedOrientation() : null;
 const head = simulator ? null : new HeadOrientation();
 const session = new CreatureSession();
+let game: GameClient | null = null;
+let currentPlayerId: string | null = null;
+let currentRoom: GameRoom | null = null;
+let liveRoom: WebSocket | null = null;
 const handInput = new HandInteraction();
 const pointerInput = simulator ? new PointerPetting() : null;
 const pairing = parsePairing(location.hash);
@@ -195,6 +201,65 @@ function tell(message: string): void {
   if (simulator) element('#reaction-note').textContent = message;
 }
 
+function showProfile(profile: GameProfile): void {
+  currentPlayerId = profile.player.id;
+  if (!simulator) return;
+  element('#player-status').textContent = profile.player.name;
+  element('#pet-status').textContent = `Nova: ${profile.pet.mood} · happiness ${Math.round(profile.pet.happiness)} · energy ${Math.round(profile.pet.energy)} · hunger ${Math.round(profile.pet.hunger)}`;
+  element('#reward-status').textContent = `${profile.rewards.interactions} player interactions · ${profile.rewards.xp} XP · ${profile.rewards.coins} coins`;
+  element('#bond-count').textContent = `${profile.rewards.interactions} shared connections`;
+}
+
+function renderPlayers(): void {
+  if (!simulator) return;
+  const container = element('#room-players');
+  container.replaceChildren();
+  for (const peer of currentRoom?.players ?? []) {
+    if (peer.id === currentPlayerId) continue;
+    const row = document.createElement('div');
+    row.textContent = peer.name + ' ';
+    for (const kind of ['greet', 'play', 'gift'] as const) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = kind;
+      button.addEventListener('click', async () => {
+        try { await game?.interact(currentRoom!.roomId, peer.id, kind); tell(`${kind} sent to ${peer.name}.`); if (game) showProfile(await game.profile()); }
+        catch (error) { tell(error instanceof Error ? error.message : 'Interaction failed.'); }
+      });
+      row.append(button);
+    }
+    container.append(row);
+  }
+}
+
+async function showRoom(room: GameRoom): Promise<void> {
+  if (!game || !simulator) return;
+  currentRoom = await game.room(room.roomId);
+  element('#room-status').textContent = `Invite code: ${room.inviteCode}`;
+  liveRoom?.close();
+  liveRoom = game.subscribe(room.roomId, event => {
+    if (event.type === 'interaction' || event.type === 'player_joined') {
+      void game?.profile().then(showProfile);
+      void game?.room(room.roomId).then(updated => { currentRoom = updated; renderPlayers(); });
+    }
+  });
+  renderPlayers();
+}
+
+const gameServer = import.meta.env.VITE_GAME_SERVER_URL?.replace(/\/$/, '');
+if (gameServer) {
+  if (simulator) element('#multiplayer').hidden = false;
+  void GameClient.connect(gameServer).then(async client => {
+    game = client;
+    showProfile(await client.profile());
+    const rooms = await client.rooms();
+    if (rooms.rooms[0]) await showRoom(rooms.rooms[0]);
+    if (simulator) {
+      element('#create-room').addEventListener('click', async () => { try { await showRoom(await client.createRoom()); } catch (error) { tell(String(error)); } });
+      element('#join-room').addEventListener('click', async () => { try { await showRoom(await client.joinRoom(element<HTMLInputElement>('#invite-code').value.trim())); } catch (error) { tell(error instanceof Error ? error.message : 'Could not join room.'); } });
+    }
+  }).catch(error => { if (simulator) element('#player-status').textContent = error instanceof Error ? error.message : 'Server unavailable.'; });
+}
+
 function interact(action: CreatureAction): void {
   if (!renderer?.ready) { tell('Your character is still loading.'); return; }
   const result = session.perform(action, elapsedSeconds, characterProjection.visible && (simulator || hasHardwareAnchor));
@@ -204,6 +269,7 @@ function interact(action: CreatureAction): void {
     else renderer.stop();
     logEvent('INTERACTION', `${action}: ${session.bonds} connections this visit.`);
     if (simulator) element('#bond-count').textContent = `${session.bonds} connection${session.bonds === 1 ? '' : 's'} this visit`;
+    if (game) void game.care(action).then(() => game!.profile()).then(showProfile).catch(error => tell(error instanceof Error ? error.message : 'Could not save pet state.'));
   }
 }
 function moveNova(action: 'run' | 'jump'): void {

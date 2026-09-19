@@ -10,7 +10,7 @@ No phone camera, laptop camera, browser `getUserMedia`, recording, or native dis
 
 Meta's [Web Apps build guide](https://wearables.developer.meta.com/docs/develop/webapps/build/) lists browser camera access as unsupported. The native [iOS camera sample](https://github.com/facebook/meta-wearables-dat-ios/tree/main/samples/CameraAccess) exposes the glasses stream through DAT. The iPhone receives it; GitHub Pages still hosts the character and desktop monitor.
 
-Rohan's `origin/rohan` commit `807a8d0` is an Android MediaPipe prototype with a separate native display renderer. It has not been merged into this iPhone implementation. The [JARVIS-Cube reference](https://github.com/ColinHu07/JARVIS-Cube) uses Apple Vision on iPhone, which this bridge also uses; this bridge uses current DAT 0.9.0 and deliberately excludes the reference's phone-camera fallback. Android MediaPipe can produce the same 21-point protocol later without changing Nova's renderer.
+The [JARVIS-Cube reference](https://github.com/ColinHu07/JARVIS-Cube) uses Apple Vision on iPhone, which this bridge also uses; this bridge uses current DAT 0.9.0 and deliberately excludes the reference's phone-camera fallback. Android MediaPipe can produce the same 21-point protocol later without changing Nova's renderer.
 
 ## Optional: run the hand-point relay
 
