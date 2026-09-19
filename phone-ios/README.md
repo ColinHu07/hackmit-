@@ -58,3 +58,14 @@ Location sensors stop when all interested features stop, and both discovery and 
 The iOS 18 simulator smoke check exercised the bundled pet screen, native camera permission denial, native location permission, and northward and eastward movement from simulated Core Location walking routes. Fonts are bundled so startup does not wait for a font host.
 
 A physical walk test is still necessary to judge GPS/compass accuracy at the event. AI gesture verification and precise shared AR alignment are not part of this version.
+
+### Bundled-resource regression check (Mac)
+
+The loader normalizes both the bundle directory and requested file before checking containment. This handles physical-iPhone `/private/var` → `/var` aliases while rejecting traversal and symlinks outside the bundle.
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc \
+  phone-ios/BondimalsPhone/BundledResourcePath.swift scripts/phone-resource-path-tests.swift \
+  -o /tmp/bondimals-resource-path-tests
+/tmp/bondimals-resource-path-tests
+```

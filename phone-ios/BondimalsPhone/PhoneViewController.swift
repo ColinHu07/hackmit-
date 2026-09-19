@@ -100,6 +100,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             loadingLabel.text = "The meadow could not start. Close and reopen Bondimals."
             print("Bondimals web error: \(body["message"] ?? "Unknown error")")
         case "ready":
+            print(body["sceneReady"] as? Bool == true ? "Bondimals ready: bundled pet scene loaded." : "Bondimals UI loaded; pet scene unavailable.")
             loadingLabel.isHidden = true
             emit(["type": "recording", "message": latestClip == nil ? "Record a short quest clip. AI verification comes later." : "A quest clip is saved on this iPhone. Tap Review clip."])
         default: break

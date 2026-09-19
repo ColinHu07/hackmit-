@@ -658,5 +658,5 @@ if (isNativePhone()) {
       publishWalking(result.moved);
     }
   });
-  nativeCommand('ready');
+  nativeCommand('ready', { sceneReady: ready });
 }

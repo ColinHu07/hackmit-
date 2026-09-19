@@ -9,9 +9,14 @@ final class BundledSite: NSObject, WKURLSchemeHandler {
             task.didFailWithError(URLError(.fileDoesNotExist)); return
         }
         let path = requestURL.path == "/" ? "index.html" : String(requestURL.path.dropFirst())
-        let url = root.appendingPathComponent(path).standardizedFileURL
-        guard url.path.hasPrefix(root.path + "/"), let data = try? Data(contentsOf: url) else {
-            task.didFailWithError(URLError(.fileDoesNotExist)); return
+        guard let url = BundledResourcePath.resolve(path, under: root) else {
+            task.didFailWithError(URLError(.noPermissionsToReadFile)); return
+        }
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch {
+            print("Bondimals resource read failed: \(error)")
+            task.didFailWithError(error); return
         }
         let types = ["js": "application/javascript", "css": "text/css", "html": "text/html", "glb": "model/gltf-binary", "svg": "image/svg+xml"]
         let mime = types[url.pathExtension] ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
