@@ -25,14 +25,15 @@ const readBody = async request => {
 
 export function createServer({ database = ':memory:', now, origin } = {}) {
   const store = createStore(database, now);
+  const allowedOrigins = new Set(Array.isArray(origin) ? origin : origin ? [origin] : []);
   const sockets = new Map();
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://localhost');
       const path = url.pathname;
       const method = request.method;
-      if (origin && request.headers.origin === origin) {
-        response.setHeader('access-control-allow-origin', origin);
+      if (request.headers.origin && (!allowedOrigins.size || allowedOrigins.has(request.headers.origin))) {
+        response.setHeader('access-control-allow-origin', allowedOrigins.size ? request.headers.origin : '*');
         response.setHeader('access-control-allow-headers', 'authorization, content-type');
         response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
         response.setHeader('vary', 'Origin');
@@ -79,7 +80,7 @@ export function createServer({ database = ':memory:', now, origin } = {}) {
     for (const socket of sockets.get(roomId) ?? []) if (socket.readyState === 1) socket.send(JSON.stringify(event));
   }
   server.on('upgrade', (request, socket, head) => {
-    if (request.url !== '/api/v1/live' || (origin && request.headers.origin && request.headers.origin !== origin)) { socket.destroy(); return; }
+    if (request.url !== '/api/v1/live' || (allowedOrigins.size && !allowedOrigins.has(request.headers.origin))) { socket.destroy(); return; }
     wss.handleUpgrade(request, socket, head, client => {
       let subscribed;
       const timeout = setTimeout(() => client.close(1008, 'Authenticate first.'), 5000);
@@ -99,7 +100,12 @@ export function createServer({ database = ':memory:', now, origin } = {}) {
       client.on('close', () => { clearTimeout(timeout); if (subscribed) sockets.get(subscribed)?.delete(client); });
     });
   });
-  return { server, store, close: () => new Promise(resolveClose => { for (const client of wss.clients) client.terminate(); wss.close(); server.close(() => { store.close(); resolveClose(); }); }) };
+  return { server, store, broadcast, close: () => new Promise(resolveClose => {
+    for (const client of wss.clients) client.terminate();
+    wss.close();
+    if (server.listening) server.close(() => { store.close(); resolveClose(); });
+    else { store.close(); resolveClose(); }
+  }) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

@@ -20,9 +20,9 @@ describe('calibrated head directions', () => {
     const saved = { ...anchor };
     tracker.accept({ alpha: 358 + 10 * sign, beta: 30 }, 30);
     expect(projectAnchor(anchor, tracker.current, 60, 60).x).toBeLessThan(300);
-    tracker.accept({ alpha: 358 + 80 * sign, beta: 30 }, 40);
+    tracker.accept({ alpha: 358 + 80 * sign, beta: 30 }, 200);
     expect(projectAnchor(anchor, tracker.current, 60, 60).visible).toBe(false);
-    tracker.accept({ alpha: 358, beta: 30 }, 50);
+    tracker.accept({ alpha: 358, beta: 30 }, 350);
     expect(projectAnchor(anchor, tracker.current, 60, 60)).toMatchObject({ visible: true, x: 300, y: 300 });
     expect(anchor).toEqual(saved);
   });
@@ -67,6 +67,96 @@ describe('calibrated head directions', () => {
     expect(tracker.confirm(1)).toBeNull();
     tracker.accept({ alpha: 355, beta: -175 }, 2);
     expect(tracker.confirm(2)).toBeNull();
+    expect(tracker.current).toEqual({ yaw: 0, pitch: 0 });
+  });
+});
+
+describe('display-rate head tracking', () => {
+  it('rejects an isolated pitch spike without losing the surrounding real motion', () => {
+    const tracker = calibrated();
+    tracker.accept({ alpha: 358, beta: 31 }, 50);
+    const before = tracker.sample(60);
+    expect(tracker.accept({ alpha: 358, beta: 120 }, 66)).toBe(false);
+    const during = tracker.sample(80);
+    expect(during.pitch).toBeLessThan(2);
+    expect(Math.abs(during.pitch - before.pitch)).toBeLessThan(1);
+    expect(tracker.accept({ alpha: 358, beta: 31.5 }, 83)).toBe(true);
+    expect(tracker.current.pitch).toBe(1.5);
+    expect(tracker.isFresh(83)).toBe(true);
+  });
+
+  it('requires confirmation of a large step and eases into the confirmed pose', () => {
+    const tracker = calibrated();
+    expect(tracker.accept({ alpha: 358, beta: 80 }, 36)).toBe(false);
+    expect(tracker.accept({ alpha: 358, beta: 80 }, 53)).toBe(true);
+    expect(tracker.sample(54).pitch).toBeLessThan(2);
+    for (let now = 70; now <= 600; now += 10) tracker.sample(now);
+    expect(tracker.sample(600).pitch).toBeCloseTo(50, 1);
+  });
+
+  it('interpolates both angular wrap boundaries along the short path', () => {
+    const tracker = new OrientationTracker();
+    tracker.accept({ alpha: 358, beta: 178 }, 0);
+    tracker.accept({ alpha: 2, beta: -178 }, 40);
+    const between = tracker.sample(50);
+    expect(between.yaw).toBeGreaterThan(0);
+    expect(between.yaw).toBeLessThan(5);
+    expect(between.pitch).toBeCloseTo(between.yaw);
+    for (let now = 60; now <= 400; now += 10) tracker.sample(now);
+    expect(tracker.sample(400).yaw).toBeCloseTo(4, 1);
+    expect(tracker.sample(400).pitch).toBeCloseTo(4, 1);
+  });
+
+  it('moves on every display frame with low lag across different sensor cadences', () => {
+    const finalHeadings: number[] = [];
+    for (const sensorHz of [15, 30, 60]) {
+      const tracker = new OrientationTracker();
+      tracker.accept({ alpha: 0, beta: 0 }, 0);
+      let previous = 0;
+      let nextSensor = 1000 / sensorHz;
+      for (let frame = 1; frame <= 120; frame += 1) {
+        const now = frame * 1000 / 60;
+        while (nextSensor <= now + 1e-8) {
+          tracker.accept({ alpha: nextSensor * 0.045, beta: nextSensor * 0.02 }, nextSensor);
+          nextSensor += 1000 / sensorHz;
+        }
+        const pose = tracker.sample(now);
+        if (frame > 30) {
+          expect(pose.yaw - previous).toBeGreaterThan(0.1);
+          expect(pose.yaw - previous).toBeLessThan(1.6);
+          expect(Math.abs(pose.yaw - now * 0.045)).toBeLessThan(2.5);
+        }
+        previous = pose.yaw;
+      }
+      finalHeadings.push(previous);
+    }
+    expect(Math.max(...finalHeadings) - Math.min(...finalHeadings)).toBeLessThan(1.5);
+  });
+
+  it('attenuates small resting jitter and stops predicting when sensor events stop', () => {
+    const tracker = new OrientationTracker();
+    tracker.accept({ alpha: 0, beta: 0 }, 0);
+    const outputs: number[] = [];
+    for (let frame = 1; frame <= 60; frame += 1) {
+      const now = frame * 1000 / 60;
+      tracker.accept({ alpha: 0, beta: frame % 2 ? 0.5 : -0.5 }, now);
+      if (frame > 10) outputs.push(tracker.sample(now).pitch);
+    }
+    expect(Math.sqrt(outputs.reduce((sum, value) => sum + value * value, 0) / outputs.length)).toBeLessThan(0.25);
+    tracker.accept({ alpha: 2, beta: 0 }, 1033);
+    tracker.accept({ alpha: 4, beta: 0 }, 1066);
+    for (let now = 1080; now <= 1500; now += 10) tracker.sample(now);
+    expect(tracker.sample(1500).yaw).toBeCloseTo(4, 1);
+    const frozen = tracker.sample(1500);
+    expect(tracker.sample(2500)).toEqual(frozen);
+  });
+
+  it('ignores invalid or out-of-order timestamps', () => {
+    const tracker = new OrientationTracker();
+    tracker.accept({ alpha: 0, beta: 0 }, 10);
+    expect(tracker.accept({ alpha: 30, beta: 30 }, 9)).toBe(false);
+    expect(tracker.accept({ alpha: 30, beta: 30 }, NaN)).toBe(false);
+    expect(tracker.sample(NaN)).toEqual({ yaw: 0, pitch: 0 });
     expect(tracker.current).toEqual({ yaw: 0, pitch: 0 });
   });
 });

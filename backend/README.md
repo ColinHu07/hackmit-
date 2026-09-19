@@ -1,17 +1,17 @@
 # Multiplayer game server
 
-The game server persists players, invite based rooms, pet state, rewards, social interactions, friendships, and room events in SQLite. The camera bridge in `bridge/` remains a separate transport for hand landmarks. One game server process can serve many players; SQLite is configured for WAL mode. Run a single server instance against a database file.
+The game server persists players, invite based rooms, pet state, rewards, social interactions, friendships, and room events in SQLite. The phone playground mounts this API on the same port as `/play` and `/nearby`. The camera bridge remains a separate transport for hand landmarks. Run a single game server process against the database file.
 
 ## Run locally
 
-From the repository root, run `npm install`, then start `npm run server`. In another terminal, start the web app with `BONDIMALS_WEB_ORIGIN=http://127.0.0.1:5173 VITE_GAME_SERVER_URL=http://127.0.0.1:8790 npm run dev` set in the appropriate server and web processes. For example:
+From the repository root, run `npm install`, then start `npm run server`. In another terminal, start the phone app with `npm run dev:phone`. The glasses simulator can connect to the same API:
 
 ```sh
-BONDIMALS_WEB_ORIGIN=http://127.0.0.1:5173 npm run server
-VITE_GAME_SERVER_URL=http://127.0.0.1:8790 npm run dev
+ALLOWED_ORIGINS=http://127.0.0.1:5173,http://127.0.0.1:5217 npm run server
+VITE_GAME_SERVER_URL=http://127.0.0.1:8788 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/?simulator`. The browser creates a player on first connection and stores its bearer token locally. Use separate browser profiles or devices for separate players. Create a room, share its invite code, and use the peer buttons to greet, play, or send a gift. These social actions update both players' pets and the sender's interaction count, XP, and coins. Local pet, feed, and play actions also save pet state when connected. With no server URL configured, the original local simulation still runs.
+The phone app creates a persistent guest player before joining `/play`; both phones use their own bearer token. Room movement, waves, treats, and cooperative play travel over `/play`. Successful shared play, nearby dap confirmations, and waves near a friend update both players' persistent pets and rewards. The phone app shows each player's pet stats, interaction count, XP, and coins. Room movement and nearby presence are temporary, while account progress survives restart. Use separate browser profiles or devices for separate players. The glasses simulator can also use the API for its own rooms and pet actions; with no server URL, it remains local.
 
 ## API
 
@@ -32,4 +32,4 @@ All routes except player creation and health require `Authorization: Bearer <tok
 
 The server rejects self interactions and users outside the room. It accepts at most one rewarded interaction per pair every 30 seconds and 20 per sender per rolling day. A first interaction with each peer during that day earns a bonus. `requestId` makes retries idempotent. Pet happiness decreases 12 points per day, hunger increases 18, and energy recovers 20; values are clamped to 0–100. Actions and social events adjust those values further. State is calculated from elapsed time whenever a pet is read or changed.
 
-This is a prototype guest account system. A browser token is the account credential and is lost if local storage is cleared. Use HTTPS/WSS and a private deployment for real devices; set `BONDIMALS_WEB_ORIGIN` to the exact web origin. For multiple game server instances, move the store and event fanout to a shared database and pub/sub service.
+This is a prototype guest account system. A browser token is the account credential and is lost if local storage is cleared. Use HTTPS/WSS and a private deployment for real devices; set `ALLOWED_ORIGINS` to the exact web origins. For multiple game server instances, move the store and event fanout to a shared database and pub/sub service. `npm run api:server` still runs the standalone REST API for isolated development; the phone app needs the unified `npm run server` entry point.

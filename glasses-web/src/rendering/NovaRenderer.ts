@@ -1,14 +1,26 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { AnchorProjection } from '../anchor/PseudoWorldAnchor';
+import { projectionScale } from '../anchor/ViewingDistance';
 import type { HandResponse } from '../hand/PettingGesture';
 import type { Reaction } from '../interaction/CreatureSession';
 import { CharacterClips } from './CharacterClips';
 import { NovaMotion } from './NovaMotion';
 import { SoftHead } from './SoftHead';
 import { SoftGait } from './SoftGait';
+import { SoftJump } from './SoftJump';
+import { sampleJumpPose } from './JumpPose';
 import { NovaLocomotion, NOVA_LOCOMOTION_SETTINGS } from './NovaLocomotion';
 import { GroundContact } from './GroundContact';
+
+/** Anchor travel expressed in the same scene units as local locomotion. */
+export interface AnchorRunMotion {
+  active: boolean;
+  speed: number;
+  velocityX: number;
+  velocityY: number;
+  distanceDelta: number;
+}
 
 /** User-supplied GLB, normalized once; reactions never move the saved anchor. */
 export class NovaRenderer {
@@ -27,42 +39,60 @@ export class NovaRenderer {
   private readonly locomotion = new NovaLocomotion();
   private readonly softHeads: SoftHead[] = [];
   private readonly softGaits: SoftGait[] = [];
+  private readonly softJumps: SoftJump[] = [];
   private groundContact: GroundContact | undefined;
-  private readonly shadow: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  private readonly shadow: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private readonly textures = new Set<THREE.Texture>();
   private clips: CharacterClips | undefined;
   private travelYaw = 0;
   private gaitStrength = 0;
+  private anchorStride = 0;
   private footY = -68;
   private disposed = false;
   private lastFrame = '';
   private lastTime: number | undefined;
-  private lastRenderTime = -Infinity;
   ready = false;
   facing = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: true, powerPreference: 'low-power' });
-    this.renderer.setPixelRatio(1);
+    // Keep input/projection coordinates at 600² while supersampling the image.
+    this.renderer.setPixelRatio(this.displayPixelRatio());
     this.renderer.setSize(600, 600, false);
     this.renderer.setClearColor(0x000000, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.95;
     this.camera.position.set(0, 0, 400);
-    this.scene.add(new THREE.HemisphereLight(0xfff4e7, 0x574260, 1.8));
+    this.scene.add(new THREE.HemisphereLight(0xe3eaf0, 0x776354, 1.8));
     const key = new THREE.DirectionalLight(0xfff4eb, 2.3);
     key.position.set(-100, 160, 220);
     this.scene.add(key);
-    const rim = new THREE.DirectionalLight(0xc6bcff, 1.3);
+    const rim = new THREE.DirectionalLight(0xd6e1eb, 1.1);
     rim.position.set(150, 60, -90);
     this.scene.add(rim);
     this.scene.add(this.anchor);
     this.anchor.add(this.creature, this.effects);
 
-    // A faint contact cue on the simulated floor; black remains transparent on glasses.
-    const shadowGeometry = new THREE.CircleGeometry(1, 40);
-    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x9e809d, transparent: true, opacity: 0.24, depthWrite: false });
+    // Feathered contact cue, without the old hard purple disk under the feet.
+    // An additive display cannot darken the real floor; this stays a subtle cue.
+    const shadowSize = 64;
+    const shadowPixels = new Uint8Array(shadowSize * shadowSize * 4);
+    for (let y = 0; y < shadowSize; y++) {
+      for (let x = 0; x < shadowSize; x++) {
+        const radius = Math.hypot((x + 0.5) / shadowSize * 2 - 1, (y + 0.5) / shadowSize * 2 - 1);
+        const index = (y * shadowSize + x) * 4;
+        shadowPixels[index] = shadowPixels[index + 1] = shadowPixels[index + 2] = 255;
+        shadowPixels[index + 3] = Math.round(255 * Math.exp(-radius * radius * 3.5) * (1 - THREE.MathUtils.smoothstep(radius, 0.75, 1)));
+      }
+    }
+    const shadowTexture = new THREE.DataTexture(shadowPixels, shadowSize, shadowSize, THREE.RGBAFormat);
+    shadowTexture.magFilter = THREE.LinearFilter;
+    shadowTexture.minFilter = THREE.LinearFilter;
+    shadowTexture.needsUpdate = true;
+    this.textures.add(shadowTexture);
+    const shadowGeometry = new THREE.PlaneGeometry(2, 2);
+    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x978a7e, map: shadowTexture, transparent: true, opacity: 0.22, depthWrite: false });
     this.shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
     this.shadow.scale.set(44, 5, 1);
     this.anchor.add(this.shadow);
@@ -90,6 +120,11 @@ export class NovaRenderer {
     this.effects.add(this.treat);
     this.anchor.visible = false;
     this.renderer.render(this.scene, this.camera);
+  }
+
+  private displayPixelRatio(): number {
+    // 1.5× improves native display edges too; the 2× cap bounds mobile fill cost.
+    return Math.min(2, Math.max(1.5, window.devicePixelRatio || 1));
   }
 
   async load(): Promise<void> {
@@ -133,6 +168,7 @@ export class NovaRenderer {
           && !object.geometry.morphAttributes.position?.length) {
           this.softHeads.push(new SoftHead(object));
           this.softGaits.push(new SoftGait(object));
+          this.softJumps.push(new SoftJump(object));
         }
       });
     }
@@ -153,58 +189,86 @@ export class NovaRenderer {
     return true;
   }
   stop(): void { this.locomotion.stop(); }
+  /** Caller transfers this displacement into the angular anchor in the same frame. */
+  takeTravelOffset(): number {
+    const offset = this.locomotion.rebaseHorizontal();
+    this.creature.position.x -= offset;
+    this.effects.position.x -= offset;
+    this.shadow.position.x -= offset;
+    return offset;
+  }
+  get reducedMotion(): boolean { return this.motionPreference.matches; }
   resetLocomotion(): void {
     this.locomotion.reset();
     this.travelYaw = 0;
     this.gaitStrength = 0;
+    this.anchorStride = 0;
     this.lastFrame = '';
   }
 
   interactionProjection(projection: AnchorProjection): AnchorProjection {
-    const x = projection.x + this.creature.position.x;
-    const y = projection.y - this.creature.position.y;
+    const scale = projectionScale(projection.scale);
+    const x = projection.x + this.creature.position.x * scale;
+    const y = projection.y - this.creature.position.y * scale;
     return { ...projection, x, y, visible: projection.visible && x >= 0 && x <= 600 && y >= 0 && y <= 600 };
   }
 
-  render(time: number, projection: AnchorProjection, reaction: Reaction | null, hand?: HandResponse): void {
+  render(time: number, projection: AnchorProjection, reaction: Reaction | null, hand?: HandResponse, travel?: AnchorRunMotion): void {
     if (this.disposed) return;
+    const pixelRatio = this.displayPixelRatio();
+    if (this.renderer.getPixelRatio() !== pixelRatio) {
+      this.renderer.setPixelRatio(pixelRatio);
+      this.lastFrame = '';
+    }
     const delta = this.lastTime === undefined ? 0 : Math.max(0, time - this.lastTime);
     this.lastTime = time;
     const reducedMotion = this.motionPreference.matches;
     const active = reaction && time >= reaction.startedAt && time - reaction.startedAt < reaction.duration ? reaction : null;
     const visible = this.ready && projection.visible && projection.confidence > 0;
     if (reducedMotion) this.locomotion.reset();
-    const movement = this.locomotion.update(delta, visible && !reducedMotion);
-    const speed = Math.min(1, Math.abs(movement.velocityX) / NOVA_LOCOMOTION_SETTINGS.maxSpeed);
+    const movement = this.locomotion.update(delta, (visible || !!travel?.active) && !reducedMotion);
+    const jumpPose = sampleJumpPose(movement, reducedMotion);
+    const travelSpeed = !reducedMotion && travel?.active ? travel.speed : 0;
+    const movementSpeed = Math.max(Math.abs(movement.velocityX), travelSpeed);
+    const speed = Math.min(1, movementSpeed / NOVA_LOCOMOTION_SETTINGS.maxSpeed);
+    if (!reducedMotion && travel) this.anchorStride += travel.distanceDelta;
     const blend = 1 - Math.exp(-12 * delta);
-    const targetYaw = speed > 0.06 ? movement.facing * Math.PI / 2 : 0;
-    this.travelYaw += (targetYaw - this.travelYaw) * blend;
-    this.gaitStrength += ((movement.grounded ? speed : 0) - this.gaitStrength) * blend;
+    const targetYaw = speed > 0.06
+      ? travelSpeed > 0 && travel ? Math.atan2(travel.velocityX, -travel.velocityY) : movement.facing * Math.PI / 2 : 0;
+    const yawDifference = Math.atan2(Math.sin(targetYaw - this.travelYaw), Math.cos(targetYaw - this.travelYaw));
+    this.travelYaw += yawDifference * blend;
+    // Gait phase follows travelled distance; speed should not shrink every step.
+    const stepping = Math.min(1, movementSpeed / 25);
+    this.gaitStrength += (stepping - this.gaitStrength) * blend;
     this.motion.update(delta, visible ? hand : undefined);
     this.clips?.update(delta, active, reducedMotion);
-    const frame = `${visible}:${projection.x.toFixed(2)}:${projection.y.toFixed(2)}:${this.facing}:${reducedMotion}:${active?.action}:${active?.startedAt}`;
-    // Breathing and clip playback render at 30 Hz; hidden/static scenes render only on change.
-    if (frame === this.lastFrame && (!visible || reducedMotion || time - this.lastRenderTime < 1 / 30)) return;
+    const frame = `${visible}:${projection.x}:${projection.y}:${projectionScale(projection.scale)}:${this.facing}:${reducedMotion}:${active?.action}:${active?.startedAt}`;
+    // Follow every display refresh: holding animated frames makes head tracking
+    // and walking stutter. Only unchanged hidden/reduced-motion frames are static.
+    if (frame === this.lastFrame && (!visible || reducedMotion)) return;
     this.lastFrame = frame;
-    this.lastRenderTime = time;
     this.anchor.visible = visible;
     this.anchor.position.set(projection.x - 300, 300 - projection.y, 0);
+    this.anchor.scale.setScalar(projectionScale(projection.scale));
     const authoredReaction = active && this.clips?.hasReaction(active.action);
     const pose = this.motion.sample(time, authoredReaction ? null : active, reducedMotion);
-    const landing = reducedMotion ? 0 : movement.landing;
-    pose.scaleX += landing * 0.07;
-    pose.scaleY -= landing * 0.11;
-    pose.roll -= reducedMotion ? 0 : movement.velocityX / NOVA_LOCOMOTION_SETTINGS.maxSpeed * 0.06;
-    this.creature.scale.set(pose.scaleX, pose.scaleY, pose.scaleZ);
+    pose.pitch += jumpPose.pitch;
+    pose.headBow += jumpPose.headBow;
+    pose.roll -= reducedMotion ? 0 : movement.velocityX / NOVA_LOCOMOTION_SETTINGS.maxSpeed * 0.025;
+    this.creature.scale.setScalar(1);
     this.creature.rotation.set(pose.pitch, this.facing + pose.yaw + (reducedMotion ? 0 : this.travelYaw), pose.roll);
-    this.softHeads.forEach(head => head.set(pose.headTilt, pose.headBow));
-    this.softGaits.forEach(gait => gait.set(movement.strideDistance, reducedMotion ? 0 : this.gaitStrength));
+    this.softJumps.forEach(jump => jump.set(jumpPose.crouch, 0));
+    this.softHeads.forEach((head, index) => head.set(pose.headTilt, pose.headBow, this.softJumps[index]?.torsoPitch ?? 0));
+    this.softGaits.forEach(gait => gait.set(movement.strideDistance + this.anchorStride, reducedMotion ? 0 : this.gaitStrength * jumpPose.gait));
+    // During flight the root follows gravity. Measuring untucked soles avoids
+    // moving the entire body down to cancel the feet folding upward.
     const lowest = this.groundContact?.lowestY() ?? this.footY * pose.scaleY;
+    this.softJumps.forEach(jump => jump.set(jumpPose.crouch, jumpPose.tuck));
     this.creature.position.set(movement.x + pose.x, this.footY + movement.height - lowest, 0);
     this.effects.position.copy(this.creature.position);
     this.shadow.position.set(movement.x + pose.x, this.footY - 1, -85);
     this.shadow.scale.set(44 * (1 + movement.height / 140), 5, 1);
-    this.shadow.material.opacity = 0.24 / (1 + movement.height / 28);
+    this.shadow.material.opacity = 0.22 / (1 + movement.height / 28);
     this.effects.visible = !!active;
     this.treat.visible = active?.action === 'feed';
     this.hearts.forEach((heart) => { heart.visible = !!active && active.action !== 'feed'; });

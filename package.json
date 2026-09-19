@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "workspaces": [
     "glasses-web",
+    "companion-web",
     "bridge",
     "backend"
   ],
@@ -13,10 +14,17 @@
   "scripts": {
     "dev": "npm run dev --workspace @bondimals/glasses-web",
     "build": "npm run build --workspace @bondimals/glasses-web && node scripts/stage-display.mjs",
-    "test": "npm run test --workspace @bondimals/glasses-web && npm run test --workspace @bondimals/bridge && npm run test --workspace @bondimals/backend",
-    "typecheck": "npm run typecheck --workspace @bondimals/glasses-web",
+    "test": "npm run test --workspace @bondimals/glasses-web && npm run test --workspace @bondimals/bridge && npm run test --workspace @bondimals/backend && npm run test:phone",
+    "typecheck": "npm run typecheck --workspace @bondimals/glasses-web && npm run typecheck:phone",
     "preview": "npm run preview --workspace @bondimals/glasses-web",
     "bridge": "npm run start --workspace @bondimals/bridge",
-    "server": "npm run start --workspace @bondimals/backend"
+    "server": "npm run play:server",
+    "api:server": "npm run start --workspace @bondimals/backend",
+    "dev:phone": "npm run dev --workspace @bondimals/companion-web",
+    "build:phone": "npm run build --workspace @bondimals/companion-web",
+    "preview:phone": "npm run preview --workspace @bondimals/companion-web",
+    "typecheck:phone": "npm run typecheck --workspace @bondimals/companion-web",
+    "play:server": "node bridge/play-server.mjs",
+    "test:phone": "node --test bridge/play-server.test.mjs bridge/nearby-discovery.test.mjs && npm run test --workspace @bondimals/companion-web"
   }
 }

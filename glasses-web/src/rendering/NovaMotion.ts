@@ -17,53 +17,66 @@ const smooth = (value: number): number => {
 export function sampleNovaPose(time: number, reaction: Reaction | null, reachX = 0, reachY = 0, reducedMotion = false): NovaPose {
   const pose: NovaPose = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, scaleX: 1, scaleY: 1, scaleZ: 1, headTilt: 0, headBow: 0 };
   if (reducedMotion) return pose;
-  const breath = Math.sin(time * Math.PI * 2 / 3.8) * 0.012;
-  pose.scaleX -= breath * 0.35;
-  pose.scaleY += breath;
-  pose.scaleZ -= breath * 0.35;
-  pose.x = reachX * 0.55;
-  pose.y = reachY * 0.3;
-  pose.yaw = reachX * 0.012;
-  pose.roll = -reachX * 0.004;
-  pose.headTilt = Math.sin(time * 0.9) * 0.025 - reachX * 0.011;
-  const t = reaction ? (time - reaction.startedAt) / reaction.duration : -1;
+  const contactX = Math.max(-12, Math.min(12, Number.isFinite(reachX) ? reachX : 0));
+  const contactY = Math.max(-6, Math.min(8, Number.isFinite(reachY) ? reachY : 0));
+  // Breathing and leaning rotate a full-size body; they never compress its shape.
+  pose.pitch = Math.sin(time * Math.PI * 2 / 3.8) * 0.006;
+  pose.x = contactX * 0.15;
+  pose.yaw = contactX * 0.005;
+  pose.roll = -contactX * 0.0015;
+  pose.headTilt = Math.sin(time * 0.9) * 0.008 - contactX * 0.0025;
+  pose.headBow = -contactY * 0.0015;
+  const t = reaction && reaction.duration > 0 ? (time - reaction.startedAt) / reaction.duration : -1;
   if (!reaction || t < 0 || t >= 1) return pose;
   // Ease into contact and release it completely before the session returns to idle.
   const envelope = smooth(t / 0.14) * (1 - smooth((t - 0.65) / 0.35));
   if (reaction.action === 'pet') {
-    const nuzzle = Math.sin(t * Math.PI * 4);
-    pose.headTilt += (0.18 + nuzzle * 0.055) * envelope;
-    pose.headBow = (0.09 + (1 - Math.cos(t * Math.PI * 6)) * 0.025) * envelope;
-    pose.roll += (0.045 + nuzzle * 0.025) * envelope;
-    pose.x -= 4 * envelope;
-    pose.scaleX += 0.035 * envelope;
-    pose.scaleY -= 0.045 * envelope;
+    const nuzzle = Math.sin(t * Math.PI * 2);
+    // A continuous direction avoids a pop when a stroke crosses the face. With
+    // the Pet button (no contact position), Nova offers a small cheek nuzzle.
+    const direction = Math.tanh(1.8 - contactX * 0.6);
+    pose.headTilt += direction * (0.042 + nuzzle * 0.008) * envelope;
+    pose.headBow += (0.03 + (1 - Math.cos(t * Math.PI * 2)) * 0.008) * envelope;
+    pose.roll += direction * 0.018 * envelope;
+    pose.yaw -= direction * 0.018 * envelope;
   } else if (reaction.action === 'feed') {
     const chew = (1 - Math.cos(t * Math.PI * 10)) * 0.5;
-    pose.headBow = (0.08 + chew * 0.18) * envelope;
-    pose.pitch = 0.055 * envelope;
-    pose.scaleY -= chew * 0.025 * envelope;
-    pose.scaleX += chew * 0.012 * envelope;
+    pose.headBow += (0.025 + chew * 0.105) * envelope;
+    pose.pitch += 0.025 * envelope;
   } else {
-    const anticipation = Math.sin(Math.PI * Math.min(t / 0.18, 1));
     // Locomotion owns actual translation and gravity. This layer only poses the body.
-    pose.scaleY -= anticipation * 0.08;
-    pose.scaleX += anticipation * 0.04;
-    pose.headTilt += Math.sin(t * Math.PI * 2) * 0.1 * envelope;
+    pose.pitch -= 0.02 * envelope;
+    pose.headTilt += Math.sin(t * Math.PI * 2) * 0.035 * envelope;
   }
   return pose;
 }
 
-/** Exponential smoothing gives the same reach at 30, 60, or 120 Hz. */
+/** Analytic critically damped springs preserve momentum through hand movement.
+ * Their exact solution remains stable across frame rates and long frame gaps.
+ */
 export class NovaMotion {
   private reachX = 0;
   private reachY = 0;
+  private velocityX = 0;
+  private velocityY = 0;
   update(delta: number, hand?: HandResponse): void {
-    const blend = 1 - Math.exp(-12 * Math.max(0, delta));
-    this.reachX += ((hand?.near ? hand.reachX : 0) - this.reachX) * blend;
-    this.reachY += ((hand?.near ? hand.reachY : 0) - this.reachY) * blend;
-    if (Math.abs(this.reachX) < 0.001) this.reachX = 0;
-    if (Math.abs(this.reachY) < 0.001) this.reachY = 0;
+    if (!Number.isFinite(delta) || delta <= 0) return;
+    const targetX = hand?.near && Number.isFinite(hand.reachX) ? Math.max(-12, Math.min(12, hand.reachX)) : 0;
+    const targetY = hand?.near && Number.isFinite(hand.reachY) ? Math.max(-6, Math.min(8, hand.reachY)) : 0;
+    const frequency = 12;
+    const decay = Math.exp(-frequency * delta);
+    if (decay === 0) {
+      this.reachX = targetX; this.reachY = targetY;
+      this.velocityX = 0; this.velocityY = 0;
+      return;
+    }
+    const offsetX = this.reachX - targetX, offsetY = this.reachY - targetY;
+    const momentumX = this.velocityX + frequency * offsetX;
+    const momentumY = this.velocityY + frequency * offsetY;
+    this.reachX = targetX + (offsetX + momentumX * delta) * decay;
+    this.reachY = targetY + (offsetY + momentumY * delta) * decay;
+    this.velocityX = (this.velocityX - frequency * momentumX * delta) * decay;
+    this.velocityY = (this.velocityY - frequency * momentumY * delta) * decay;
   }
   sample(time: number, reaction: Reaction | null, reducedMotion: boolean): NovaPose {
     return sampleNovaPose(time, reaction, this.reachX, this.reachY, reducedMotion);

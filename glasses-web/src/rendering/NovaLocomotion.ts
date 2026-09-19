@@ -9,10 +9,13 @@ export const NOVA_LOCOMOTION_SETTINGS = Object.freeze({
   braking: 640,
   gravity: 720,
   jumpSpeed: 250,
-  autoHopSpeed: 100,
+  anticipationDuration: 0.18,
+  landingDuration: 0.32,
   landingDecay: 12,
   arrivalDistance: 0.25,
 });
+
+export type NovaJumpPhase = 'idle' | 'anticipation' | 'airborne' | 'landing';
 
 export interface NovaLocomotionState {
   x: number;
@@ -20,11 +23,15 @@ export interface NovaLocomotionState {
   velocityX: number;
   velocityY: number;
   grounded: boolean;
+  /** The contact-aware timeline used to bend, extend, and settle the pose. */
+  jumpPhase: NovaJumpPhase;
+  /** Seconds elapsed in the current jump phase; remains zero while idle. */
+  jumpPhaseTime: number;
   moving: boolean;
   facing: -1 | 1;
   /** Ground distance travelled, suitable for a speed-matched running cycle. */
   strideDistance: number;
-  /** A landing impulse that decays from 1 to 0 for a brief squash pose. */
+  /** A landing impulse that decays from 1 to 0 for a brief settling response. */
   landing: number;
   running: boolean;
   targetX: number | null;
@@ -47,13 +54,13 @@ export class NovaLocomotion {
   private velocityX = 0;
   private velocityY = 0;
   private grounded = true;
+  private jumpPhase: NovaJumpPhase = 'idle';
+  private jumpPhaseTime = 0;
   private facing: -1 | 1 = 1;
   private strideDistance = 0;
   private landing = 0;
   private targetX: number | null = null;
   private route: number[] = [];
-  private hopsRemaining = 0;
-  private canHopOnLeg = false;
   private accumulator = 0;
 
   get state(): Readonly<NovaLocomotionState> {
@@ -61,6 +68,7 @@ export class NovaLocomotion {
       x: this.x, height: this.height,
       velocityX: this.velocityX, velocityY: this.velocityY,
       grounded: this.grounded, moving: Math.abs(this.velocityX) > 1,
+      jumpPhase: this.jumpPhase, jumpPhaseTime: this.jumpPhaseTime,
       facing: this.facing, strideDistance: this.strideDistance,
       landing: this.landing,
       running: this.targetX !== null || Math.abs(this.velocityX) > 1,
@@ -71,39 +79,43 @@ export class NovaLocomotion {
   moveTo(x: number): void {
     if (!Number.isFinite(x)) return;
     this.route = [];
-    this.hopsRemaining = 0;
-    this.canHopOnLeg = false;
     this.targetX = clampX(x);
   }
 
   jump(): boolean {
-    if (!this.grounded) return false;
-    this.grounded = false;
-    this.velocityY = settings.jumpSpeed;
+    if (this.jumpPhase !== 'idle') return false;
+    this.jumpPhase = 'anticipation';
+    this.jumpPhaseTime = 0;
     this.landing = 0;
     return true;
   }
 
-  /** A roughly five-second run, braking before each turn and returning home. */
+  /** A grounded run, braking before each turn and returning home. Jump is explicit. */
   runAround(): void {
     const direction = this.x > 60 ? -1 : 1;
     this.route = [direction * 115, -direction * 115, direction * 65, 0];
-    this.hopsRemaining = 2;
-    this.canHopOnLeg = true;
     this.targetX = this.route.shift() ?? null;
   }
 
   stop(): void {
     this.route = [];
-    this.hopsRemaining = 0;
-    this.canHopOnLeg = false;
     this.targetX = null;
+  }
+
+  /** Transfer this horizontal offset to an outer anchor without cancelling a jump. */
+  rebaseHorizontal(): number {
+    const offset = this.x;
+    this.x = this.velocityX = 0;
+    this.stop();
+    return offset;
   }
 
   reset(): void {
     this.x = this.height = this.velocityX = this.velocityY = 0;
     this.strideDistance = this.landing = this.accumulator = 0;
     this.grounded = true;
+    this.jumpPhase = 'idle';
+    this.jumpPhaseTime = 0;
     this.facing = 1;
     this.stop();
   }
@@ -126,9 +138,10 @@ export class NovaLocomotion {
     this.landing *= Math.exp(-settings.landingDecay * delta);
     if (this.landing < 0.0001) this.landing = 0;
 
-    // Airborne characters retain momentum; a changed target takes effect on landing.
+    // Keep momentum through loading and flight. A changed target takes effect
+    // after landing, rather than snapping a running jump to a stationary crouch.
     const startX = this.x;
-    if (this.grounded) {
+    if (this.grounded && this.jumpPhase !== 'anticipation') {
       let desiredVelocity = 0;
       if (this.targetX !== null) {
         const distance = this.targetX - this.x;
@@ -138,7 +151,6 @@ export class NovaLocomotion {
           this.x = this.targetX;
           this.velocityX = 0;
           this.targetX = this.route.shift() ?? null;
-          this.canHopOnLeg = this.targetX !== null;
           arrived = true;
         }
         if (this.targetX !== null && !arrived) {
@@ -164,21 +176,17 @@ export class NovaLocomotion {
     if (Math.abs(this.velocityX) > 1) this.facing = this.velocityX < 0 ? -1 : 1;
     if (this.grounded) this.strideDistance += Math.abs(this.x - startX);
 
-    if (this.grounded && this.canHopOnLeg && this.hopsRemaining > 0 && this.targetX !== null) {
-      const speed = Math.abs(this.velocityX);
-      const remaining = this.targetX - this.x;
-      const flightDistance = speed * (2 * settings.jumpSpeed / settings.gravity);
-      const stoppingDistance = speed * speed / (2 * settings.braking);
-      // Launch only after building momentum, with enough runway to land and brake.
-      if (speed >= settings.autoHopSpeed && remaining * this.velocityX > 0
-        && Math.abs(remaining) > flightDistance + stoppingDistance + 5) {
-        this.jump();
-        this.hopsRemaining--;
-        this.canHopOnLeg = false;
+    if (this.jumpPhase === 'anticipation') {
+      this.jumpPhaseTime += delta;
+      if (this.jumpPhaseTime + 1e-10 >= settings.anticipationDuration) {
+        // Start the arc at a step boundary with an unambiguous zero-time pose.
+        this.jumpPhase = 'airborne';
+        this.jumpPhaseTime = 0;
+        this.grounded = false;
+        this.velocityY = settings.jumpSpeed;
       }
-    }
-
-    if (!this.grounded) {
+    } else if (this.jumpPhase === 'airborne') {
+      this.jumpPhaseTime += delta;
       // Exact constant-acceleration integration, followed by an inelastic floor collision.
       this.height += this.velocityY * delta - 0.5 * settings.gravity * delta * delta;
       this.velocityY -= settings.gravity * delta;
@@ -186,6 +194,14 @@ export class NovaLocomotion {
         this.height = this.velocityY = 0;
         this.grounded = true;
         this.landing = 1;
+        this.jumpPhase = 'landing';
+        this.jumpPhaseTime = 0;
+      }
+    } else if (this.jumpPhase === 'landing') {
+      this.jumpPhaseTime += delta;
+      if (this.jumpPhaseTime + 1e-10 >= settings.landingDuration) {
+        this.jumpPhase = 'idle';
+        this.jumpPhaseTime = 0;
       }
     }
   }

@@ -85,6 +85,19 @@ export function createStore(filename, now = () => Date.now()) {
         return { roomId, inviteCode, ownerId: playerId, createdAt };
       })();
     },
+    linkPlayRoom(playerId, roomCode) {
+      if (typeof roomCode !== 'string' || !/^[A-HJ-NP-Z2-9]{6}$/.test(roomCode)) fail(400, 'Invalid playground room code.');
+      return db.transaction(() => {
+        let room = get('SELECT id FROM rooms WHERE code = ?', roomCode);
+        if (!room) {
+          const roomId = id();
+          run('INSERT INTO rooms VALUES (?, ?, ?, ?)', roomId, roomCode, playerId, now());
+          room = { id: roomId };
+        }
+        if (!member(room.id, playerId)) run('INSERT INTO memberships VALUES (?, ?, ?)', room.id, playerId, now());
+        return room.id;
+      })();
+    },
     joinRoom(playerId, inviteCode) {
       if (typeof inviteCode !== 'string' || !/^[a-fA-F0-9]{10}$/.test(inviteCode)) fail(400, 'Invite code must be 10 hexadecimal characters.');
       return db.transaction(() => {
