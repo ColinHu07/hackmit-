@@ -5,6 +5,11 @@ import CoreImage
 
 struct LandmarkPoint: Codable { let x: Double; let y: Double; let z: Double }
 struct TrackedHand: Codable { let id: String; let score: Double; let points: [LandmarkPoint] }
+struct PhoneCameraFrame {
+    let image: CGImage
+    let hands: [TrackedHand]
+    let receivedAt: TimeInterval
+}
 struct CameraPreview: Codable {
     let mime = "image/jpeg"
     let width: Int; let height: Int; let jpeg: String
@@ -38,6 +43,7 @@ final class HandFrameProcessor: @unchecked Sendable {
     let streamId = UUID().uuidString
     let orientation: CGImagePropertyOrientation
     let onFrame: (HandFrame) -> Void
+    let onPhoneFrame: (PhoneCameraFrame) -> Void
     let onError: (String) -> Void
     private let joints: [VNHumanHandPoseObservation.JointName] = [
         .wrist, .thumbCMC, .thumbMP, .thumbIP, .thumbTip,
@@ -46,9 +52,10 @@ final class HandFrameProcessor: @unchecked Sendable {
         .ringMCP, .ringPIP, .ringDIP, .ringTip,
         .littleMCP, .littlePIP, .littleDIP, .littleTip,
     ]
-    init(rotation: Int, onFrame: @escaping (HandFrame) -> Void, onError: @escaping (String) -> Void) {
+    init(rotation: Int, onFrame: @escaping (HandFrame) -> Void, onPhoneFrame: @escaping (PhoneCameraFrame) -> Void, onError: @escaping (String) -> Void) {
         orientation = [0: .up, 90: .right, 180: .down, 270: .left][rotation] ?? .up
         self.onFrame = onFrame
+        self.onPhoneFrame = onPhoneFrame
         self.onError = onError
         request.maximumHandCount = 2
     }
@@ -66,10 +73,12 @@ final class HandFrameProcessor: @unchecked Sendable {
         let receivedAt = Date().timeIntervalSince1970 * 1000
         queue.async { [self] in
             defer { lock.lock(); busy = false; lock.unlock() }
+            let oriented = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
+            var hands: [TrackedHand] = []
             do {
                 try VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:]).perform([request])
                 var seenIds = Set<String>()
-                let hands: [TrackedHand] = (request.results ?? []).enumerated().compactMap { index, hand in
+                hands = (request.results ?? []).enumerated().compactMap { index, hand in
                     guard let points = try? hand.recognizedPoints(.all),
                           let tip = points[.indexTip], let wrist = points[.wrist],
                           tip.confidence >= 0.6, wrist.confidence >= 0.6 else { return nil }
@@ -87,23 +96,26 @@ final class HandFrameProcessor: @unchecked Sendable {
                     }
                     return TrackedHand(id: id, score: Double(min(tip.confidence, wrist.confidence)), points: landmarks)
                 }
-                sequence += 1
-                let swap = orientation == .right || orientation == .left
-                let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer)
-                var preview: CameraPreview?
-                if sendPreview {
-                    // Same orientation as Vision; never mirror the preview or its hand overlay.
-                    let oriented = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
-                    let scale = min(1, 320 / max(oriented.extent.width, oriented.extent.height))
-                    let resized = oriented.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                    if let data = imageContext.jpegRepresentation(of: resized, colorSpace: CGColorSpaceCreateDeviceRGB(),
-                        options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]), data.count <= 49_152 {
-                        preview = CameraPreview(width: Int(resized.extent.width.rounded()), height: Int(resized.extent.height.rounded()), jpeg: data.base64EncodedString())
-                    }
-                }
-                onFrame(HandFrame(streamId: streamId, seq: sequence, capturedAtMs: receivedAt,
-                                  width: swap ? height : width, height: swap ? width : height, hands: hands, preview: preview))
             } catch { onError("Hand tracking: \(error.localizedDescription)") }
+            // Local visualization has no relay dependency and no JPEG/network overhead.
+            if let image = imageContext.createCGImage(oriented, from: oriented.extent) {
+                onPhoneFrame(PhoneCameraFrame(image: image, hands: hands, receivedAt: uptime))
+            }
+            sequence += 1
+            let swap = orientation == .right || orientation == .left
+            let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer)
+            var preview: CameraPreview?
+            if sendPreview {
+                // Same orientation as Vision; never mirror the preview or its hand overlay.
+                let scale = min(1, 320 / max(oriented.extent.width, oriented.extent.height))
+                let resized = oriented.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                if let data = imageContext.jpegRepresentation(of: resized, colorSpace: CGColorSpaceCreateDeviceRGB(),
+                    options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]), data.count <= 49_152 {
+                    preview = CameraPreview(width: Int(resized.extent.width.rounded()), height: Int(resized.extent.height.rounded()), jpeg: data.base64EncodedString())
+                }
+            }
+            onFrame(HandFrame(streamId: streamId, seq: sequence, capturedAtMs: receivedAt,
+                              width: swap ? height : width, height: swap ? width : height, hands: hands, preview: preview))
         }
     }
 }

@@ -14,26 +14,39 @@ struct BondimalsCameraApp: App {
         WindowGroup {
             NavigationStack {
                 Form {
-                    Section("Glasses camera → Bondimals") {
-                        Text("Your iPhone connects the glasses camera to Bondimals. Hand points drive Nova; the desktop web app can also request a small live camera preview. Nothing is recorded.")
+                    Section("Live glasses view") {
+                        PhoneCameraPreview(frame: bridge.phoneFrame, running: bridge.running)
+                        Text("See the glasses camera and tracked hands here. No relay or pairing link is needed for this preview. Nothing is recorded.")
                         Text(bridge.status).accessibilityIdentifier("bridge-status")
                         Text(bridge.handStatus).font(.caption.monospaced())
                     }
-                    Section("Pair your session") {
-                        TextField("Paste phoneLink from pairing.json", text: $bridge.pairingLink, axis: .vertical)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(bridge.running)
+                    Section("Camera setup") {
                         Picker("Camera image rotation", selection: $bridge.rotation) {
                             ForEach([0, 90, 180, 270], id: \.self) { Text("\($0)°").tag($0) }
                         }.disabled(bridge.running)
                         Button("Register with Meta AI") { bridge.register() }.disabled(bridge.running)
                     }
                     Section {
+                        DisclosureGroup("Optional web connection") {
+                            Toggle("Send hand points to Nova", isOn: $bridge.sendToWeb).disabled(bridge.running)
+                            if bridge.sendToWeb {
+                                TextField("Paste phoneLink from pairing.json", text: $bridge.pairingLink, axis: .vertical)
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(bridge.running)
+                                Toggle("Allow desktop camera preview", isOn: $bridge.allowWebPreview).disabled(bridge.running)
+                                Text("Hand points need a reachable relay to make Nova react in the web app. Leave the camera-preview switch off to keep images on this phone.").font(.footnote)
+                            }
+                            Text(bridge.webStatus).font(.caption)
+                        }
+                    }
+                    Section {
                         Button("Start glasses camera") { bridge.start() }.disabled(bridge.running)
                         Button("Stop", role: .destructive) { bridge.stop() }.disabled(!bridge.running)
                     }
-                    Section("On the glasses") {
-                        Text("Open your paired Bondimals link, place Nova, then choose Hands. Align your index fingertip with the three + markers. Stroke gently across Nova’s head.")
-                        Text("Keep this iPhone app open. If opening the web app stops the camera stream, your firmware may not allow both sessions together.").font(.footnote)
+                    Section("While previewing") {
+                        Text("Keep this app open. The feed comes from the glasses camera; the phone camera is never used.")
+                        if bridge.sendToWeb {
+                            Text("Open the paired Bondimals link on the glasses, place Nova, then choose Hands to align your fingertip. Camera and web display running together still need a hardware test.").font(.footnote)
+                        }
                     }
                 }.navigationTitle("Bondimals Camera")
             }.onOpenURL { bridge.open($0) }
