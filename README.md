@@ -1,5 +1,11 @@
 # Bondimals
 
+## Phone-first shared playground
+
+The phone companion discovers opted-in nearby pets (an approximate 10-meter GPS filter), lets two players agree to meet, and opens a shared 3D meadow automatically. Both can confirm a real-world hello and play together; room codes remain a fallback. Run `HOST=0.0.0.0 npm run play:server` and `npm run dev:phone` in separate terminals. Physical-phone location requires HTTPS and WSS, with both `/play` and `/nearby` forwarded to the server. See the [phone guide](companion-web/README.md) and [server deployment guide](docs/phone-server.md), including a clearly labeled local location demo. A server URL can be entered in app settings or configured at build time. Real-world AR alignment and joining from glasses remain later work.
+
+## Glasses prototype
+
 A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 character**, adds **Pet / Feed / Play** reactions, and supports a calibrated **direction anchor** through the glasses' documented orientation events.
 
 - [Glasses app](https://colinhu07.github.io/bondimals-display/)
