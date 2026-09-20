@@ -2,6 +2,7 @@
 *{box-sizing:border-box}body{margin:0;background:#000}button,input{font:inherit}button{cursor:pointer}button:disabled{opacity:.38;cursor:default}[hidden]{display:none!important}
 #app{width:min(100vw,600px);height:min(100vh,600px);min-height:540px;position:relative;margin:auto;overflow:hidden;background:#000}
 .glass-header{position:absolute;z-index:2;top:20px;left:24px;right:24px;display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{font-size:25px;font-weight:750;color:#dcffc2}.connection{font-size:18px;text-align:right}.glass-mood{display:flex;align-items:center;gap:8px;font-size:18px}.glass-mood svg{width:40px;height:40px}.glass-mood-track{height:5px;background:#3e5237;width:80px;border-radius:8px;overflow:hidden}.glass-mood-fill{height:100%;background:#c7ffa4;transition:width .2s}
+.brand small{display:block;font-size:12px;line-height:1.1;font-weight:500;color:#d4e7bf}
 #playground{position:absolute;inset:58px 0 90px;width:100%;height:calc(100% - 148px);outline:none;touch-action:none}
 .glass-status{position:absolute;z-index:1;top:78px;left:24px;right:24px;text-align:center;font-size:18px;color:#d5e3f5;pointer-events:none;line-height:1.3}.glass-notice{position:absolute;bottom:110px;left:30px;right:30px;text-align:center;color:#e4ffcc;font-size:18px;line-height:1.3;text-shadow:0 2px 5px #000,0 0 8px #000;pointer-events:none}
 .glass-status,.glass-notice{background:rgba(12,25,13,.84);border:1px solid rgba(206,235,186,.25);border-radius:12px;padding:9px 12px}.glass-status:empty,.glass-notice:empty{display:none}

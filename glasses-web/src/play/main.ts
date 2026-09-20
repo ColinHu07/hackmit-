@@ -45,7 +45,7 @@ let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let resumeAfterReconnect = false;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header class="glass-header"><span class="brand">kith</span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
+  <header class="glass-header"><span class="brand">kith<small>Meadow 2</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
   <canvas id="playground" aria-label="Your shared beaver playground"></canvas>
   <div id="tracking-status" class="glass-status">Loading your beaver…</div><div id="notice" class="glass-notice" role="status"></div>
   <nav class="action-rail" aria-label="Game actions"><button id="walk" type="button" disabled>Walk</button><button data-action="wave" type="button" disabled>Wave</button><button data-action="feed" id="feed" type="button" disabled>Berry</button><button id="quests" type="button" disabled>Quests</button><button id="more" type="button">More</button></nav>
@@ -240,6 +240,15 @@ function controls(): void {
     closePanel();
   });
   bind('back', more);
+  const refresh = document.createElement('button');
+  refresh.type = 'button'; refresh.className = 'glass-button'; refresh.textContent = 'Refresh game';
+  refresh.addEventListener('click', () => {
+    const url = new URL(location.href);
+    url.pathname = new URL(`${import.meta.env.BASE_URL}meadow.html`, location.origin).pathname;
+    url.searchParams.set('v', String(Date.now()));
+    location.replace(url.href);
+  });
+  el('panel').insertBefore(refresh, el('back'));
 }
 
 const quests: { id: EvidenceQuestId; title: string; instruction: string }[] = [
