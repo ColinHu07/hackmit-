@@ -91,6 +91,7 @@ export class Playground {
   private disposed = false;
   private visible = true;
   private contextLost = false;
+  private zoomedOut = false;
   private frame = 0;
   private previousFrame = 0;
   private pointer: { id: number; x: number; y: number; time: number; dragged: boolean } | null = null;
@@ -180,6 +181,13 @@ export class Playground {
 
   setViewTilt(pitch = 0, roll = 0): void {
     if (Number.isFinite(pitch) && Number.isFinite(roll)) this.viewTilt = { pitch, roll };
+  }
+
+  /** Expands the orthographic view while nearby discovery is open. */
+  setZoomedOut(zoomedOut: boolean): void {
+    if (this.zoomedOut === zoomedOut) return;
+    this.zoomedOut = zoomedOut;
+    this.resize();
   }
 
   setWalkingPose(pose: WalkingPose | null, initialHeading = false, predictMovement = false): void {
@@ -523,7 +531,7 @@ export class Playground {
     const width = Math.max(1, this.canvas.clientWidth);
     const height = Math.max(1, this.canvas.clientHeight);
     const aspect = width / height;
-    const halfHeight = Math.max(3.5, 4.4 / aspect);
+    const halfHeight = Math.max(3.5, 4.4 / aspect) * (this.zoomedOut ? 1.7 : 1);
     this.camera.left = -halfHeight * aspect;
     this.camera.right = halfHeight * aspect;
     this.camera.top = halfHeight;
