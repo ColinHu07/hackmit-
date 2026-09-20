@@ -1,9 +1,10 @@
+import { FEED_DURATION_MS } from './feeding.mjs';
 export const PLAY_WORLD_LIMIT = 10_000;
 export const PLAY_FRIEND_DISTANCE = 1.5;
 export const PLAY_TICK_MS = 50;
 export const PLAY_MAX_PLAYERS = 4;
 export const PLAY_ACTIONS = Object.freeze(['wave', 'feed', 'play', 'jump', 'dap']);
-export const PLAY_ACTION_DURATION = Object.freeze({ wave: 3400, feed: 6200, play: 9000, jump: 1400, dap: 1400 });
+export const PLAY_ACTION_DURATION = Object.freeze({ wave: 3400, feed: FEED_DURATION_MS, play: 9000, jump: 1400, dap: 1400 });
 export const PLAY_ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const PLAY_MAX_MESSAGE_BYTES = 1024;
 

@@ -145,3 +145,12 @@ input,.quest-tools select{border:0;border-radius:18px;background:#edf1e5bd;box-s
   .player-state { display: none; }
   .side-panel .room-description { overflow-wrap: anywhere; }
 }
+
+/* A hollow cooldown ring belongs to the game scene, not the page controls. */
+.treat-timer{position:absolute;right:22px;bottom:24px;z-index:3;width:58px;height:72px;pointer-events:none;color:#486443;filter:drop-shadow(0 2px 5px #253e2425)}
+.treat-timer-donut{display:block;width:58px;height:58px;overflow:visible;transform:rotate(-90deg)}
+.treat-timer-track,.treat-timer-ring{fill:none;stroke-width:4}
+.treat-timer-track{stroke:#fffef6c9}.treat-timer-ring{stroke:#779e59;stroke-dasharray:100;stroke-dashoffset:0;stroke-linecap:round}
+.treat-timer-berry{position:absolute;top:15px;left:15px;width:28px;height:28px;display:grid;place-items:center;font-size:22px;line-height:1}
+.treat-timer-count{display:block;text-align:center;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;text-shadow:0 1px 3px #fffef8}
+.mood-fill{transition:width 120ms linear}

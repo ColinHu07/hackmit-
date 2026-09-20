@@ -1,3 +1,4 @@
+import { eatenFraction } from '../../shared/feeding.mjs';
 import type { PetActionKind } from '../../shared/play-protocol';
 
 const ease = (t: number): number => {
@@ -41,8 +42,7 @@ export function samplePetAction(kind: PetActionKind | undefined, progress: numbe
     pose.bow -= pose.joy * 0.12;
     pose.treatLift = window(t, 0.35, 0.43, 0.66, 0.72);
     // Three visible bites; the fruit stays full-size until it reaches the mouth.
-    pose.treatScale = ramp(t, 0, 0.04) * Math.max(0, 1 - 0.28 * ramp(t, 0.45, 0.47)
-      - 0.32 * ramp(t, 0.51, 0.53) - 0.4 * ramp(t, 0.58, 0.61));
+    pose.treatScale = ramp(t, 0, 0.04) * Math.max(0, 1 - eatenFraction(t));
   } else if (kind === 'wave') {
     pose.turn = Math.PI * window(t, 0, 0.22, 0.8, 1);
     pose.stride = 12 * (ramp(t, 0, 0.22) + ramp(t, 0.8, 1));

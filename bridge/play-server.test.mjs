@@ -476,3 +476,25 @@ test('squad evidence checks all participants and marks only their group approved
   const verified = await state(a, s => s.players.every(p => s.quests[p.id].photoVerification.squadCircle === 'approved'));
   assert.equal(Object.keys(verified.quests).length, 3);
 });
+
+test('a saved lobby pet retains inventory, bite progress, and cooldown after the room is recreated', async t => {
+  const { createPetStore } = await import('./pet-store.mjs');
+  let clock = 1_800_000_000_000;
+  const store = createPetStore(':memory:', () => clock);
+  const token = 'd'.repeat(48);
+  store.ensure(token, 'Saved pet'); store.feed(token, 'berry');
+  clock += 6200 * .49;
+  const { connect } = await setup(t, { petStore: store });
+  t.after(() => store.close());
+  const player = await connect();
+  player.send({ type: 'lobby', name: 'Saved pet', playerToken: token });
+  const resumed = await welcome(player);
+  assert.equal(resumed.playerToken, token);
+  const care = resumed.snapshot.players.find(p => p.id === resumed.playerId).survival;
+  assert.equal(care.inventory.berry, 2);
+  assert.equal(care.happiness, 70.56);
+  assert.ok(care.treatCooldownMs > 0);
+  const stranger = await connect();
+  stranger.send({ type: 'lobby', name: 'Unknown', playerToken: 'e'.repeat(48) });
+  await error(stranger, 'invalid_token');
+});

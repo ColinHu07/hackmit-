@@ -41,3 +41,36 @@ test('feeding refuses empty inventory instead of creating food', () => {
   assert.throws(() => store.feed(token, 'treat'), error => error.code === 'food_empty');
   store.close();
 });
+
+test('happiness increases with each bite, once only, and cooldown survives restart', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'kith-bites-'));
+  const file = join(directory, 'pets.sqlite');
+  const token = 'c'.repeat(48);
+  const start = 1_800_000_000_000;
+  let clock = start;
+  let store = createPetStore(file, () => clock);
+  store.ensure(token, 'Bites');
+  const fed = store.feed(token, 'berry');
+  assert.equal(fed.happiness, 70);
+  assert.equal(fed.inventory.berry, 2);
+  assert.equal(fed.treatCooldownMs, 15_000);
+  clock = start + .4 * 6200;
+  assert.equal(store.profile(token).happiness, 70);
+  clock = start + .49 * 6200;
+  assert.equal(store.profile(token).happiness, 70.56);
+  assert.equal(store.profile(token).happiness, 70.56);
+  store.close();
+  store = createPetStore(file, () => clock);
+  assert.equal(store.profile(token).happiness, 70.56);
+  assert.throws(() => store.feed(token, 'berry'), error => error.code === 'treat_cooldown');
+  clock = start + .55 * 6200;
+  assert.equal(store.profile(token).happiness, 71.2);
+  clock = start + .61 * 6200;
+  assert.equal(store.profile(token).happiness, 72);
+  clock = start + 15_000;
+  assert.equal(store.profile(token).happiness, 72);
+  assert.equal(store.profile(token).treatCooldownMs, 0);
+  assert.equal(store.feed(token, 'berry').happiness, 72);
+  assert.equal(store.profile(token).inventory.berry, 1);
+  store.close(); rmSync(directory, { recursive: true, force: true });
+});

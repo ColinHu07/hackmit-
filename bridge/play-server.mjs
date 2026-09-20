@@ -267,12 +267,12 @@ export function createPlayServer(options = {}) {
     send(ws, { type: 'welcome', roomCode: room.code, playerId: player.id, playerToken: player.token, snapshot: snapshot(room) });
     broadcast(room);
   }
-  function makePlayer(room, name) {
+  function makePlayer(room, name, savedToken) {
     const slot = [0, 1, 2, 3].find(candidate => ![...room.players.values()].some(player => player.slot === candidate));
     const starts = [[-1.2, 0], [1.2, 0], [0, -1.2], [0, 1.2]];
     const [x, z] = starts[slot];
     const player = {
-      id: randomUUID(), token: randomBytes(24).toString('hex'), name, slot,
+      id: randomUUID(), token: savedToken ?? randomBytes(24).toString('hex'), name, slot,
       x, z, targetX: x, targetZ: z, yaw: Math.atan2(-x, -z),
       action: null, socket: null, disconnectedAt: null, lastActionAt: 0,
       evidenceGroups: {}, verificationAttempts: {}, movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, dapHandshakeReady: false, photoVerification: {} },
@@ -281,8 +281,8 @@ export function createPlayServer(options = {}) {
     room.players.set(player.id, player);
     return player;
   }
-  function addPlayer(ws, room, name) {
-    const player = makePlayer(room, name);
+  function addPlayer(ws, room, name, savedToken) {
+    const player = makePlayer(room, name, savedToken);
     room.squadReady.clear(); room.raidReady.clear();
     if (room.players.size === 2) room.notice = `${name} joined the pen! Duo quests are now live.`;
     else if (room.players.size >= 3) room.notice = `${name} joined the pen! Squad quest and raid party are ready.`;
@@ -393,7 +393,17 @@ export function createPlayServer(options = {}) {
       reapPlayers(room, now);
       if (message.playerToken !== undefined) {
         const player = [...room.players.values()].find(candidate => sameToken(candidate.token, message.playerToken));
-        if (!player) return fail(ws, 'invalid_token', 'This saved session has expired or belongs to a different room.');
+        if (!player) {
+          // The public room is ephemeral, but a saved pet and its food are not.
+          if (message.type === 'lobby'
+            && ![...rooms.values()].some(other => [...other.players.values()].some(peer => sameToken(peer.token, message.playerToken)))
+            && petStore.profile(message.playerToken)) {
+            if (room.players.size >= PLAY_MAX_PLAYERS) return fail(ws, 'room_full', 'The shared playground is full. Try again when someone leaves.');
+            addPlayer(ws, room, message.name, message.playerToken);
+            return;
+          }
+          return fail(ws, 'invalid_token', 'This saved session has expired or belongs to a different room.');
+        }
         const oldSocket = closePlayer(player);
         if (oldSocket) oldSocket.close(4001, 'Session resumed on another connection');
         player.name = message.name;
@@ -661,6 +671,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const database = resolve(process.env.BONDIMALS_DB_PATH || '.bondimals-data/game.sqlite');
   mkdirSync(dirname(database), { recursive: true });
   const app = createPlayServer({ allowedOrigins, webRoot, database });
-  app.server.listen(port, host, () => console.log(`Bondimals ${webRoot ? 'web game and playground' : 'playground'} listening on http://${host}:${port}`));
+  app.server.listen(port, host, () => console.log(`Kith ${webRoot ? 'web game and playground' : 'playground'} listening on http://${host}:${port}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void app.close().then(() => process.exit(0)); });
 }
