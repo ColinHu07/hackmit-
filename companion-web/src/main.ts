@@ -30,6 +30,7 @@ const paths: Record<string, string> = {
   treat: '<path d="M12 20 4 9l3-5h10l3 5-8 11ZM4 9h16M7 4l5 16 5-16"/>',
   jump: '<path d="M12 18V4m-5 5 5-5 5 5M5 18v3h14v-3"/>',
   play: '<path d="m8 3 3 5-3 5-3-5 3-5Zm10 8 3 5-3 5-3-5 3-5ZM16 3v4m-2-2h4M4 17v4m-2-2h4"/>',
+  quest: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   link: '<path d="m10 14 4-4M8 15l-2 2a3 3 0 0 1-4-4l5-5a3 3 0 0 1 4 0m2 8a3 3 0 0 0 4 0l5-5a3 3 0 0 0-4-4l-2 2"/>',
@@ -96,7 +97,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
         <div class="moment-line"><span id="scene-hint">Tap the ground to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
-        <div class="action-bar action-bar-five"><button data-action="wave">${icon('wave')}<span>Wave</span></button><button data-action="dap" class="co-op-action">${icon('wave')}<span>Dap up</span></button><button data-action="feed">${icon('treat')}<span>Treat</span></button><button data-action="jump">${icon('jump')}<span>Jump</span></button><button data-action="play" class="co-op-action">${icon('play')}<span>Play together</span></button></div>
+        <div class="action-bar action-bar-five"><button data-action="wave">${icon('wave')}<span>Wave</span></button><button id="quest-button" class="co-op-action" type="button" disabled>${icon('quest')}<span>Quests</span></button><button data-action="feed">${icon('treat')}<span>Treat</span></button><button data-action="jump">${icon('jump')}<span>Jump</span></button><button data-action="play" class="co-op-action">${icon('play')}<span>Play together</span></button></div>
         <p class="action-notice" id="action-notice" role="status" aria-live="polite">Your little adventure starts here.</p>
       </div>
       <div id="native-tools" class="native-tools" hidden>
@@ -121,6 +122,17 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <footer class="site-footer"><span>More play. More connection.</span><span>PHONE EDITION <span class="tiny-star">✳</span> BONDIMALS</span></footer>
   <details class="app-credits"><summary>Credits</summary><p>Weather data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></p></details>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="quest-dialog" class="quest-dialog" aria-labelledby="quest-dialog-title">
+    <div class="dialog-heading"><div><span class="small-label">SHARED ADVENTURES</span><h2 id="quest-dialog-title">Choose a quest</h2></div><button class="icon-button" type="button" id="close-quests" aria-label="Close quests">${icon('close')}</button></div>
+    <p id="quest-dialog-intro">Gathered pets can take on a shared challenge. Pick a quest to see what everyone needs to do.</p>
+    <div id="quest-catalog" class="quest-catalog" aria-label="Available quests"></div>
+    <section id="quest-detail" class="quest-detail" hidden>
+      <button type="button" id="quest-back" class="text-button">${icon('arrow')} All quests</button>
+      <span id="quest-detail-category" class="small-label"></span><h3 id="quest-detail-title"></h3><p id="quest-detail-requirements"></p>
+      <div class="quest-detail-actions"><button type="button" id="quest-start" class="native-buttons-button">Start in-game step</button><button type="button" id="quest-record" class="native-buttons-button">Record evidence</button><button type="button" id="quest-submit" class="primary-button">Submit to Muse</button></div>
+      <p id="quest-detail-status" class="photo-verification-status" role="status">Complete the in-game step, then record and submit evidence.</p>
+    </section>
+  </dialog>
   <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both phones connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
 `;
 
@@ -315,6 +327,7 @@ function updateControls(): void {
     const unavailableTreat = button.dataset.action === 'feed' && (!survival || (survival.inventory.berry ?? 0) < 1 || survival.treatCooldownMs > 0);
     button.disabled = !connected || !!local?.action || unavailableTreat || ((button.dataset.action === 'play' || button.dataset.action === 'dap') && !near);
   });
+  el<HTMLButtonElement>('quest-button').disabled = !connected || friends.length < 1;
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
   el<HTMLButtonElement>('ready-squad').disabled = !connected || !local || (snapshot?.players.filter(p => p.connected).every(p => snapshot?.quests[p.id]?.squadCircle) ?? false) || (snapshot?.players.filter(player => player.connected).length ?? 0) < 3;
   const raid = snapshot?.raid;
@@ -381,7 +394,7 @@ const client = new RoomClient({
     snapshot = next;
     el('server-compatibility').hidden = !next.legacyServer;
     for (const id of ['modern-quests', 'raid-card', 'quest-tools']) el(id).hidden = !!next.legacyServer;
-    document.querySelector<HTMLButtonElement>('[data-action="dap"]')!.hidden = !!next.legacyServer;
+    el<HTMLButtonElement>('quest-button').hidden = !!next.legacyServer;
     if (entering) {
       stopWalking();
       if (next.publicLobby) save(lobbyTokenKey(), member.playerToken);
@@ -749,6 +762,79 @@ function updateEvidenceChoice(): void {
   evidenceConsent.checked = false;
 }
 evidenceChoice.addEventListener('change', updateEvidenceChoice);
+
+const questDefinitions: { id: EvidenceQuestId; group: string; title: string; requirements: string; start?: string }[] = [
+  { id: 'touchGrass', group: 'Solo', title: 'Touch grass', requirements: 'Walk your pet at least one world-unit, then record a hand touching natural grass outdoors.' },
+  { id: 'meetFriend', group: 'Duo', title: 'Say hello', requirements: 'Bring two pets into the pen, meet close together, then record both people greeting each other.' },
+  { id: 'dapHandshake', group: 'Duo', title: 'Dap up', requirements: 'Bring two pets close and start the shared dap step. Record the hands meeting and releasing.', start: 'dap' },
+  { id: 'squadCircle', group: 'Squad', title: 'Circle up', requirements: 'Gather at least three pets, have the squad ready up, then record the group circle or cheer.', start: 'squad' },
+];
+let selectedQuest: EvidenceQuestId | null = null;
+function questProgress(id: EvidenceQuestId): string {
+  const local = membership && snapshot?.quests[membership.playerId];
+  if (!local) return 'Join a shared pen to begin.';
+  if (local.photoVerification[id] === 'approved') return 'Verified by Muse ✓';
+  if (id === 'dapHandshake' && local.dapHandshakeReady) return 'In-game step done · evidence needed';
+  if (local[id]) return 'In-game step done · evidence needed';
+  if (id === 'squadCircle' && (snapshot?.players.filter(player => player.connected).length ?? 0) < 3) return 'Needs 3 pets in the pen';
+  if ((id === 'meetFriend' || id === 'dapHandshake') && (snapshot?.players.filter(player => player.connected).length ?? 0) < 2) return 'Needs 2 pets in the pen';
+  return 'Ready to start';
+}
+function renderQuestCatalog(): void {
+  const catalog = el('quest-catalog'); catalog.replaceChildren();
+  for (const group of ['Solo', 'Duo', 'Squad']) {
+    const quests = questDefinitions.filter(quest => quest.group === group);
+    const section = document.createElement('section'); section.className = 'quest-category';
+    const heading = document.createElement('h3'); heading.textContent = group; section.append(heading);
+    for (const quest of quests) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'quest-option';
+      const title = document.createElement('strong'); title.textContent = quest.title;
+      const status = document.createElement('small'); status.textContent = questProgress(quest.id);
+      button.append(title, status); button.addEventListener('click', () => openQuestDetail(quest.id)); section.append(button);
+    }
+    catalog.append(section);
+  }
+}
+function openQuestDetail(id: EvidenceQuestId): void {
+  const quest = questDefinitions.find(item => item.id === id); if (!quest) return;
+  selectedQuest = id; evidenceChoice.value = id; updateEvidenceChoice();
+  el('quest-catalog').hidden = true; el('quest-detail').hidden = false;
+  el('quest-detail-category').textContent = `${quest.group} QUEST`;
+  el('quest-detail-title').textContent = quest.title;
+  el('quest-detail-requirements').textContent = quest.requirements;
+  el<HTMLButtonElement>('quest-start').hidden = !quest.start;
+  el<HTMLButtonElement>('quest-start').textContent = quest.start === 'squad' ? 'Ready for squad circle' : 'Start dap step';
+  el('quest-detail-status').textContent = questProgress(id);
+}
+function openQuestMenu(): void {
+  if (el<HTMLButtonElement>('quest-button').disabled) return;
+  renderQuestCatalog(); selectedQuest = null;
+  el('quest-catalog').hidden = false; el('quest-detail').hidden = true;
+  const dialog = el<HTMLDialogElement>('quest-dialog'); if (!dialog.open) dialog.showModal();
+}
+el('quest-button').addEventListener('click', openQuestMenu);
+el('close-quests').addEventListener('click', () => el<HTMLDialogElement>('quest-dialog').close());
+el('quest-back').addEventListener('click', () => { selectedQuest = null; el('quest-catalog').hidden = false; el('quest-detail').hidden = true; renderQuestCatalog(); });
+el('quest-start').addEventListener('click', () => {
+  if (selectedQuest === 'dapHandshake') client.action('dap');
+  else if (selectedQuest === 'squadCircle') client.readySquadQuest();
+  if (selectedQuest) el('quest-detail-status').textContent = 'Step started. Return here when it is complete.';
+});
+el('quest-record').addEventListener('click', () => {
+  if (!selectedQuest) return;
+  evidenceChoice.value = selectedQuest; updateEvidenceChoice();
+  if (isNativePhone()) nativeCommand('recordClip');
+  else toast('Clip recording is available in the phone or glasses app. Choose a photo below on desktop.');
+  el('quest-detail-status').textContent = isNativePhone() ? 'Recording started. Review it before submitting.' : 'Use the evidence panel below to choose a photo.';
+  el('quest-tools').scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+el('quest-submit').addEventListener('click', () => {
+  if (!selectedQuest) return;
+  evidenceChoice.value = selectedQuest; updateEvidenceChoice();
+  el<HTMLButtonElement>(isNativePhone() ? 'submit-clip' : 'submit-photo').click();
+  el('quest-detail-status').textContent = 'Muse is grading the submitted evidence…';
+  el('quest-tools').scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 function evidenceSession() {
   const questId = selectedEvidence();
   if (!membership || connection !== 'connected') throw new Error('Join a quest room with your friends first.');
