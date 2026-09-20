@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { browserVerticalG, StepDetector } from './StepDetector';
-import { STEP_METERS, WALK_SCALE, WalkingTracker } from './WalkingTracker';
+import { STEP_METERS, STEP_MOVEMENT_GAIN, WALK_SCALE, WalkingTracker } from './WalkingTracker';
 
 function samples(detector: StepDetector, start: number, length: number, signal: (t: number) => number): { at: number; count: number }[] {
   const results = [];
@@ -49,7 +49,7 @@ describe('responsive foreground steps', () => {
       const tracker = new WalkingTracker();
       tracker.heading(heading, 5); tracker.setStepTracking(true);
       expect(tracker.steps(2)).toBe(true);
-      const distance = 2 * STEP_METERS * WALK_SCALE;
+      const distance = 2 * STEP_METERS * WALK_SCALE * STEP_MOVEMENT_GAIN;
       expect(tracker.pose.x).toBeCloseTo(Math.sin(tracker.pose.yaw) * distance);
       expect(tracker.pose.z).toBeCloseTo(Math.cos(tracker.pose.yaw) * distance);
       const before = { ...tracker.pose };
@@ -64,7 +64,7 @@ describe('responsive foreground steps', () => {
   it('allows forward walking before compass lock, and cleanly falls back to GPS', () => {
     const tracker = new WalkingTracker();
     tracker.setStepTracking(true); expect(tracker.steps(1)).toBe(true);
-    expect(tracker.pose.z).toBeCloseTo(-STEP_METERS * WALK_SCALE);
+    expect(tracker.pose.z).toBeCloseTo(-STEP_METERS * WALK_SCALE * STEP_MOVEMENT_GAIN);
     tracker.setStepTracking(false); expect(tracker.steps(1)).toBe(false);
     const fix = { latitude: 0, longitude: 0, accuracy: 2, timestamp: 1000 };
     expect(tracker.location(fix, 1000).moved).toBe(false);

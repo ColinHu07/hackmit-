@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { followingCamera, screenMovement } from './WalkingView';
+import { meadowTexture, pawTexture } from './MeadowTexture';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
@@ -54,7 +55,10 @@ export class Playground {
   private readonly flowers = new THREE.Group();
   private readonly weatherParticles = new THREE.Group();
   private weatherKind: WeatherKind = 'unknown';
-  private groundMaterial = new THREE.MeshStandardMaterial({ color: 0xc5d5a8, transparent: true, opacity: 0.65, roughness: 1 });
+  private groundMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
+  private readonly footprints: { mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; born: number }[] = [];
+  private footprintIndex = 0;
+  private trailPosition: THREE.Vector3 | null = null;
   private snapshot: PlaySnapshot | null = null;
   private localPlayerId: string | null = null;
   private nearby: NearbyPet[] | null = null;
@@ -86,6 +90,13 @@ export class Playground {
 
     this.shadowTexture = this.makeShadowTexture();
     this.buildIsland();
+    const paw = pawTexture(); this.textures.add(paw);
+    const footprintGeometry = new THREE.PlaneGeometry(0.32, 0.38);
+    for (let i = 0; i < 32; i++) {
+      const mesh = this.mesh(footprintGeometry, new THREE.MeshBasicMaterial({ map: paw, color: 0x455c35, transparent: true, opacity: 0, depthWrite: false }));
+      mesh.rotation.x = -Math.PI / 2; mesh.visible = false;
+      this.scene.add(mesh); this.footprints.push({ mesh, born: -Infinity });
+    }
     this.scene.add(this.flowers, this.weatherParticles);
     const dropGeometry = new THREE.SphereGeometry(0.022, 4, 4);
     const dropMaterial = new THREE.MeshBasicMaterial({ color: 0xd5e9ff, transparent: true, opacity: 0.65 });
@@ -137,7 +148,8 @@ export class Playground {
     this.weatherKind = kind;
     this.flowers.visible = kind === 'sunny';
     this.weatherParticles.visible = kind === 'rain' || kind === 'snow';
-    this.groundMaterial.color.set(kind === 'snow' ? 0xe3edf3 : kind === 'rain' ? 0x8fa7a6 : kind === 'night' ? 0x79849c : 0xc5d5a8);
+    this.groundMaterial.color.set(kind === 'snow' ? 0xe5efff : kind === 'rain' ? 0xa5bfba : kind === 'night' ? 0x9baac5 : 0xffffff);
+    for (const footprint of this.footprints) footprint.mesh.material.color.set(kind === 'night' ? 0xf1dba9 : 0x455c35);
     for (const drop of this.weatherParticles.children) drop.scale.set(1, kind === 'rain' ? 9 : 1.8, 1);
     this.renderer.toneMappingExposure = kind === 'night' ? 0.72 : kind === 'rain' ? 0.92 : 1.12;
   }
@@ -330,22 +342,11 @@ export class Playground {
   }
 
   private buildIsland(): void {
-    const fadeCanvas = document.createElement('canvas');
-    fadeCanvas.width = fadeCanvas.height = 128;
-    const context = fadeCanvas.getContext('2d');
-    if (context) {
-      const fade = context.createRadialGradient(64, 64, 20, 64, 64, 64);
-      fade.addColorStop(0, '#fff');
-      fade.addColorStop(0.65, '#888');
-      fade.addColorStop(1, '#000');
-      context.fillStyle = fade;
-      context.fillRect(0, 0, 128, 128);
-    }
-    const alpha = new THREE.CanvasTexture(fadeCanvas);
-    this.textures.add(alpha);
-    this.groundMaterial.alphaMap = alpha;
-    this.groundMaterial.depthWrite = false;
-    const lawn = this.mesh(new THREE.CircleGeometry(5.5, 80), this.groundMaterial);
+    const grass = meadowTexture(); this.textures.add(grass);
+    this.groundMaterial.map = grass;
+    // Ground extends beyond the playable pen so the follow camera never exposes
+    // a blank backdrop while walking toward an edge.
+    const lawn = this.mesh(new THREE.PlaneGeometry(24, 24), this.groundMaterial);
     lawn.rotation.x = -Math.PI / 2;
     lawn.position.y = 0.001;
     lawn.receiveShadow = true;
@@ -513,7 +514,7 @@ export class Playground {
     const width = Math.max(1, this.canvas.clientWidth);
     const height = Math.max(1, this.canvas.clientHeight);
     const aspect = width / height;
-    const halfHeight = Math.max(4.15, 5.6 / aspect);
+    const halfHeight = Math.max(3.5, 4.4 / aspect);
     this.camera.left = -halfHeight * aspect;
     this.camera.right = halfHeight * aspect;
     this.camera.top = halfHeight;
@@ -616,6 +617,7 @@ export class Playground {
       // compass target, so the pet never swings sideways relative to the view.
       this.camera.position.set(...followingCamera(followedPet.body.rotation.y, x, z));
       this.camera.lookAt(x, 0, z);
+      this.updateFootprints(followedPet, now);
     }
     const local = this.snapshot?.players.find((player) => player.id === this.localPlayerId);
     this.target.visible = this.enabled && Boolean(local?.connected)
@@ -634,6 +636,24 @@ export class Playground {
     this.renderer.render(this.scene, this.camera);
     this.refreshAnimation();
   };
+
+  private updateFootprints(pet: PetVisual, now: number): void {
+    const position = pet.root.position;
+    const distance = this.trailPosition?.distanceTo(position) ?? 0;
+    if (!this.trailPosition || distance > 1.5) this.trailPosition = position.clone();
+    else if (distance >= 0.22) {
+      const footprint = this.footprints[this.footprintIndex % this.footprints.length]!;
+      const side = this.footprintIndex++ % 2 ? 0.17 : -0.17;
+      footprint.mesh.position.set(position.x + Math.cos(pet.yaw) * side, 0.015, position.z - Math.sin(pet.yaw) * side);
+      footprint.mesh.rotation.set(-Math.PI / 2, 0, -pet.yaw + Math.PI);
+      footprint.born = now; this.trailPosition.copy(position);
+    }
+    for (const footprint of this.footprints) {
+      const age = (now - footprint.born) / 1000;
+      footprint.mesh.visible = age < 6;
+      footprint.mesh.material.opacity = Math.max(0, 0.65 * (1 - age / 6));
+    }
+  }
 
   private animatePet(pet: PetVisual, player: PlayPlayer | undefined, delta: number, seconds: number, serverTime: number, reducedMotion: boolean): void {
     let speed = 0;
@@ -673,7 +693,7 @@ export class Playground {
         tilt += Math.sin(progress * Math.PI * 6) * 0.055;
       }
     }
-    pet.body.position.y = lift + (reducedMotion ? 0 : Math.sin(pet.distance / 36 * Math.PI * 4) * 0.014 * pet.gaitStrength);
+    pet.body.position.y = lift + (reducedMotion ? 0 : Math.abs(Math.sin(pet.distance / 36 * Math.PI * 2)) * 0.07 * pet.gaitStrength);
     pet.body.rotation.set(0, yaw, tilt * 0.25);
     for (const head of pet.heads) head.set(tilt, bow);
     for (const gait of pet.gaits) gait.set(pet.distance, pet.gaitStrength);

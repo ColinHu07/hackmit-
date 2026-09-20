@@ -3,6 +3,7 @@ import type { LocationFix } from './LocationDiscovery';
 export interface WalkingPose { x: number; z: number; yaw: number }
 export const WALK_SCALE = 0.2; // One real meter is 0.2 world units; this is a scaled world.
 export const STEP_METERS = 0.7; // Approximate stride for responsive gameplay, not measured distance.
+export const STEP_MOVEMENT_GAIN = 2.5; // Exaggerate steps so walking reads clearly on a small screen.
 export function headingToYaw(degrees: number): number { return Math.PI - degrees * Math.PI / 180; }
 export function localMeters(from: LocationFix, to: LocationFix): { east: number; north: number } {
   let longitude = to.longitude - from.longitude;
@@ -35,7 +36,7 @@ export class WalkingTracker {
   }
   steps(count: number): boolean {
     if (!this.stepTracking || !Number.isInteger(count) || count < 1 || count > 2) return false;
-    const distance = count * STEP_METERS * WALK_SCALE;
+    const distance = count * STEP_METERS * WALK_SCALE * STEP_MOVEMENT_GAIN;
     this.translate(Math.sin(this.pose.yaw) * distance, Math.cos(this.pose.yaw) * distance);
     return true;
   }
