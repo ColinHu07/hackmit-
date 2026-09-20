@@ -9,7 +9,7 @@ import { createStaticWebHandler } from './static-web.mjs';
 import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
 import { createPetStore } from './pet-store.mjs';
 import {
-  PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES,
+  PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES, PLAY_WORLD_LIMIT,
   PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
 } from '../shared/play-protocol.mjs';
 
@@ -122,7 +122,7 @@ export function createPlayServer(options = {}) {
           if (!cors(request, response)) return writeJson(response, 403, { error: 'Inventory access is not allowed from this site.' });
           const input = await readJson(request, 20_000);
           return writeJson(response, 200, petStore.feed(input?.playerToken, input?.food));
-        } catch (cause) { return writeJson(response, cause.code === 'food_empty' ? 409 : 400, { error: cause.message }); }
+        } catch (cause) { return writeJson(response, cause.code === 'food_empty' ? 409 : cause.code === 'treat_cooldown' ? 429 : 400, { error: cause.message, ...(cause.retryAfterMs ? { retryAfterMs: cause.retryAfterMs } : {}) }); }
       })();
       return;
     }
@@ -190,7 +190,7 @@ export function createPlayServer(options = {}) {
   function fail(ws, code, message) { send(ws, { type: 'error', code, message }); }
   function snapshot(room, now = Date.now()) {
     return {
-      roomCode: room.code, serverTime: now,
+      roomCode: room.code, serverTime: now, worldLimit: PLAY_WORLD_LIMIT,
       players: [...room.players.values()].sort((a, b) => a.slot - b.slot).map(player => ({
         id: player.id, name: player.name, slot: player.slot,
         x: player.x, z: player.z, targetX: player.targetX, targetZ: player.targetZ,

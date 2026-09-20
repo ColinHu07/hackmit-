@@ -31,6 +31,7 @@ export interface PetSurvival {
   survivalHours: number;
   inventory: Record<string, number>;
   updatedAt: number;
+  treatCooldownMs: number;
 }
 
 /** Progress belongs to a player, not to the browser that happens to be open. */

@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 
 const HOUR = 3_600_000;
+const TREAT_COOLDOWN_MS = 15_000;
 const clamp = value => Math.max(0, Math.min(100, value));
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
 const invalid = message => { const error = new Error(message); error.code = 'invalid_pet_state'; return error; };
@@ -16,6 +17,7 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
       token_hash TEXT PRIMARY KEY, name TEXT NOT NULL, points INTEGER NOT NULL DEFAULT 0,
       health REAL NOT NULL DEFAULT 100, hunger REAL NOT NULL DEFAULT 78, happiness REAL NOT NULL DEFAULT 70,
       survival_hours INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
+      , last_feed_at INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS food_inventory (
       token_hash TEXT NOT NULL REFERENCES pets(token_hash) ON DELETE CASCADE,
@@ -29,6 +31,7 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
   `);
   const get = (sql, ...args) => db.prepare(sql).get(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
+  if (!get('SELECT 1 FROM pragma_table_info(?) WHERE name = ?', 'pets', 'last_feed_at')) db.exec('ALTER TABLE pets ADD COLUMN last_feed_at INTEGER NOT NULL DEFAULT 0');
   const foodTypes = ['berry', 'kibble', 'treat'];
   function advance(token) {
     const hash = tokenHash(token);
@@ -51,7 +54,7 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
     const row = advance(token);
     if (!row) return null;
     const inventory = Object.fromEntries(foodTypes.map(food => [food, get('SELECT quantity FROM food_inventory WHERE token_hash = ? AND food = ?', row.token_hash, food)?.quantity ?? 0]));
-    return { points: row.points, health: Math.round(row.health), hunger: Math.round(row.hunger), happiness: Math.round(row.happiness), survivalHours: row.survival_hours, inventory, updatedAt: row.updated_at };
+    return { points: row.points, health: Math.round(row.health), hunger: Math.round(row.hunger), happiness: Math.round(row.happiness), survivalHours: row.survival_hours, inventory, treatCooldownMs: Math.max(0, TREAT_COOLDOWN_MS - (now() - row.last_feed_at)), updatedAt: row.updated_at };
   }
   function ensure(token, name) {
     if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) throw invalid('Invalid pet credential.');
@@ -84,12 +87,15 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
     const hash = tokenHash(token);
     advance(token);
     return db.transaction(() => {
+      const cooldown = get('SELECT last_feed_at FROM pets WHERE token_hash = ?', hash);
+      const remaining = TREAT_COOLDOWN_MS - (now() - cooldown.last_feed_at);
+      if (remaining > 0) { const error = new Error(`Treat is cooling down for ${Math.ceil(remaining / 1000)} seconds.`); error.code = 'treat_cooldown'; error.retryAfterMs = remaining; throw error; }
       const item = get('SELECT quantity FROM food_inventory WHERE token_hash = ? AND food = ?', hash, food);
       if (!item || item.quantity < 1) { const error = new Error(`No ${food} left.`); error.code = 'food_empty'; throw error; }
       const effects = { berry: { hunger: 18, happiness: 2, health: 1, points: 4 }, kibble: { hunger: 30, happiness: 4, health: 3, points: 7 }, treat: { hunger: 10, happiness: 10, health: 5, points: 10 } }[food];
       run('UPDATE food_inventory SET quantity = quantity - 1 WHERE token_hash = ? AND food = ?', hash, food);
       const current = get('SELECT health, hunger, happiness FROM pets WHERE token_hash = ?', hash);
-      run('UPDATE pets SET health = ?, hunger = ?, happiness = ?, points = points + ? WHERE token_hash = ?', clamp(current.health + effects.health), clamp(current.hunger + effects.hunger), clamp(current.happiness + effects.happiness), effects.points, hash);
+      run('UPDATE pets SET health = ?, hunger = ?, happiness = ?, points = points + ?, last_feed_at = ? WHERE token_hash = ?', clamp(current.health + effects.health), clamp(current.hunger + effects.hunger), clamp(current.happiness + effects.happiness), effects.points, now(), hash);
       run('INSERT INTO point_events VALUES (?, ?, ?, ?, ?)', randomUUID(), hash, effects.points, `feed_${food}`, now());
       return profile(token);
     })();

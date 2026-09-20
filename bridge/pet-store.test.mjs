@@ -31,10 +31,13 @@ test('food inventory and survival points persist across store restarts', () => {
 });
 
 test('feeding refuses empty inventory instead of creating food', () => {
-  const store = createPetStore(':memory:');
+  let clock = 1_800_000_000_000;
+  const store = createPetStore(':memory:', () => clock);
   const token = 'b'.repeat(48);
   store.ensure(token, 'Blair');
   store.feed(token, 'treat');
+  assert.throws(() => store.feed(token, 'treat'), error => error.code === 'treat_cooldown');
+  clock += 15_000;
   assert.throws(() => store.feed(token, 'treat'), error => error.code === 'food_empty');
   store.close();
 });

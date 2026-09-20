@@ -92,7 +92,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
       <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><aside class="status-effects" aria-label="Pet status effects"><span class="status-effects-title">PET STATUS</span><div class="status-effect"><span class="status-effect-icon">${icon('heart')}</span><span><strong>Happiness</strong><small id="effect-mood">70% · Content</small></span></div><div class="status-effect"><span class="status-effect-icon">${icon('leaf')}</span><span><strong>Local sky</strong><small id="effect-weather">Weather unavailable</small></span></div><div class="status-effect" id="effect-bond-row" hidden><span class="status-effect-icon">${icon('people')}</span><span><strong>Bond</strong><small id="effect-bond">0 shared moments</small></span></div></aside><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
       <div class="mood-card"><div><strong>Your pet’s happiness</strong><span id="mood-label"></span></div><meter id="mood-meter" min="0" max="100" value="70" aria-label="Pet happiness"></meter><p id="mood-note">Complete a quest together for +12 happiness. Slowly drifts down between adventures.</p></div>
-      <div class="survival-card" id="survival-card"><div><strong>Pet care</strong><span id="survival-points">0 points</span></div><p id="survival-stats">Connect to the server to load your pet’s health.</p><p id="food-inventory">Food: loading…</p></div>
+      <div class="survival-card" id="survival-card"><div><strong>Pet care</strong><span id="survival-points">0 points</span></div><meter id="health-meter" min="0" max="100" value="100" aria-label="Pet health"></meter><p id="survival-stats">Connect to the server to load your pet’s health.</p><p id="food-inventory">Food: loading…</p><button id="health-treat" class="health-treat" data-action="feed" type="button">Give a treat</button><small id="treat-cooldown" class="treat-cooldown" role="status"></small></div>
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
         <div class="moment-line"><span id="scene-hint">Tap the ground to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
@@ -311,7 +311,9 @@ function updateControls(): void {
   const connected = connection === 'connected';
   playground?.setEnabled(ready && (nearbyActive ? locationActive && discoveryConnected : connected));
   document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
-    button.disabled = !connected || !!local?.action || ((button.dataset.action === 'play' || button.dataset.action === 'dap') && !near);
+    const survival = local?.survival;
+    const unavailableTreat = button.dataset.action === 'feed' && (!survival || (survival.inventory.berry ?? 0) < 1 || survival.treatCooldownMs > 0);
+    button.disabled = !connected || !!local?.action || unavailableTreat || ((button.dataset.action === 'play' || button.dataset.action === 'dap') && !near);
   });
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
   el<HTMLButtonElement>('ready-squad').disabled = !connected || !local || (snapshot?.players.filter(p => p.connected).every(p => snapshot?.quests[p.id]?.squadCircle) ?? false) || (snapshot?.players.filter(player => player.connected).length ?? 0) < 3;
@@ -468,9 +470,14 @@ const client = new RoomClient({
     const survivalPlayer = next.players.find(player => player.id === member.playerId);
     const survival = survivalPlayer?.survival;
     if (survival) {
+      el<HTMLMeterElement>('health-meter').value = survival.health;
       el('survival-points').textContent = `${survival.points} points · ${survival.survivalHours}h alive`;
       el('survival-stats').textContent = `Health ${survival.health}% · Hunger ${survival.hunger}% · Happiness ${survival.happiness}%`;
       el('food-inventory').textContent = `Food: ${Object.entries(survival.inventory).map(([food, quantity]) => `${food} ${quantity}`).join(' · ')}`;
+      const cooldown = Math.ceil(survival.treatCooldownMs / 1000);
+      const berries = survival.inventory.berry ?? 0;
+      el('treat-cooldown').textContent = cooldown > 0 ? `Treat ready in ${cooldown}s` : berries > 0 ? 'Treat ready' : 'Out of berries';
+      el<HTMLButtonElement>('health-treat').textContent = cooldown > 0 ? `Treat · ${cooldown}s` : 'Give a treat';
     }
     el('effect-bond').textContent = `${next.bond} shared ${next.bond === 1 ? 'moment' : 'moments'}`;
     el('effect-bond-row').hidden = false;
