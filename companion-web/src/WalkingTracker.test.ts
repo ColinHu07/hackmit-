@@ -36,12 +36,13 @@ describe('native walking in a north-aligned meadow', () => {
     expect(tracker.location(fix(103, 0, 5000), 5000).moved).toBe(true);
     expect(tracker.pose.z).toBeCloseTo(-0.6);
   });
-  it('reanchors after a pause, clamps board edges, and recenters', () => {
+  it('automatically rebases at the scene edge and continues walking', () => {
     const tracker = new WalkingTracker(); tracker.reset(2.8, 0);
     tracker.location(fix(0, 0), 1000);
     const edge = tracker.location(fix(0, 5, 4000), 4000);
-    expect(edge.message).toContain('edge'); expect(tracker.pose.x).toBe(3);
-    tracker.location(fix(0, 100, 30000), 30000); expect(tracker.pose.x).toBe(3);
+    expect(edge.message).toContain('automatically'); expect(tracker.pose.x).toBe(0);
+    tracker.location(fix(0, 10, 7000), 7000); expect(tracker.pose.x).toBeCloseTo(1);
+    tracker.location(fix(0, 100, 30000), 30000); expect(tracker.pose.x).toBeCloseTo(1);
     tracker.reset(); tracker.location(fix(0, 100, 31000), 31000);
     expect(tracker.pose.x).toBe(0);
   });

@@ -174,7 +174,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
                 emit(["type": "recording", "message": "Allow Camera and Microphone in iPhone Settings → Bondimals to record a clip."]); return
             }
             guard UIApplication.shared.applicationState == .active, presentedViewController == nil else { cameraBusy = false; return }
-            // Pausing is explicit in the UI; dismissal does not silently resume discovery.
+            // Pause sensors while recording; resume the automatic experience after dismissal.
             backgrounded()
             let picker = UIImagePickerController()
             picker.sourceType = .camera
@@ -188,11 +188,11 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         }
     }
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-        picker.dismiss(animated: true); cameraBusy = false
+        picker.dismiss(animated: true) { self.emit(["type": "active"]) }; cameraBusy = false
         emit(["type": "recording", "message": "Recording canceled. Nothing was saved."])
     }
     func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-        defer { picker.dismiss(animated: true); cameraBusy = false }
+        defer { picker.dismiss(animated: true) { self.emit(["type": "active"]) }; cameraBusy = false }
         guard let source = info[.mediaURL] as? URL else { return }
         do {
             try FileManager.default.createDirectory(at: clipsDirectory, withIntermediateDirectories: true)

@@ -1,7 +1,7 @@
 import type { LocationFix } from './LocationDiscovery';
 
 export interface WalkingPose { x: number; z: number; yaw: number }
-export const WALK_SCALE = 0.2; // One real meter is 0.2 meadow units; this is a scaled board.
+export const WALK_SCALE = 0.2; // One real meter is 0.2 world units; this is a scaled world.
 export function headingToYaw(degrees: number): number { return Math.PI - degrees * Math.PI / 180; }
 export function localMeters(from: LocationFix, to: LocationFix): { east: number; north: number } {
   let longitude = to.longitude - from.longitude;
@@ -33,7 +33,7 @@ export class WalkingTracker {
     if (fix.accuracy > 10) { this.anchor = null; return waiting(`GPS ±${Math.ceil(fix.accuracy)} m. Move somewhere with a clearer sky to walk with your pet.`); }
     const previous = this.anchor;
     if (!previous || fix.timestamp - previous.timestamp > 20_000) {
-      this.anchor = fix; return waiting('Ready to walk. North is toward N on the meadow.');
+      this.anchor = fix; return waiting('Ready to walk. North is toward N in your world.');
     }
     const { east, north } = localMeters(previous, fix);
     const distance = Math.hypot(east, north);
@@ -43,9 +43,11 @@ export class WalkingTracker {
     }
     this.anchor = fix;
     const x = this.pose.x + east * WALK_SCALE, z = this.pose.z - north * WALK_SCALE;
-    this.pose = { ...this.pose, x: Math.max(-3, Math.min(3, x)), z: Math.max(-3, Math.min(3, z)) };
-    return { moved: true, message: Math.abs(x) > 3 || Math.abs(z) > 3
-      ? 'At the meadow edge. Tap Recenter to keep exploring.'
-      : `Walking with you · GPS ±${Math.ceil(fix.accuracy)} m · 1 m = 0.2 meadow units.` };
+    // Keep the finite shared scene usable without a manual recenter control.
+    const rebase = Math.abs(x) > 3 || Math.abs(z) > 3;
+    this.pose = { ...this.pose, x: rebase ? 0 : x, z: rebase ? 0 : z };
+    return { moved: true, message: rebase
+      ? 'Your view adjusted automatically. Keep exploring.'
+      : `Walking with you · GPS ±${Math.ceil(fix.accuracy)} m.` };
   }
 }

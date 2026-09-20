@@ -93,11 +93,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <div id="native-tools" class="native-tools" hidden>
         <div class="native-walking-heading"><strong>Walk with your pet</strong><span id="compass-reading">N ↑ · compass off</span></div>
-        <p id="walking-status" role="status">Use your iPhone’s location and compass. Movement is scaled to your world.</p>
-        <div class="native-buttons"><button id="walk-toggle">Start walking</button><button id="walk-recenter" disabled>Recenter</button></div>
+        <p id="walking-status" role="status">Your pet follows your steps and the direction you face automatically.</p>
+      </div>
+      <section id="quest-tools" class="native-tools quest-tools" aria-label="Quest clips" hidden>
+        <div class="native-walking-heading"><strong>Quest clips</strong></div>
+        <p>Save a moment from your adventure.</p>
         <div class="native-buttons"><button id="record-clip">Record quest clip</button><button id="review-clip">Review clip</button><button id="delete-clip">Delete clip</button></div>
         <p id="recording-status" role="status">Record up to 10 seconds. AI verification comes later.</p>
-      </div>
+      </section>
       <div class="meadow-footer"><span>01 / THE FIRST HELLO</span><span>A WORLD WE MAKE TOGETHER</span></div>
     </section>
   </main>
@@ -166,7 +169,7 @@ function resumeAutomaticNearby(): void {
   if (!ready || !autoNearby || membership || connection === 'connecting' || connection === 'reconnecting' || mode !== 'nearby' || document.hidden || (nearbyActive && locationActive)) return;
   try { startNearby(); } catch (cause) { error(cause instanceof Error ? cause.message : 'Check your server settings.'); }
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) resumeAutomaticNearby(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { resumeAutomaticNearby(); startWalking(); } });
 
 function toast(message: string): void {
   clearTimeout(toastTimer);
@@ -229,6 +232,7 @@ function setConnection(state: ConnectionState): void {
   el<HTMLButtonElement>('server-settings').disabled = !!membership || nearbyActive || state === 'connecting';
   updateEntry();
   updateControls();
+  if (state === 'connected') startWalking();
 }
 function renderRoster(): void {
   if (!snapshot || !membership) return;
@@ -312,6 +316,7 @@ const client = new RoomClient({
       el('action-notice').textContent = next.notice;
     }
     playground?.update(next, member.playerId);
+    if (entering) startWalking();
     updateControls();
     if (entering) {
       el('error-message').hidden = true;
@@ -462,10 +467,10 @@ function startNearby(): void {
   nearbyClient.start(serverUrl, nameInput.value.trim());
   // iOS/browser still owns the permission prompt; discovery is on by default.
   if (locationActive) locationTracker.start();
+  startWalking();
   renderNearby();
 }
 function stopNearby(): void {
-  stopWalking();
   nearbyActive = false;
   locationActive = false;
   locationTracker.stop();
@@ -531,6 +536,7 @@ el('leave-button').addEventListener('click', () => {
   el('scene-caption').textContent = 'Small paws. Big adventures.';
   updateEntry();
   resumeAutomaticNearby();
+  startWalking();
 });
 document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
   button.addEventListener('click', () => {
@@ -638,11 +644,19 @@ function stopWalking(): void {
   walking = false;
   nativeCommand('stopLocation', { purpose: 'walking' });
   playground?.setWalkingPose(null);
-  el('walk-toggle').textContent = 'Start walking';
-  el<HTMLButtonElement>('walk-recenter').disabled = true;
-  el('walking-status').textContent = 'Walking paused. Tap Start walking to resume.';
+  el('walking-status').textContent = 'Walking pauses while you’re away and resumes when you return.';
   el('compass-reading').textContent = 'N ↑ · compass off';
   updateControls();
+}
+function startWalking(): void {
+  if (!isNativePhone() || !ready || walking || document.hidden) return;
+  walking = true;
+  const local = snapshot?.players.find(p => p.id === membership?.playerId);
+  walkingTracker.reset(local?.x ?? 0, local?.z ?? 0);
+  el('walking-status').textContent = 'Finding your position and north…';
+  publishWalking();
+  updateControls();
+  nativeCommand('startLocation', { purpose: 'walking' });
 }
 function publishWalking(moved = false): void {
   if (!walking) return;
@@ -654,28 +668,12 @@ function publishWalking(moved = false): void {
 }
 if (isNativePhone()) {
   el('native-tools').hidden = false;
-  el('walk-toggle').addEventListener('click', () => {
-    if (walking) { stopWalking(); return; }
-    walking = true;
-    const local = snapshot?.players.find(p => p.id === membership?.playerId);
-    walkingTracker.reset(local?.x ?? 0, local?.z ?? 0);
-    el('walk-toggle').textContent = 'Pause walking';
-    el<HTMLButtonElement>('walk-recenter').disabled = false;
-    el('walking-status').textContent = 'Finding your position and north…';
-    publishWalking();
-    updateControls();
-    nativeCommand('startLocation', { purpose: 'walking' });
-  });
-  el('walk-recenter').addEventListener('click', () => {
-    if (!walking) return;
-    walkingTracker.reset(); publishWalking(true);
-    el('walking-status').textContent = 'Recentered. Finding a fresh starting position…';
-  });
+  el('quest-tools').hidden = false;
   for (const [id, command] of [['record-clip', 'recordClip'], ['review-clip', 'reviewClip'], ['delete-clip', 'deleteClip']] as const) {
     el(id).addEventListener('click', () => nativeCommand(command));
   }
   onNativeEvent(event => {
-    if (event.type === 'active') resumeAutomaticNearby();
+    if (event.type === 'active') { resumeAutomaticNearby(); startWalking(); }
     const weatherFix = nativeFix(event);
     if (weatherFix) void weather.update(weatherFix);
     if (event.type === 'recording') el('recording-status').textContent = event.message ?? '';
@@ -702,3 +700,4 @@ if (isNativePhone()) {
 }
 
 resumeAutomaticNearby();
+startWalking();
