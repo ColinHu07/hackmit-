@@ -106,6 +106,7 @@ final class CameraBridge: ObservableObject {
             quests.$cameraReady.map { _ in () }.eraseToAnyPublisher(),
             quests.$cameraState.map { _ in () }.eraseToAnyPublisher(),
             quests.$cameraMessage.map { _ in () }.eraseToAnyPublisher(),
+            quests.$lastCaptureAt.map { _ in () }.eraseToAnyPublisher(),
         ]).debounce(for: .milliseconds(100), scheduler: RunLoop.main)
             .sink { [weak self] in self?.writeDiagnostics() }.store(in: &diagnosticObservers)
         $phoneFrame.map { $0 != nil }.filter { $0 }
@@ -331,6 +332,9 @@ final class CameraBridge: ObservableObject {
             paired: quests.paired, running: running,
             cameraReady: quests.cameraReady, cameraState: quests.cameraState.rawValue,
             cameraMessage: CameraDiagnostics.redact(quests.cameraMessage, secrets: secrets),
+            lastCaptureStage: quests.lastCaptureStage,
+            lastCaptureOutcome: CameraDiagnostics.redact(quests.lastCaptureOutcome, secrets: secrets),
+            lastCaptureAt: quests.lastCaptureAt.map { formatter.string(from: $0) },
             lastFrameReceived: lastCameraFrameAt != nil,
             lastFrameReceivedAt: lastCameraFrameAt.map { formatter.string(from: $0) },
             registrationState: wearables.registrationState.description,

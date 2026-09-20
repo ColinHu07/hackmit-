@@ -13,6 +13,9 @@ struct CameraDiagnostics: Encodable {
     let cameraReady: Bool
     let cameraState: String
     let cameraMessage: String
+    let lastCaptureStage: String
+    let lastCaptureOutcome: String
+    let lastCaptureAt: String?
     let lastFrameReceived: Bool
     let lastFrameReceivedAt: String?
     let registrationState: String

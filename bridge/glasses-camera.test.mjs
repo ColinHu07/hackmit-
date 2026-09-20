@@ -97,7 +97,8 @@ test('same authenticated player reconnect recovers private ready evidence while 
   assert.equal(retained.body.command, null);
   assert.equal((await call('capture', { ...first.auth, kind: 'photo', questId: 'touchGrass' })).status, 401);
   assert.equal((await call('status', first.auth)).status, 401);
-  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 409);
+  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 200,
+    'an identical result can be acknowledged during the bounded reconnect grace');
   assert.equal((await call('status', other.auth)).body.paired, false);
   assert.equal((await call('capture', { ...other.auth, kind: 'photo', questId: 'touchGrass' })).status, 409);
   const resumed = await join({ type: 'join', ...first.auth, name: 'Returned player' });
@@ -108,8 +109,8 @@ test('same authenticated player reconnect recovers private ready evidence while 
   assert.equal(resumedStatus.photoDataUrl, IMAGE); assert.equal(resumedStatus.questId, 'touchGrass');
   assert.equal(resumedStatus.kind, 'photo'); assert.equal(typeof resumedStatus.captureAt, 'number');
   assert.equal(resumedStatus.cameraReady, false, 'reconnect requires a fresh camera health report');
-  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 409,
-    'a completed request cannot replace the retained review after reconnect');
+  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 200,
+    'an identical retry acknowledges the retained review after reconnect');
   assert.equal((await call('heartbeat', READY, token)).status, 200);
   const next = await call('capture', { ...resumed.auth, kind: 'photo', questId: 'touchGrass' });
   assert.equal(next.status, 200);
@@ -228,12 +229,115 @@ test('photo completion exposes private review data only, and discard clears it',
   assert.deepEqual(ready, { paired: true, connected: true, requestId, status: 'ready', photoDataUrl: IMAGE,
     questId: 'touchGrass', kind: 'photo', captureAt: ready.captureAt, ...READY_STATUS });
   assert.equal(typeof ready.captureAt, 'number');
-  assert.equal((await call('result', result, token)).status, 409, 'duplicate results cannot replace reviewed evidence');
+  assert.equal((await call('result', result, token)).status, 200, 'identical retries acknowledge reviewed evidence');
   await call('discard', auth);
   assert.deepEqual((await call('status', auth)).body, { paired: true, connected: true, requestId: null, status: 'idle', ...READY_STATUS });
   const released = (await call('command', null, token)).body.command;
   assert.equal(released.kind, 'cancel'); assert.equal(released.requestId, requestId);
   assert.notEqual(released.id, requestId, 'discard also clears the completed preview on the native phone');
+});
+
+test('a lost result response can be retried without storing twice, grading, or extending evidence expiry', async t => {
+  let verifications = 0;
+  const evidenceSize = Buffer.byteLength(JSON.stringify({ photoDataUrl: IMAGE }));
+  const { app, join, call, pair, advance } = await setup(t, {
+    glassesCamera: { maxEvidenceBytes: evidenceSize, evidenceTtlMs: 1000 },
+    photoVerifier: { configured: true, async verify() { verifications++; } },
+  });
+  const { auth } = await join();
+  const token = await pair(auth);
+  const { requestId } = (await call('capture', { ...auth, kind: 'photo', questId: 'touchGrass' })).body;
+  const result = { requestId, status: 'ready', photoDataUrl: IMAGE };
+  // Commit the result normally, then drop the HTTP reply before the phone sees it.
+  app.server.prependOnceListener('request', (request, response) => {
+    assert.equal(request.url, '/glasses/result');
+    response.end = () => { response.destroy(); return response; };
+  });
+  await assert.rejects(call('result', result, token), /fetch failed|socket/i);
+  const beforeRetry = (await call('status', auth)).body;
+  assert.equal(beforeRetry.status, 'ready');
+  assert.equal(beforeRetry.photoDataUrl, IMAGE);
+  advance(900);
+  // Canonical evidence ignores JSON property order and permits matching metadata.
+  const retried = await call('result', { photoDataUrl: IMAGE, kind: 'photo', questId: 'touchGrass',
+    status: 'ready', requestId }, token);
+  assert.equal(retried.status, 200, 'a full storage budget must not reject an identical retry');
+  assert.deepEqual(retried.body, { ok: true });
+  assert.deepEqual((await call('status', auth)).body, beforeRetry);
+  assert.deepEqual((await call('command', null, token)).body, { command: null });
+  assert.equal(verifications, 0, 'upload acknowledgements never submit a quest');
+  advance(100);
+  assert.equal((await call('result', result, token)).status, 409,
+    'retry must not extend the original evidence expiry');
+  const expired = (await call('status', auth)).body;
+  assert.equal(expired.status, 'error'); assert.equal(expired.photoDataUrl, undefined);
+});
+
+test('identical result retries do not extend the camera session idle expiry', async t => {
+  const { join, call, pair, advance } = await setup(t, {
+    glassesCamera: { idleTtlMs: 1000, evidenceTtlMs: 5000 },
+  });
+  const { auth } = await join();
+  const token = await pair(auth);
+  const { requestId } = (await call('capture', { ...auth, kind: 'photo', questId: 'touchGrass' })).body;
+  const result = { requestId, status: 'ready', photoDataUrl: IMAGE };
+  assert.equal((await call('result', result, token)).status, 200);
+  advance(900);
+  assert.equal((await call('result', result, token)).status, 200);
+  advance(100);
+  assert.equal((await call('result', result, token)).status, 401);
+  assert.equal((await call('status', auth)).body.paired, false);
+});
+
+test('ready clip retries reject changed evidence, quest, kind, request, and camera without changing review', async t => {
+  const { join, call, pair, advance } = await setup(t);
+  const a = await join(), b = await join();
+  const aToken = await pair(a.auth), bToken = await pair(b.auth);
+  const { requestId } = (await call('capture', { ...a.auth, kind: 'clip', questId: 'dapHandshake' })).body;
+  const secondImage = 'data:image/jpeg;base64,/9j/';
+  const result = { requestId, status: 'ready', frames: [IMAGE, secondImage, IMAGE], durationSeconds: 6 };
+  assert.equal((await call('result', result, aToken)).status, 200);
+  const ready = (await call('status', a.auth)).body;
+  advance(1000);
+  assert.equal((await call('result', result, aToken)).status, 200);
+  for (const changed of [
+    { frames: [secondImage, IMAGE, IMAGE] },
+    { frames: [IMAGE, IMAGE, IMAGE] },
+    { durationSeconds: 7 },
+    { questId: 'touchGrass' },
+    { kind: 'photo' },
+    { requestId: 'different-request' },
+    { status: 'error', error: 'late camera failure' },
+  ]) {
+    assert.equal((await call('result', { ...result, ...changed }, aToken)).status, 409);
+  }
+  assert.equal((await call('result', result, bToken)).status, 409);
+  assert.equal((await call('result', result, 'a'.repeat(48))).status, 401);
+  assert.deepEqual((await call('status', a.auth)).body, ready);
+  assert.equal((await call('status', b.auth)).body.requestId, null);
+});
+
+test('ready upload retries cannot revive discarded or replaced captures or cross a new pairing', async t => {
+  const { join, call, pair, advance } = await setup(t);
+  const { auth } = await join();
+  const token = await pair(auth);
+  const capture = { ...auth, kind: 'photo', questId: 'touchGrass' };
+  const result = { requestId: (await call('capture', capture)).body.requestId,
+    status: 'ready', photoDataUrl: IMAGE };
+  assert.equal((await call('result', result, token)).status, 200);
+  await call('discard', auth);
+  assert.equal((await call('result', result, token)).status, 409);
+  const nextId = (await call('capture', capture)).body.requestId;
+  assert.notEqual(nextId, result.requestId);
+  assert.equal((await call('result', result, token)).status, 409);
+  assert.equal((await call('command', null, token)).body.command.id, nextId);
+  advance(1000);
+  const nextResult = { ...result, requestId: nextId };
+  assert.equal((await call('result', nextResult, token)).status, 200);
+  const newToken = await pair(auth);
+  assert.equal((await call('result', nextResult, token)).status, 401);
+  assert.equal((await call('result', nextResult, newToken)).status, 409);
+  assert.equal((await call('status', auth)).body.status, 'idle');
 });
 
 test('clip requests validate sequence evidence and reject mismatched or oversized results', async t => {

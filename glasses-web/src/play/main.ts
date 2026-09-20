@@ -5,8 +5,9 @@ import { beaverMoodFace } from '../../../companion-web/src/BeaverMoodFace';
 import { evidenceReadiness } from '../../../companion-web/src/EvidenceReadiness';
 import { GlassesMotion } from './GlassesMotion';
 import { GlassesPosePublisher } from './GlassesPosePublisher';
-import { GlassesCamera, type CaptureStatus } from './GlassesCamera';
+import { GlassesCamera, isCameraConnectionError, type CaptureStatus } from './GlassesCamera';
 import { cameraAvailability, recordingPreview } from './CameraPresentation';
+import { recoverCapture } from './CaptureRecovery';
 import type { EvidenceQuestId, PetActionKind } from '../../../shared/play-protocol';
 
 const params = new URLSearchParams(location.search);
@@ -34,8 +35,7 @@ let capture: CaptureStatus | null = null;
 let captureQuest: EvidenceQuestId | null = null;
 let cameraPoll: ReturnType<typeof setTimeout> | undefined;
 let recorderPreviewTimer: ReturnType<typeof setTimeout> | undefined;
-let cameraRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
-let recoveringCamera = false;
+let cameraRecoveryRun: { generation: number; session: string; showEmpty: boolean } | null = null;
 let cameraGeneration = 0;
 let cameraBusy = false;
 let previousMember = '';
@@ -50,7 +50,7 @@ let walkingWanted = false;
 let pageInCache = false;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header class="glass-header"><span class="brand">kith<small>Meadow 5</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
+  <header class="glass-header"><span class="brand">kith<small>Meadow 6</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
   <canvas id="playground" aria-label="Your shared beaver playground"></canvas>
   <div id="tracking-status" class="glass-status">Loading your beaver…</div><div id="notice" class="glass-notice" role="status"></div>
   <nav class="action-rail" aria-label="Game actions"><button id="walk" type="button" disabled>Walk</button><button data-action="wave" type="button" disabled>Wave</button><button data-action="feed" id="feed" type="button" disabled>Berry</button><button id="quests" type="button" disabled>Quests</button><button id="more" type="button">More</button></nav>
@@ -282,25 +282,36 @@ async function discardActiveCapture(): Promise<void> {
   finally { captureSession = null; cameraBusy = false; }
 }
 function suspendCameraWork(): void {
-  cameraGeneration++; clearTimeout(cameraPoll); clearTimeout(recorderPreviewTimer); clearTimeout(cameraRecoveryTimer);
+  cameraGeneration++; clearTimeout(cameraPoll); clearTimeout(recorderPreviewTimer);
   // DAT can temporarily take the glasses display away. The explicit capture
   // continues on the phone; only a user's Cancel/Discard should erase it.
 }
 function resumeCameraPanel(): void {
   void recoverCameraCapture();
 }
+function cameraFeedback(message: string): void {
+  const status = currentPanel && el('panel-status');
+  if (status) status.textContent = message;
+  else tell(message);
+}
 async function recoverCameraCapture(showEmpty = false): Promise<void> {
-  if (document.hidden || connection !== 'connected') return;
-  if (cameraBusy || recoveringCamera) {
-    clearTimeout(cameraRecoveryTimer);
-    cameraRecoveryTimer = setTimeout(() => { void recoverCameraCapture(showEmpty); }, 500);
+  if (showEmpty) cameraFeedback('Checking your recent capture…');
+  if (document.hidden) return;
+  const session = camera.sessionKey, generation = cameraGeneration;
+  if (cameraRecoveryRun?.session === session && cameraRecoveryRun.generation === generation) {
+    cameraRecoveryRun.showEmpty ||= showEmpty;
     return;
   }
-  recoveringCamera = true;
-  const session = camera.sessionKey, generation = cameraGeneration;
+  const run = { session, generation, showEmpty };
+  cameraRecoveryRun = run;
+  const current = () => !document.hidden && session === camera.sessionKey && generation === cameraGeneration;
   try {
-    const state = await camera.status();
-    if (document.hidden || connection !== 'connected' || session !== camera.sessionKey || generation !== cameraGeneration) return;
+    const state = await recoverCapture(timeout => camera.status(timeout), {
+      isCurrent: current,
+      canRead: () => connection === 'connected' && !cameraBusy,
+      onRetry: () => cameraFeedback('Reconnecting to check your recording… Keep Kith Camera open on your phone.'),
+    });
+    if (!state || !current()) return;
     if (state.questId && state.requestId && state.status === 'ready') {
       captureSession = null; capture = state; captureQuest = state.questId;
       reviewCapture();
@@ -310,17 +321,22 @@ async function recoverCameraCapture(showEmpty = false): Promise<void> {
     } else if (currentPanel === 'capture' || currentPanel === 'review') {
       captureSession = null; capture = null; captureQuest = null;
       questPanel(state.error || 'No saved capture. Choose Photo or Record 6s to try again.');
-    } else if (showEmpty) tell(state.error || 'No saved capture. Open a quest and choose Photo or Record 6s.');
+    } else if (run.showEmpty) cameraFeedback(state.error || 'No saved capture. Open a quest and choose Photo or Record 6s.');
   } catch (error) {
-    if (session === camera.sessionKey && !document.hidden) {
+    if (current()) {
       const message = error instanceof Error ? error.message : 'Could not restore your capture.';
-      if (['capture', 'review'].includes(currentPanel)) el('panel-status').textContent = message;
-      else if (showEmpty) tell(message);
+      if (isCameraConnectionError(error)) {
+        cameraFeedback('Still unable to retrieve the recording. Select Review recent capture to retry when connected.');
+        if (currentPanel === 'capture') {
+          el('retry-capture').hidden = false; el<HTMLButtonElement>('retry-capture').disabled = false;
+          el('recording-clock').textContent = 'Connection paused';
+        }
+      } else if (run.showEmpty || ['capture', 'review'].includes(currentPanel)) cameraFeedback(message);
     }
-  } finally { recoveringCamera = false; }
+  } finally { if (cameraRecoveryRun === run) cameraRecoveryRun = null; }
 }
 function questList(): void {
-  panel('Real-world quests', `<p class="small">Complete quests with your glasses camera.</p><div class="quest-list">${quests.map(quest => button(`${quest.title}<span class="quest-mark">${snapshot?.quests[member?.playerId || '']?.[quest.id] ? '✓' : '→'}</span>`, `quest-${quest.id}`)).join('')}</div>${button('Review recent capture', 'recover-capture')}${button('Raid · calm Mossback', 'raid', !snapshot || snapshot.raid.state === 'defeated')}${button('Back', 'back')}`, 'quests');
+  panel('Real-world quests', `<p id="panel-status" role="status" class="small">Complete quests with your glasses camera.</p><div class="quest-list">${quests.map(quest => button(`${quest.title}<span class="quest-mark">${snapshot?.quests[member?.playerId || '']?.[quest.id] ? '✓' : '→'}</span>`, `quest-${quest.id}`)).join('')}</div>${button('Review recent capture', 'recover-capture')}${button('Raid · calm Mossback', 'raid', !snapshot || snapshot.raid.state === 'defeated')}${button('Back', 'back')}`, 'quests');
   for (const quest of quests) bind(`quest-${quest.id}`, () => { selectedQuest = quest.id; questPanel(); });
   bind('raid', () => { client.readyRaid(); closePanel(); });
   bind('recover-capture', () => recoverCameraCapture(true));
@@ -504,16 +520,19 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
         cameraPoll = setTimeout(() => { void poll(); }, 500);
       } catch (error) {
         if (!current()) return;
-        if (Date.now() - startedAt <= 65_000 && error instanceof TypeError) {
-          el('panel-status').textContent = 'Connection interrupted. Waiting for your saved capture…';
-          cameraPoll = setTimeout(() => { void poll(); }, 1000);
+        if (isCameraConnectionError(error)) {
+          cameraFeedback('Reconnecting to check your recording…');
+          void recoverCameraCapture();
         } else await showFailure(error instanceof Error ? error.message : 'Capture failed.');
       }
     };
     void poll();
   } catch (error) {
     cameraBusy = false;
-    if (current()) await showFailure(error instanceof Error ? error.message : 'Capture failed.');
+    if (current() && isCameraConnectionError(error)) {
+      cameraFeedback('Reconnecting to check your recording…');
+      void recoverCameraCapture();
+    } else if (current()) await showFailure(error instanceof Error ? error.message : 'Capture failed.');
     else if (cancelCaptureRequested) await discardActiveCapture();
   }
 }

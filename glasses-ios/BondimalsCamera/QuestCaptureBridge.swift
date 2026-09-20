@@ -29,6 +29,9 @@ final class QuestCaptureBridge: ObservableObject {
     @Published private(set) var cameraReady = false
     @Published private(set) var cameraState: QuestCameraState = .idle
     @Published private(set) var cameraMessage = "The camera opens only for a requested quest photo or clip."
+    @Published private(set) var lastCaptureStage = "none"
+    @Published private(set) var lastCaptureOutcome = "No quest capture requested yet."
+    @Published private(set) var lastCaptureAt: Date?
 
     var requestPhoto: () -> Bool = { false }
     var prepareCamera: (String) async throws -> Void = { _ in }
@@ -129,6 +132,7 @@ final class QuestCaptureBridge: ObservableObject {
 
     func disconnect(_ message: String = "Camera unpaired. Make a new code in the game to reconnect.") {
         onUnpaired()
+        if capturing, lastCaptureStage != "error" { captureEvent("canceled", message) }
         if let request = activeRequest { Task { _ = await finishCamera(request, false) } }
         QuestCameraCredentials.clear()
         generation += 1
@@ -140,6 +144,12 @@ final class QuestCaptureBridge: ObservableObject {
         cameraToken = nil; endpoint = nil; activeRequest = nil; setupLinkKey = nil
         handledCommands.removeAll(); preview = nil; previewRequest = nil; photoData = nil
         status = message
+    }
+
+    private func captureEvent(_ stage: String, _ message: String) {
+        lastCaptureStage = stage
+        lastCaptureOutcome = CameraDiagnostics.redact(message, secrets: [cameraToken ?? "", pairingCode])
+        lastCaptureAt = Date()
     }
 
     func setForeground(_ active: Bool) {
@@ -256,6 +266,7 @@ final class QuestCaptureBridge: ObservableObject {
         if kind == "cancel" {
             let target = command["requestId"] as? String
             if target == nil || target == activeRequest || target == previewRequest {
+                captureEvent("canceled", "Capture discarded by the game.")
                 if let request = activeRequest { Task { _ = await finishCamera(request, false) } }
                 captureTask?.cancel(); captureTask = nil
                 stopProgress()
@@ -271,6 +282,7 @@ final class QuestCaptureBridge: ObservableObject {
         if let previous = activeRequest { Task { _ = await finishCamera(previous, false) } }
         stopProgress()
         activeRequest = id; previewRequest = id; capturing = true; preview = nil; photoData = nil
+        captureEvent("starting", "Opening the glasses camera for a requested \(kind).")
         let generation = self.generation
         captureTask = Task { [weak self] in
             guard let self else { return }
@@ -286,6 +298,7 @@ final class QuestCaptureBridge: ObservableObject {
                 try await self.prepareCamera(id)
                 try Task.checkCancellation()
                 guard generation == self.generation, self.activeRequest == id else { return }
+                self.captureEvent("capturing", "Glasses camera ready. Capturing the requested \(kind).")
                 var evidence = kind == "photo" ? try await self.capturePhoto() : try await self.captureClip()
                 try Task.checkCancellation()
                 guard generation == self.generation, self.activeRequest == id else { return }
@@ -293,6 +306,7 @@ final class QuestCaptureBridge: ObservableObject {
                     throw BridgeError.message("The camera was interrupted. Keep Kith Camera open and retry.")
                 }
                 self.stopProgress()
+                self.captureEvent("releasing", "Capture completed. Closing the glasses camera before upload.")
                 // Close DAT before upload so the glasses can leave camera mode.
                 // The encoded evidence and phone review thumbnail stay in memory.
                 let released = await self.finishCamera(id, true)
@@ -301,15 +315,26 @@ final class QuestCaptureBridge: ObservableObject {
                 evidence["requestId"] = id
                 evidence["status"] = "ready"
                 self.status = "Captured. Sending the result while the glasses camera closes…"
-                _ = try await self.api("/glasses/result", body: evidence)
+                self.captureEvent("uploading", "Capture completed. Uploading retained evidence; temporary network failures retry for up to twenty seconds.")
+                let retainedEvidence = evidence
+                try await CameraResultUpload.run(isCurrent: {
+                    generation == self.generation && self.activeRequest == id && self.paired
+                }, operation: { timeout in
+                    try Task.checkCancellation()
+                    guard generation == self.generation, self.activeRequest == id, self.paired else { throw CancellationError() }
+                    let acknowledgment = try await self.api("/glasses/result", body: retainedEvidence, timeout: timeout)
+                    guard acknowledgment["ok"] as? Bool == true else { throw URLError(.badServerResponse) }
+                })
                 guard generation == self.generation, self.activeRequest == id, !Task.isCancelled else { return }
                 self.status = released ? "Capture sent. Reopen Kith on your glasses to review it, then choose Submit to Muse." : "Capture sent. Close camera mode in Meta AI, then reopen Kith on your glasses to review and Submit to Muse."
+                self.captureEvent("uploaded", "Game server acknowledged the capture. Reopen Kith on your glasses to review and Submit to Muse.")
             } catch {
                 _ = await self.finishCamera(id, false)
                 guard generation == self.generation, self.activeRequest == id, !Task.isCancelled else { return }
                 self.stopProgress()
                 self.preview = nil
                 self.status = error.localizedDescription
+                self.captureEvent("error", error.localizedDescription)
                 if case QuestHTTPError.rejected(401, _) = error {
                     self.disconnect("Your game session changed. Pair with a new camera code.")
                     return
@@ -468,11 +493,6 @@ final class QuestCaptureBridge: ObservableObject {
         }
         return object
     }
-}
-
-private enum QuestHTTPError: LocalizedError {
-    case rejected(Int, String)
-    var errorDescription: String? { if case .rejected(_, let message) = self { return message }; return nil }
 }
 
 private final class QuestNoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {

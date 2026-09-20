@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GlassesCamera, type CaptureStatus } from './GlassesCamera';
+import { CameraConnectionError, GlassesCamera, isCameraConnectionError, type CaptureStatus } from './GlassesCamera';
 import type { Membership } from '../../../companion-web/src/RoomClient';
 
 const member = (): Membership => ({ roomCode: 'ABCDEF', playerToken: 'a'.repeat(48), playerId: 'one', name: 'Explorer' });
@@ -81,7 +81,7 @@ describe('GlassesCamera session and capture ownership', () => {
     vi.stubGlobal('fetch', fetcher);
     const client = new GlassesCamera(() => 'wss://game.example/play', member);
     await client.capture('photo', 'touchGrass');
-    await expect(client.capture('clip', 'meetFriend')).rejects.toThrow('Network interrupted');
+    await expect(client.capture('clip', 'meetFriend')).rejects.toBeInstanceOf(CameraConnectionError);
     const recovered = await client.status();
     expect(recovered.questId).toBe('meetFriend');
     await expect(client.submit('meetFriend', recovered)).resolves.toMatchObject({ verified: true });
@@ -174,5 +174,101 @@ describe('GlassesCamera session and capture ownership', () => {
     await client.capture('photo', 'touchGrass');
     await client.submit('touchGrass', await client.status());
     expect(timeouts).toHaveBeenLastCalledWith(45_000);
+  });
+
+  it.each([
+    ['network failure', () => new TypeError('Failed to fetch')],
+    ['request timeout', () => new DOMException('The operation timed out.', 'TimeoutError')],
+    ['request abort', () => new DOMException('The operation was aborted.', 'AbortError')],
+  ])('normalizes %s without automatically repeating a capture', async (_name, failure) => {
+    const fetcher = vi.fn().mockRejectedValue(failure());
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const error = await client.capture('clip', 'meetFriend').catch(error => error);
+    expect(isCameraConnectionError(error)).toBe(true);
+    expect(error.message).toBe('Connection interrupted while checking your capture. Try again to reconnect.');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['network interruption', () => new TypeError('Failed to fetch')],
+    ['body timeout', () => new DOMException('The operation timed out.', 'TimeoutError')],
+    ['body abort', () => new DOMException('The operation was aborted.', 'AbortError')],
+  ])('preserves capture ownership after a %s while downloading evidence', async (_name, failure) => {
+    const broken = json(ready('one'));
+    vi.spyOn(broken, 'json').mockRejectedValue(failure());
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(broken)
+      .mockResolvedValueOnce(json(ready('one')))
+      .mockResolvedValueOnce(json({ verified: true }));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    await expect(client.status()).rejects.toBeInstanceOf(CameraConnectionError);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const evidence = await client.status();
+    expect(evidence.questId).toBe('touchGrass');
+    await expect(client.submit('touchGrass', evidence)).resolves.toMatchObject({ verified: true });
+  });
+
+  it.each([429, 502, 503, 504])('normalizes HTTP %s even when the tunnel returns HTML', async status => {
+    const fetcher = vi.fn().mockResolvedValue(new Response('<html>Temporarily unavailable</html>', { status }));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await expect(client.status()).rejects.toBeInstanceOf(CameraConnectionError);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([400, 401, 403, 409])('keeps semantic HTTP %s errors nonretryable', async status => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'This request is not allowed.' }, status)));
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const error = await client.status().catch(error => error);
+    expect(isCameraConnectionError(error)).toBe(false);
+    expect(error.message).toBe('This request is not allowed.');
+  });
+
+  it('does not disguise rejected credentials as transient if their error body is interrupted', async () => {
+    const rejected = json({ error: 'Pair again.' }, 401);
+    vi.spyOn(rejected, 'json').mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(rejected));
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const error = await client.status().catch(error => error);
+    expect(isCameraConnectionError(error)).toBe(false);
+  });
+
+  it('keeps malformed successful JSON nonretryable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{invalid JSON', { status: 200 })));
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const error = await client.status().catch(error => error);
+    expect(isCameraConnectionError(error)).toBe(false);
+    expect(error.message).toContain('unreadable response');
+  });
+
+  it('does not offer transport recovery for a request whose game session changed', async () => {
+    let reject!: (reason: unknown) => void;
+    const fetcher = vi.fn().mockImplementation(() => new Promise<Response>((_resolve, fail) => { reject = fail; }));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const request = client.status();
+    client.reset();
+    reject(new TypeError('Failed to fetch'));
+    const error = await request.catch(error => error);
+    expect(isCameraConnectionError(error)).toBe(false);
+    expect(error.message).toContain('session changed');
+  });
+
+  it('allows longer evidence downloads and a caller-bounded remaining deadline', async () => {
+    const timeouts = vi.spyOn(AbortSignal, 'timeout');
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json({ ...ready('one'), frames: Array(12).fill('data:image/jpeg;base64,/9j/'), durationSeconds: 6 }))
+      .mockResolvedValueOnce(json(ready('one')));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('clip', 'meetFriend');
+    expect(timeouts).toHaveBeenLastCalledWith(15_000);
+    expect((await client.status()).frames).toHaveLength(12);
+    expect(timeouts).toHaveBeenLastCalledWith(45_000);
+    await client.status(7_000);
+    expect(timeouts).toHaveBeenLastCalledWith(7_000);
   });
 });

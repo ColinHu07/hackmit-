@@ -95,3 +95,14 @@ Session-release regression check:
 xcrun swiftc glasses-ios/BondimalsCamera/CameraSessionRelease.swift scripts/glasses-camera-release-tests.swift -o /tmp/kith-camera-release-tests
 /tmp/kith-camera-release-tests
 ```
+
+Camera 7 retains completed photo/clip evidence in memory while retrying a transient result-upload failure for at most twenty seconds. Every attempt has a hard timeout of at most six seconds; retries back off by 0.5, 1, then 2 seconds. They reuse the same request and evidence without reopening the camera or calling Muse. Cancellation, replacement, revocation and terminal HTTP errors stop retries. The server acknowledges an identical already-saved result without replacing it or extending its expiry, which covers a lost upload acknowledgment.
+
+The phone and private diagnostics now expose `lastCaptureStage`, `lastCaptureOutcome` and `lastCaptureAt` separately from connection-poll status. `uploaded` means the game server acknowledged the result; an exhausted upload reports that receipt could not be confirmed. These fields contain no media, tokens, pairing codes or device identifiers.
+
+Upload regression check:
+
+```sh
+xcrun swiftc glasses-ios/BondimalsCamera/CameraResultUpload.swift scripts/glasses-camera-upload-tests.swift -o /tmp/kith-camera-upload-tests
+/tmp/kith-camera-upload-tests
+```

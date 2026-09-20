@@ -78,6 +78,10 @@ private struct QuestSetupSummary: View {
                     .font(.caption.bold())
                 Text(quests.status).font(.callout)
                 if quests.paired { Text(quests.cameraMessage).font(.callout) }
+                if quests.lastCaptureStage != "none" {
+                    Text("Last capture: \(quests.lastCaptureStage)").font(.caption.bold())
+                    Text(quests.lastCaptureOutcome).font(.caption)
+                }
                 if let image = quests.preview, !quests.capturing {
                     Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 160)
                         .accessibilityLabel("Latest frame of your glasses quest capture")

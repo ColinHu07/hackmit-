@@ -8,7 +8,7 @@ The display game uses a Meta Ray-Ban Display Web App. The phone camera app uses 
 - `npm run build:all` builds the phone UI and the new glasses UI into a single static root.
 - `npm run web:start` serves both UIs and their game/camera endpoints from port 8788. Put that one origin behind HTTPS/WSS.
 - Open `/glasses/setup.html` on the paired iPhone for the Meta Add to glasses deep link, or register `/glasses/index.html` manually in Meta AI.
-- If the glasses retain an older cached launch page, use the setup link again to register `/glasses/meadow.html` (or the equivalent path under the Pages repository). It is rebuilt alongside `index.html`, with the same server and saved player. The current screen shows **Meadow 5** below Kith; **More → Connection & controls → Refresh game** reloads this entry with a fresh query string. A missing Meadow 5 label means this update has not loaded.
+- If the glasses retain an older cached launch page, use the setup link again to register `/glasses/meadow.html` (or the equivalent path under the Pages repository). It is rebuilt alongside `index.html`, with the same server and saved player. The current screen shows **Meadow 6** below Kith; **More → Connection & controls → Refresh game** reloads this entry with a fresh query string. A missing Meadow 6 label means this update has not loaded.
 - For GitHub Pages, build with `VITE_PLAY_SERVER_URL=wss://YOUR_GAME_HOST/play npm run build --workspace @bondimals/glasses-web -- --base=/YOUR_REPO/`; Pages serves assets only, while gameplay and camera requests use that secure server.
 - A phone's LAN address such as `ws://10.189.42.248:8788/play` is still the same backend, but the HTTPS glasses app requires a secure `wss://` gateway to it. GitHub Pages hosts the UI and cannot host the multiplayer server.
 - Keep the server and tunnel alive during a temporary demo. Anonymous Serveo forwards expire and receive a new address on restart; an SSH keepalive alone does not prevent expiry. Use an authenticated, reserved hostname for a stable demo link. A replacement tunnel must also be updated in the glasses build/settings and the phone camera bridge.
@@ -56,7 +56,7 @@ All routes are under the game server's public HTTPS origin. Requests and respons
 | `POST /glasses/pair` | Game authentication | `{code, expiresAt}`; eight-character, single-use code valid for five minutes. Re-pairing revokes the previous camera and clears its evidence. |
 | `POST /glasses/claim` | `{code}` | `{cameraToken}`. The owner must still be connected. |
 | `GET /glasses/command` | Camera bearer | `{command: null}` or `{command: {id, kind: "photo" \| "clip", questId}}`. Poll about once per second. |
-| `POST /glasses/heartbeat` | Camera bearer plus `{cameraReady, cameraState, onDemandCapture?, message?}` | Reports actual camera readiness: `ready`, `starting`, `permission`, `paused`, `error` or `idle`. Readiness expires after five seconds. `onDemandCapture: true` advertises native Camera 6 ability to start a camera for a command without keeping DAT active. |
+| `POST /glasses/heartbeat` | Camera bearer plus `{cameraReady, cameraState, onDemandCapture?, message?}` | Reports actual camera readiness: `ready`, `starting`, `permission`, `paused`, `error` or `idle`. Readiness expires after five seconds. `onDemandCapture: true` advertises native Camera 7 ability to start a camera for a command without keeping DAT active. |
 | `POST /glasses/progress` | Camera bearer plus `{requestId, sequence, elapsedSeconds, previewDataUrl}` | Latest bounded JPEG/PNG preview for the active requested clip only, at most twice per second. Preview expires after three seconds. |
 | `POST /glasses/capture` | Game authentication plus `{kind: "photo" \| "clip", questId}` | `{requestId}`. Requires a fresh camera poll and heartbeat. The camera must already be ready, or explicitly support on-demand capture while idle/starting. Polling or pairing alone is insufficient. The handshake quest requires a clip. |
 | `POST /glasses/result` | Camera bearer plus `{requestId, status: "ready", photoDataUrl}` or `{requestId, status: "ready", frames, durationSeconds}` or `{requestId, status: "error", error}` | `{ok: true}`. Only the current, unfinished capture can complete. |
@@ -71,9 +71,9 @@ The bridge **never** calls the quest verifier. Capturing delivers private eviden
 
 ## Device validation still required
 
-Physical testing on this device showed that recording can blank the standalone Web App while the camera remains active. Camera 6 releases both camera and DAT session after every bounded capture, and Meadow 5 restores the result after reconnect/reload. Automatic display return is not promised; use the Web App menu's Resume action or select Kith again from the glasses app grid. [Official setup](https://wearables.developer.meta.com/docs/develop/webapps/setup/) and [session lifecycle](https://wearables.developer.meta.com/docs/develop/dat/lifecycle-events/).
+Physical testing on this device showed that recording can blank the standalone Web App while the camera remains active. Camera 7 releases both camera and DAT session after every bounded capture, and Meadow 6 restores the result after reconnect/reload. Automatic display return is not promised; use the Web App menu's Resume action or select Kith again from the glasses app grid. [Official setup](https://wearables.developer.meta.com/docs/develop/webapps/setup/) and [session lifecycle](https://wearables.developer.meta.com/docs/develop/dat/lifecycle-events/).
 
-1. Pair Camera 6 and confirm it reports ready for quests with the stream closed.
+1. Pair Camera 7 and confirm it reports ready for quests with the stream closed.
 2. Select Record 6s. If Kith disappears, let recording finish, then reopen Kith promptly.
 3. Confirm the camera/session stops, review appears with the clip, and no grade occurs before Submit to Muse.
 4. Submit once; confirm the quest result. Repeat using Discard and verify there is no grading/reward.
@@ -82,3 +82,9 @@ Physical testing on this device showed that recording can blank the standalone W
 Synthetic HTTP/WebSocket and browser tests validate retention, recovery and explicit submission, not hardware display/session arbitration.
 
 Run transport validation with `node --test bridge/glasses-camera.test.mjs`. These tests use explicit synthetic evidence and real local HTTP/WebSocket connections; they do not assert physical camera provenance.
+
+## Interrupted capture connections
+
+Meadow 6 retries authenticated status/evidence reads for up to 90 seconds after returning to the display, with up to 45 seconds per download bounded by the remaining deadline. Network interruption, timeout, interrupted response bodies, and temporary gateway failures are recoverable; authorization and invalid-data errors remain actionable. Capture, discard and Muse submission are never automatically repeated. A Review recent capture action immediately reports progress or errors inside the quest menu. Leaving that view, changing player/session, or starting Submit/Discard prevents an older status response from repainting the interface.
+
+Camera 7 retains the same encoded capture for up to 20 seconds while retrying transient result-upload failures, with at most six seconds per attempt. The server acknowledges an identical upload for the same current request without replacing evidence, extending retention, or grading again. Changed, discarded, expired, replaced or unauthorized results remain rejected. Separate sanitized last-capture diagnostics record recording, upload, acknowledgment and failure without including media or credentials.

@@ -1,4 +1,4 @@
-import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { PHOTO_VERIFICATION_QUESTS, validateEvidence, validatePhoto } from './quest-verification.mjs';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -58,6 +58,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     session.evidenceBytes = 0;
     session.evidence = null;
     session.evidenceAt = null;
+    session.evidenceFingerprint = null;
   }
   function clearProgress(session, reset = false) {
     clearTimeout(session.progressTimer);
@@ -166,7 +167,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     if (session) session.lastActivity = at;
     return { owner, session };
   }
-  function authenticateCamera(request, at) {
+  function authenticateCamera(request, at, touchActivity = true) {
     const authorization = request.headers.authorization;
     const token = typeof authorization === 'string' ? /^Bearer ([a-f0-9]{48})$/.exec(authorization)?.[1] : null;
     const session = token ? tokens.get(token) : null;
@@ -175,7 +176,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     }
     // One command poll + one health report + two preview frames per second.
     if (!consume(session.quota, 16, 6, at)) throw failure(429, 'Please slow down camera polling.');
-    session.lastActivity = at;
+    if (touchActivity) session.lastActivity = at;
     return session;
   }
   function connected(session, at) {
@@ -218,7 +219,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
       rateLimit(request.socket.remoteAddress ?? 'unknown', path === '/glasses/claim', now());
       let cameraSession;
       if (['/glasses/command', '/glasses/result', '/glasses/heartbeat', '/glasses/progress'].includes(path)) {
-        cameraSession = authenticateCamera(request, now());
+        cameraSession = authenticateCamera(request, now(), path !== '/glasses/result');
       }
       if (path === '/glasses/command') {
         cameraSession.lastPoll = now();
@@ -304,8 +305,13 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
         if (!canFinishCapture(session, at)) {
           throw failure(409, 'This camera request expired while the game was away. Reconnect and capture again.');
         }
-        if (session.status !== 'capturing' || input?.requestId !== session.requestId) {
+        const readyRetry = session.status === 'ready' && input?.status === 'ready';
+        if ((!readyRetry && session.status !== 'capturing') || input?.requestId !== session.requestId) {
           throw failure(409, 'This capture was canceled, completed or replaced.');
+        }
+        if ((input.questId !== undefined && input.questId !== session.questId)
+          || (input.kind !== undefined && input.kind !== session.kind)) {
+          throw failure(409, 'This camera result belongs to a different quest or capture type.');
         }
         if (!['ready', 'error'].includes(input.status)) throw failure(400, 'Invalid camera result status.');
         if (input.status === 'error') {
@@ -314,6 +320,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
             ? input.error.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) : '';
           session.error ||= 'The glasses camera could not capture this quest. Please retry.';
           session.status = 'error'; session.command = null;
+          session.lastActivity = at;
           return writeJson(response, 200, { ok: true });
         }
         if ((session.kind === 'photo' && (typeof input.photoDataUrl !== 'string' || input.frames !== undefined))
@@ -324,12 +331,22 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
           frames: input.frames, durationSeconds: input.durationSeconds });
         const evidence = session.kind === 'photo' ? { photoDataUrl: input.photoDataUrl }
           : { frames: [...input.frames], durationSeconds: input.durationSeconds };
-        const bytes = Buffer.byteLength(JSON.stringify(evidence));
+        const serialized = JSON.stringify(evidence);
+        const fingerprint = createHash('sha256').update(serialized).digest('hex');
+        if (readyRetry) {
+          if (fingerprint !== session.evidenceFingerprint) throw failure(409, 'This completed capture already has different evidence.');
+          // The upload may have succeeded while its response was lost. Confirm
+          // the identical request without rewriting data or extending any TTL.
+          return writeJson(response, 200, { ok: true });
+        }
+        const bytes = Buffer.byteLength(serialized);
         if (evidenceBytes + progressBytes - session.progressBytes + bytes > maxEvidenceBytes) throw failure(503, 'Camera preview storage is busy. Discard older previews and retry.');
         clearEvidence(session); clearProgress(session, true);
         session.evidence = evidence; session.evidenceAt = at;
+        session.evidenceFingerprint = fingerprint;
         session.evidenceBytes = bytes; evidenceBytes += bytes;
         session.command = null; session.status = 'ready'; session.error = null;
+        session.lastActivity = at;
         return writeJson(response, 200, { ok: true });
       }
       const operation = path.slice('/glasses/'.length);
@@ -345,7 +362,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
           lastHeartbeat: null, cameraReady: false, cameraState: 'idle', cameraMessage: '', onDemandCapture: false,
           disconnectedAt: null,
           status: 'idle', requestId: null, command: null, captureAt: null, kind: null, questId: null,
-          evidence: null, evidenceBytes: 0, evidenceAt: null, error: null, quota: { remaining: 16, at },
+          evidence: null, evidenceBytes: 0, evidenceAt: null, evidenceFingerprint: null, error: null, quota: { remaining: 16, at },
           progress: null, progressBytes: 0, progressTimer: null, progressSequence: 0, progressElapsed: 0,
           progressQuota: { remaining: 2, at },
         };

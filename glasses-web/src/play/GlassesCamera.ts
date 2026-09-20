@@ -27,6 +27,23 @@ export interface CaptureStatus {
 }
 interface Pairing { code: string; expiresAt: number }
 
+/** A temporary transport failure that a caller may retry with the same session. */
+export class CameraConnectionError extends Error {
+  constructor() {
+    super('Connection interrupted while checking your capture. Try again to reconnect.');
+    this.name = 'CameraConnectionError';
+  }
+}
+
+export function isCameraConnectionError(error: unknown): error is CameraConnectionError {
+  return error instanceof CameraConnectionError;
+}
+
+function interruptedConnection(error: unknown): boolean {
+  return error instanceof TypeError || (error !== null && typeof error === 'object'
+    && 'name' in error && ['TypeError', 'TimeoutError', 'AbortError'].includes(String(error.name)));
+}
+
 /** Camera commands use the current game membership without replacing its socket. */
 export class GlassesCamera {
   private pending: { key: string; promise: Promise<unknown> } | null = null;
@@ -56,15 +73,35 @@ export class GlassesCamera {
     const member = this.membership();
     const session = this.sessionKey;
     if (!member) throw new Error('Join the playground first.');
-    const response = await fetch(new URL(path, this.origin), {
+    const currentSession = () => {
+      if (this.sessionKey !== session) throw new Error('Your game session changed. Capture again in this playground.');
+    };
+    const url = new URL(path, this.origin);
+    const options: RequestInit = {
       method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ ...extra, roomCode: member.roomCode, playerToken: member.playerToken }),
       signal: AbortSignal.timeout(timeoutMs), cache: 'no-store', redirect: 'error',
-    });
+    };
+    let response: Response;
+    try { response = await fetch(url, options); }
+    catch (error) {
+      currentSession();
+      if (interruptedConnection(error)) throw new CameraConnectionError();
+      throw error;
+    }
+    currentSession();
+    // Tunnel and rate-limit responses may contain HTML rather than our JSON.
+    if ([429, 502, 503, 504].includes(response.status)) throw new CameraConnectionError();
     let result;
     try { result = await response.json(); }
-    catch { throw new Error('Camera bridge returned an unreadable response. Check the game server address.'); }
-    if (this.sessionKey !== session) throw new Error('Your game session changed. Capture again in this playground.');
+    catch (error) {
+      currentSession();
+      // Body downloads share the request deadline. Preserve transport failures
+      // without treating malformed successful JSON or rejected credentials as transient.
+      if (response.ok && interruptedConnection(error)) throw new CameraConnectionError();
+      throw new Error('Camera bridge returned an unreadable response. Check the game server address.');
+    }
+    currentSession();
     if (!response.ok) throw new Error(result?.error || 'Camera bridge unavailable.');
     if (!result || typeof result !== 'object') throw new Error('Camera bridge returned an invalid response.');
     return result as T;
@@ -90,9 +127,10 @@ export class GlassesCamera {
       return value;
     });
   }
-  async status(): Promise<CaptureStatus> {
+  async status(timeoutMs = 45_000): Promise<CaptureStatus> {
     const revision = this.captureRevision;
-    const state = await this.request<CaptureStatus>('/glasses/status');
+    // A completed clip includes its bounded review frames in this response.
+    const state = await this.request<CaptureStatus>('/glasses/status', {}, timeoutMs);
     // A claimed code is one-use; do not show it again after a later disconnect.
     if (state.paired) this.pairing = null;
     if (revision !== this.captureRevision) return { ...state, questId: undefined };
