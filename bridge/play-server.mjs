@@ -148,6 +148,7 @@ export function createPlayServer(options = {}) {
       bond: room.bond,
       quests: Object.fromEntries([...room.players.values()].map(player => [player.id, { ...player.quests }])),
       squad: { ready: [...room.squadReady], minPlayers: 3 },
+      dap: { pending: [...room.dapRequests.entries()].map(([from, offer]) => ({ from, to: offer.to, expiresAt: offer.expiresAt })) },
       raid: {
         state: room.raid?.state ?? 'waiting', ready: [...room.raidReady],
         participants: room.raid?.participants ?? [], minPlayers: 3,
@@ -182,6 +183,7 @@ export function createPlayServer(options = {}) {
     player.targetX = player.x;
     player.targetZ = player.z;
     player.action = null;
+    clearDapsFor(room, player.id);
     if (intentional) {
       room.players.delete(player.id);
       room.squadReady.delete(player.id);
@@ -197,7 +199,7 @@ export function createPlayServer(options = {}) {
     do { code = Array.from({ length: 6 }, () => PLAY_ROOM_ALPHABET[randomInt(PLAY_ROOM_ALPHABET.length)]).join(''); }
     while (rooms.has(code));
     const room = {
-      code, players: new Map(), bond: 0, quest: { met: false, waved: false, played: false }, squadReady: new Set(), raidReady: new Set(), raid: null,
+      code, players: new Map(), bond: 0, quest: { met: false, waved: false, played: false }, squadReady: new Set(), raidReady: new Set(), raid: null, dapRequests: new Map(),
       notice: 'Invite a friend with your room code.', lastActivity: Date.now(), lastPlayAt: 0,
     };
     rooms.set(code, room);
@@ -219,7 +221,7 @@ export function createPlayServer(options = {}) {
       id: randomUUID(), token: randomBytes(24).toString('hex'), name, slot,
       x, z, targetX: x, targetZ: z, yaw: Math.atan2(-x, -z),
       action: null, socket: null, disconnectedAt: null, lastActionAt: 0,
-      movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, photoVerification: {} },
+      movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, photoVerification: {} },
     };
     room.players.set(player.id, player);
     return player;
@@ -244,6 +246,17 @@ export function createPlayServer(options = {}) {
   const sameToken = (a, b) => timingSafeEqual(Buffer.from(a), Buffer.from(b));
   const friends = room => [...room.players.values()].filter(player => player.socket);
   const neighboringPlayers = (player, players) => players.filter(candidate => candidate !== player && Math.hypot(player.x - candidate.x, player.z - candidate.z) <= PLAY_FRIEND_DISTANCE);
+  function clearDapsFor(room, playerId) {
+    room.dapRequests.delete(playerId);
+    for (const [from, offer] of room.dapRequests) if (offer.to === playerId) room.dapRequests.delete(from);
+  }
+  function reapDaps(room, now) {
+    for (const [from, offer] of room.dapRequests) {
+      const requester = room.players.get(from);
+      const partner = room.players.get(offer.to);
+      if (offer.expiresAt <= now || !requester?.socket || !partner?.socket) room.dapRequests.delete(from);
+    }
+  }
   const clustered = players => players.length >= 3 && players.every(player => players.every(other => player === other || Math.hypot(player.x - other.x, player.z - other.z) <= PLAY_FRIEND_DISTANCE));
   function completeSquadQuest(room, players, now) {
     if (players.length < 3) return false;
@@ -377,6 +390,32 @@ export function createPlayServer(options = {}) {
       return fail(ws, 'action_busy', 'Give your pet a moment to finish.');
     }
     const connectedPlayers = friends(room);
+    reapDaps(room, now);
+    if (message.action === 'dap') {
+      if (player.quests.dapHandshake) return fail(ws, 'dap_complete', 'You already completed the Dap up quest in this pen.');
+      const partner = neighboringPlayers(player, connectedPlayers)
+        .filter(candidate => !candidate.quests.dapHandshake)
+        .sort((a, b) => Math.hypot(player.x - a.x, player.z - a.z) - Math.hypot(player.x - b.x, player.z - b.z))[0];
+      if (!partner) return fail(ws, 'dap_too_far', 'Bring a pet who still needs this quest close together to dap up.');
+      const reciprocal = room.dapRequests.get(partner.id);
+      if (reciprocal?.to === player.id && reciprocal.expiresAt > now) {
+        room.dapRequests.delete(partner.id);
+        room.dapRequests.delete(player.id);
+        player.quests.dapHandshake = true;
+        partner.quests.dapHandshake = true;
+        player.yaw = Math.atan2(partner.x - player.x, partner.z - player.z);
+        partner.yaw = Math.atan2(player.x - partner.x, player.z - partner.z);
+        setAction(player, 'dap', now);
+        setAction(partner, 'dap', now);
+        room.bond += 1;
+        room.notice = `${player.name} and ${partner.name} dapped up! Both pets completed the duo quest.`;
+      } else {
+        room.dapRequests.set(player.id, { to: partner.id, expiresAt: now + 8_000 });
+        room.notice = `${player.name} offered a dap to ${partner.name}. They have a few seconds to dap back.`;
+      }
+      broadcast(room, now);
+      return;
+    }
     if (message.action === 'play') {
       const playmates = [player, ...connectedPlayers.filter(friend => friend !== player && Math.hypot(player.x - friend.x, player.z - friend.z) <= PLAY_FRIEND_DISTANCE)];
       if (playmates.length < 2) return fail(ws, 'friend_too_far', 'Bring another connected pet close together to play.');
@@ -436,6 +475,7 @@ export function createPlayServer(options = {}) {
       if (!player.socket && player.disconnectedAt !== null && now - player.disconnectedAt >= rejoinGraceMs) {
         room.players.delete(player.id);
         room.squadReady.delete(player.id);
+        clearDapsFor(room, player.id);
         room.notice = `${player.name} left the playground. Invite a friend to join.`;
       }
     }
@@ -447,6 +487,7 @@ export function createPlayServer(options = {}) {
     lastTick = now;
     for (const room of rooms.values()) {
       reapPlayers(room, now);
+      reapDaps(room, now);
       const connected = friends(room);
       if (connected.length === 0 && now - room.lastActivity >= roomIdleMs) { rooms.delete(room.code); continue; }
       if (room.raid?.state === 'active') {

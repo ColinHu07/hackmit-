@@ -126,6 +126,25 @@ test('photo verification is gated by earned quest progress and stores only its d
   assert.equal(JSON.stringify(verified).includes(body.photoDataUrl), false, 'snapshots never contain uploaded image data');
 });
 
+test('two nearby players must both dap up to finish the individual handshake quest', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'create', name: 'Alex' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'join', roomCode: first.roomCode, name: 'Blair' }); const second = await welcome(b);
+  a.send({ type: 'action', action: 'dap' });
+  await error(a, 'dap_too_far');
+  a.send({ type: 'move', x: 0, z: 0 }); b.send({ type: 'move', x: 0, z: 0 });
+  await state(a, snapshot => snapshot.players.every(player => Math.hypot(player.x, player.z) < 0.1));
+  a.send({ type: 'action', action: 'dap' });
+  const offered = await state(b, snapshot => snapshot.dap.pending.length === 1);
+  assert.deepEqual(offered.dap.pending[0]?.from, first.playerId);
+  b.send({ type: 'action', action: 'dap' });
+  const complete = await state(a, snapshot => snapshot.quests[first.playerId].dapHandshake && snapshot.quests[second.playerId].dapHandshake);
+  assert.equal(complete.dap.pending.length, 0);
+  assert.equal(complete.bond, 1);
+  assert.equal(complete.players[0]?.action?.kind, 'dap');
+  assert.equal(complete.players[1]?.action?.kind, 'dap');
+});
+
 test('a completed squad can start and finish the Mossback raid with per-player rewards', async t => {
   const { connect } = await setup(t);
   const a = await connect(); a.send({ type: 'create', name: 'Alex' }); const first = await welcome(a);

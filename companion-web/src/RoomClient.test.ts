@@ -39,6 +39,7 @@ class MockWebSocket {
 const snapshot: PlaySnapshot = {
   roomCode: 'ABC234', serverTime: 1000, players: [], bond: 0,
   quests: {}, squad: { ready: [], minPlayers: 3 },
+  dap: { pending: [] },
   raid: { state: 'waiting', ready: [], participants: [], minPlayers: 3, health: 0, maxHealth: 0, endsAt: null },
   quest: { met: false, waved: false, played: false }, notice: 'Invite a friend.',
 };

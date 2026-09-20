@@ -645,6 +645,10 @@ export class Playground {
       if (action.kind === 'wave') tilt += Math.sin(progress * Math.PI * 7) * 0.12 * envelope;
       if (action.kind === 'feed') bow = Math.sin(progress * Math.PI * 4) * 0.14 * envelope;
       if (action.kind === 'jump') lift = Math.sin(progress * Math.PI) * 0.7;
+      if (action.kind === 'dap') {
+        tilt += Math.sin(progress * Math.PI * 8) * 0.1 * envelope;
+        bow = Math.sin(progress * Math.PI) * 0.12;
+      }
       if (action.kind === 'play') {
         lift = Math.abs(Math.sin(progress * Math.PI * 3)) * 0.26;
         const friend = this.snapshot?.players.find((candidate) => candidate.id !== player?.id && candidate.connected);

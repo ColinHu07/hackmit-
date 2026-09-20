@@ -1,5 +1,5 @@
 /** Shared wire contract for the phone playground and future glasses clients. */
-export type PetActionKind = 'wave' | 'feed' | 'play' | 'jump';
+export type PetActionKind = 'wave' | 'feed' | 'play' | 'jump' | 'dap';
 export type PhotoVerificationStatus = 'required' | 'pending' | 'approved' | 'rejected';
 
 export interface PetAction {
@@ -29,6 +29,7 @@ export interface PlayerQuests {
   squadCircle: boolean;
   /** Earned by each participant when their squad calms Mossback. */
   raidBoss: boolean;
+  dapHandshake: boolean;
   /** Photo checks are opt-in uploads and are only kept as a decision, never as image data. */
   photoVerification: Partial<Record<'touchGrass', PhotoVerificationStatus>>;
 }
@@ -53,6 +54,8 @@ export interface PlaySnapshot {
   quests: Record<string, PlayerQuests>;
   squad: { ready: string[]; minPlayers: number };
   raid: RaidBossState;
+  /** A short-lived, server-owned invitation for a nearby virtual dap. */
+  dap: { pending: { from: string; to: string; expiresAt: number }[] };
   /** Kept for older clients while they move to the individual quest view. */
   quest: { met: boolean; waved: boolean; played: boolean };
   notice: string;

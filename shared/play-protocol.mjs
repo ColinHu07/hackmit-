@@ -2,8 +2,8 @@ export const PLAY_WORLD_LIMIT = 3;
 export const PLAY_FRIEND_DISTANCE = 1.5;
 export const PLAY_TICK_MS = 50;
 export const PLAY_MAX_PLAYERS = 4;
-export const PLAY_ACTIONS = Object.freeze(['wave', 'feed', 'play', 'jump']);
-export const PLAY_ACTION_DURATION = Object.freeze({ wave: 1800, feed: 2400, play: 3000, jump: 1000 });
+export const PLAY_ACTIONS = Object.freeze(['wave', 'feed', 'play', 'jump', 'dap']);
+export const PLAY_ACTION_DURATION = Object.freeze({ wave: 1800, feed: 2400, play: 3000, jump: 1000, dap: 1400 });
 export const PLAY_ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const PLAY_MAX_MESSAGE_BYTES = 1024;
 
