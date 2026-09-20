@@ -1,6 +1,6 @@
 # Raid boss: Mossback, Keeper of the Pen
 
-Mossback is a gentle, oversized turtle-goat made of moss, flower buds, and small lanterns. It keeps the friendly tone of Bondimals: the party is not hurting an animal; it is calming a tangled guardian that has grown too much noisy vine magic around its shell.
+Mossback is a gentle, oversized turtle-goat made of moss, flower buds, and small lanterns. It keeps the friendly tone of Kith: the party is not hurting an animal; it is calming a tangled guardian that has grown too much noisy vine magic around its shell.
 
 ## Party and unlock
 

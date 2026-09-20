@@ -7,7 +7,7 @@ struct BondimalsCameraApp: App {
     @Environment(\.scenePhase) private var phase
     init() {
         do { try Wearables.configure() }
-        catch { NSLog("Bondimals DAT configuration failed: %@", error.localizedDescription) }
+        catch { NSLog("Kith DAT configuration failed: %@", error.localizedDescription) }
         _bridge = StateObject(wrappedValue: CameraBridge())
     }
     var body: some Scene {
@@ -49,10 +49,10 @@ struct BondimalsCameraApp: App {
                     Section("While previewing") {
                         Text("Keep this app open. The feed comes from the glasses camera; the phone camera is never used.")
                         if bridge.sendToWeb {
-                            Text("Open the paired Bondimals link on the glasses, place Nova, then choose Hands to align your fingertip. Camera and web display running together still need a hardware test.").font(.footnote)
+                            Text("Open the paired Kith link on the glasses, place Nova, then choose Hands to align your fingertip. Camera and web display running together still need a hardware test.").font(.footnote)
                         }
                     }
-                }.navigationTitle("Bondimals Camera")
+                }.navigationTitle("Kith Camera")
             }.onOpenURL { bridge.open($0) }
              .onChange(of: phase) { _, phase in
                  // Do not interrupt registration permission prompts while no camera is running.

@@ -1,6 +1,8 @@
 /** Follow behind the pet so its position stays centered and forward stays up. */
-export function followingCamera(yaw: number, x = 0, z = 0): [number, number, number] {
-  return [x - Math.sin(yaw) * 10, 13, z - Math.cos(yaw) * 10];
+export function followingCamera(yaw: number, x = 0, z = 0, pitch = 0): [number, number, number] {
+  const elevation = Math.atan2(13, 10) + Math.max(-0.3, Math.min(0.3, pitch));
+  const radius = Math.hypot(13, 10), horizontal = Math.cos(elevation) * radius;
+  return [x - Math.sin(yaw) * horizontal, Math.sin(elevation) * radius, z - Math.cos(yaw) * horizontal];
 }
 
 /** Convert screen-space arrows into the shared world's coordinates. */

@@ -13,6 +13,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private let motionManager = CMMotionManager()
     private var motionGeneration = 0
     private var receivedMotion = false
+    private var lastAttitudeTime: TimeInterval = -Double.infinity
     private var locationPurposes = Set<String>()
     private var isTracking = false
     private var preparingEvidence = false
@@ -68,7 +69,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
-        loadingLabel.text = "Waking up Bondimals…"
+        loadingLabel.text = "Waking up Kith…"
         loadingLabel.textAlignment = .center
         loadingLabel.numberOfLines = 0
         loadingLabel.font = .systemFont(ofSize: 16, weight: .medium)
@@ -84,6 +85,23 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         NotificationCenter.default.addObserver(self, selector: #selector(becameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
         webView.load(URLRequest(url: URL(string: "bondimals://app/index.html")!))
     }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        switch view.window?.windowScene?.interfaceOrientation {
+        case .landscapeLeft: locationManager.headingOrientation = .landscapeRight
+        case .landscapeRight: locationManager.headingOrientation = .landscapeLeft
+        case .portraitUpsideDown: locationManager.headingOrientation = .portraitUpsideDown
+        default: locationManager.headingOrientation = .portrait
+        }
+    }
+    private var screenAngle: Double {
+        switch view.window?.windowScene?.interfaceOrientation {
+        case .landscapeLeft: return 90
+        case .landscapeRight: return -90
+        case .portraitUpsideDown: return 180
+        default: return 0
+        }
+    }
     private func emit(_ payload: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
         webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('bondimals-native', {detail: \(json)}));", completionHandler: nil)
@@ -95,6 +113,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         case "startLocation":
             guard let purpose = body["purpose"] as? String, ["discovery", "walking"].contains(purpose) else { return }
             locationPurposes.insert(purpose)
+            if purpose == "walking" { startWalkingMotion() }
             authorizeLocation()
         case "stopLocation":
             if let purpose = body["purpose"] as? String { locationPurposes.remove(purpose) }
@@ -107,12 +126,12 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         case "reviewClip": reviewClip()
         case "deleteClip": deleteClip()
         case "loadError":
-            loadingLabel.text = "Your world could not start. Close and reopen Bondimals."
-            print("Bondimals web error: \(body["message"] ?? "Unknown error")")
+            loadingLabel.text = "Your world could not start. Close and reopen Kith."
+            print("Kith web error: \(body["message"] ?? "Unknown error")")
         case "ready":
-            print(body["sceneReady"] as? Bool == true ? "Bondimals ready: bundled pet scene loaded." : "Bondimals UI loaded; pet scene unavailable.")
+            print(body["sceneReady"] as? Bool == true ? "Kith ready: bundled pet scene loaded." : "Kith UI loaded; pet scene unavailable.")
             loadingLabel.isHidden = true
-            emit(["type": "recording", "message": latestClip == nil ? "Record a short quest clip, review it, then submit it for verification." : "A quest clip is saved on this iPhone. Tap Review clip."])
+            emit(["type": "recording", "message": latestClip == nil ? "Record a short quest clip, review it, then submit it for verification." : "A quest clip is saved on this device. Tap Review clip."])
         default: break
         }
     }
@@ -131,11 +150,15 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             if locationPurposes.contains("walking") { startWalkingMotion() }
             if let fix = lastFix, abs(fix.timestamp.timeIntervalSinceNow) < 15 { publish(fix) }
             if locationManager.accuracyAuthorization == .reducedAccuracy {
-                emit(["type": "status", "message": "Enable Precise Location in iPhone Settings for nearby pets and walking."])
+                emit(["type": "status", "message": "Enable Precise Location in device Settings for nearby pets."])
             } else { emit(["type": "status", "message": "Finding your location…"]) }
         case .denied, .restricted:
-            locationPurposes.removeAll(); stopSensors()
-            emit(["type": "unavailable", "message": "Location is off. Open iPhone Settings → Bondimals → Location and allow While Using the App with Precise Location."])
+            locationPurposes.remove("discovery")
+            isTracking = false
+            locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
+            // Walking and turning use Core Motion, independently of GPS access.
+            if locationPurposes.contains("walking") { startWalkingMotion() }
+            emit(["type": "unavailable", "message": "Location is off. Walking, turning, and touch controls still work. Enable Location in Settings → Kith for nearby discovery."])
         @unknown default: break
         }
     }
@@ -172,24 +195,26 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private func startWalkingMotion() {
         guard !motionManager.isDeviceMotionActive, UIApplication.shared.applicationState == .active else { return }
         guard motionManager.isDeviceMotionAvailable else {
-            emit(["type": "motionStatus", "available": false, "message": "Step sensor unavailable. Walking is using GPS."])
+            emit(["type": "motionStatus", "available": false, "message": "Motion unavailable. Tap the ground or arrows to move. Check Motion & Fitness access in Settings → Kith."])
             return
         }
         motionGeneration += 1
         let generation = motionGeneration
         receivedMotion = false
+        lastAttitudeTime = -Double.infinity
         motionManager.deviceMotionUpdateInterval = 1.0 / 40.0
-        motionManager.startDeviceMotionUpdates(to: .main) { [weak self] motion, error in
+        motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] motion, error in
             guard let self, self.motionGeneration == generation, self.locationPurposes.contains("walking"),
                   UIApplication.shared.applicationState == .active else { return }
             guard let motion, error == nil else {
                 self.stopWalkingMotion()
-                self.emit(["type": "motionStatus", "available": false, "message": "Step sensor unavailable. Walking is using GPS."])
+                self.emit(["type": "motionStatus", "available": false, "message": "Motion unavailable. Tap the ground or arrows to move. Check Motion & Fitness access in Settings → Kith."])
                 return
             }
             if !self.receivedMotion {
                 self.receivedMotion = true
-                self.emit(["type": "motionStatus", "available": true, "message": "Step tracking ready · hold your phone facing the way you walk."])
+                self.emit(["type": "motionStatus", "available": true, "message": "Motion ready · walk with your device, turn to look around, or tap to move."])
+                print("Kith motion ready")
             }
             let a = motion.userAcceleration
             let g = motion.gravity
@@ -197,6 +222,12 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             // produces no vertical walking impulse. Samples stay on this device.
             let vertical = -(a.x * g.x + a.y * g.y + a.z * g.z)
             self.emit(["type": "motion", "verticalG": vertical, "timestamp": motion.timestamp * 1000])
+            if motion.timestamp - self.lastAttitudeTime >= 0.05 {
+                self.lastAttitudeTime = motion.timestamp
+                self.emit(["type": "attitude", "yaw": motion.attitude.yaw,
+                           "gravityX": g.x, "gravityY": g.y, "gravityZ": g.z,
+                           "screenAngle": self.screenAngle, "timestamp": motion.timestamp * 1000])
+            }
         }
     }
     private func stopWalkingMotion() {
@@ -215,7 +246,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private func recordClip() {
         guard !cameraBusy, presentedViewController == nil else { return }
         guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
-            emit(["type": "recording", "message": "Camera recording needs a physical iPhone."]); return
+            emit(["type": "recording", "message": "Camera recording needs a physical iPhone or iPad."]); return
         }
         cameraBusy = true
         Task { @MainActor in
@@ -223,7 +254,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             let microphone = camera ? await AVCaptureDevice.requestAccess(for: .audio) : false
             guard camera && microphone else {
                 cameraBusy = false
-                emit(["type": "recording", "message": "Allow Camera and Microphone in iPhone Settings → Bondimals to record a clip."]); return
+                emit(["type": "recording", "message": "Allow Camera and Microphone in device Settings → Kith to record a clip."]); return
             }
             guard UIApplication.shared.applicationState == .active, presentedViewController == nil else { cameraBusy = false; return }
             // Pause sensors while recording; resume the automatic experience after dismissal.
@@ -254,7 +285,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             for old in try FileManager.default.contentsOfDirectory(at: clipsDirectory, includingPropertiesForKeys: nil) where old != destination {
                 try? FileManager.default.removeItem(at: old)
             }
-            emit(["type": "recording", "message": "Clip saved on this iPhone. Review it below. Tap Submit clip to check it with Meta."])
+            emit(["type": "recording", "message": "Clip saved on this device. Review it below. Tap Submit clip to check it with Meta."])
         } catch { emit(["type": "recording", "message": "The clip could not be saved. Please try again."]) }
     }
     private func prepareQuestClip(requestId: String) {
@@ -304,7 +335,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         guard !cameraBusy else { return }
         do {
             if let clip = latestClip { try FileManager.default.removeItem(at: clip) }
-            emit(["type": "recording", "message": "Saved clip deleted from this iPhone."])
+            emit(["type": "recording", "message": "Saved clip deleted from this device."])
         } catch { emit(["type": "recording", "message": "Could not delete the clip. Please try again."]) }
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -312,8 +343,8 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         decisionHandler(url?.scheme == "bondimals" && url?.host == "app" ? .allow : .cancel)
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        loadingLabel.text = "The meadow could not open. Close and reopen Bondimals."
-        print("Bondimals navigation error: \(error.localizedDescription)")
+        loadingLabel.text = "The meadow could not open. Close and reopen Kith."
+        print("Kith navigation error: \(error.localizedDescription)")
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { backgrounded(); webView.reload() }
 }

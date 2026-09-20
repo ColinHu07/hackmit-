@@ -1,6 +1,6 @@
-# Bondimals — native iPhone app
+# Kith — native iPhone and iPad app
 
-A standalone iOS 17+ app named **Bondimals**, separate from the existing glasses camera app. Its Three.js pet interface is bundled into a WKWebView; Swift uses Core Location for native GPS/compass and UIKit's camera recorder for short quest videos. The installed app launches without a web host. Multiplayer still needs the Node server.
+A standalone iOS 17+ app named **Kith**, separate from the existing glasses camera app. Its Three.js pet interface is bundled into a WKWebView; Swift uses Core Location for native GPS/compass and UIKit's camera recorder for short quest videos. The installed app launches without a web host. Multiplayer still needs the Node server.
 
 ## Download and install
 
@@ -32,7 +32,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun devicectl device 
   --device YOUR_DEVICE_ID com.bondimals.phone
 ```
 
-After installation, look for **Bondimals** with the green paw icon on your Home Screen. Allow location on first launch for automatic nearby discovery and walking, and camera/microphone when recording.
+After installation, look for **Kith** with the green paw icon on your Home Screen. Allow location for nearby discovery and local weather, and camera/microphone when recording. Walking, turning, and tilt use Core Motion independently of location access. Tap the ground or use the direction buttons to move at any time. Recenter view resets neutral tilt; iPad supports portrait and landscape.
 
 The build script produces the web bundle, copies it to the ignored `Web/` directory, and builds the native app. Generated assets and signing products are not committed. Find your team ID in Xcode → Settings → Accounts, and the device ID with `xcrun devicectl list devices`. This is a development installation, with provisioning lifetime determined by your Apple account, not an App Store release.
 
@@ -104,3 +104,5 @@ Happiness is saved on this device, starts at 70%, and decreases 2 points per hou
 Anant’s per-player quests, cooperative dap, and three/four-player Mossback raid are integrated. From nearby discovery, **Start a squad quest room** opens a room whose code can be shared with up to three friends. Nearby one-to-one invitations remain private two-person encounters. **Meet in the middle** works while automatic walking is enabled, so gathering for a quest does not require precise indoor GPS.
 
 Set the Meta key on the server using [the server setup guide](../docs/phone-server.md#meta-quest-verification), then run `npm run check:meta`. The key never belongs in this iPhone app. The native build and mocked provider tests can pass without a key; live model accuracy still requires recording and submitting real examples.
+
+The app is branded **Kith**. Existing bundle identifiers, Xcode target names, storage keys, and `BONDIMALS_*` build settings are retained so this update replaces the installed app and preserves saved players and server settings.

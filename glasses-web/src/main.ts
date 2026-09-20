@@ -31,7 +31,7 @@ const canvasMarkup = '<div class="display-surface"><canvas id="nova-canvas" widt
 element('#app').innerHTML = simulator ? `
   <div class="shell">
     <header class="site-header">
-      <a class="brand" href="?simulator" aria-label="Bondimals simulator"><span class="brand-icon">${sparkle}</span>bondimals<span class="brand-dot">.</span></a>
+      <a class="brand" href="?simulator" aria-label="Kith simulator"><span class="brand-icon">${sparkle}</span>kith<span class="brand-dot">.</span></a>
       <div class="header-meta"><span class="status-dot"></span> a shared little world <span class="header-divider"></span><span class="version">BUILD 004</span></div>
     </header>
     <main>
@@ -68,8 +68,8 @@ element('#app').innerHTML = simulator ? `
       <div class="bottom-notes"><p>${sparkle} Black pixels let the physical world shine through the additive display.</p><span>Interactive demo <span class="note-separator">·</span> PseudoWorldAnchor <span class="note-separator">·</span> Direction anchor only</span></div>
       <section class="activity" aria-label="Local simulation events"><h2>Session notes <span>LOCAL ONLY</span></h2><ol id="event-log" aria-live="polite" aria-relevant="additions"></ol></section>
     </main>
-    <footer class="site-footer"><span>Small creatures. Shared connections.</span><span>BONDIMALS / HACKMIT</span></footer>
-  </div>` : `<main class="glasses-display" aria-label="Bondimals display">${canvasMarkup}<div id="calibration-guides" aria-hidden="true"><span class="guide-center">+</span><span class="guide-left">+</span><span class="guide-bottom">+</span></div><section data-glasses-control id="hardware-controls" aria-label="Glasses controls"><p id="tracking-note">Direction tracking needs a brief calibration.</p><button id="tracking-start" type="button">Enable head tracking</button><button id="calibrate" type="button" hidden>Confirm right turn</button><div id="hardware-actions" hidden><button data-action="pet" type="button">♡ Pet</button><button data-action="feed" type="button">✦ Feed</button><button data-action="play" type="button">↻ Play</button><button id="move-here" type="button">Move here</button><button id="align-hands" type="button">Hands</button></div></section><section data-glasses-control id="hand-controls" hidden><p id="camera-status" role="status"></p><p id="hand-instructions">Hold your index fingertip over the +, then pinch Confirm.</p><button id="confirm-hand" type="button">Fingertip on + · Confirm</button><button id="cancel-hand" type="button">Back</button></section></main>`;
+    <footer class="site-footer"><span>Small creatures. Shared connections.</span><span>KITH / HACKMIT</span></footer>
+  </div>` : `<main class="glasses-display" aria-label="Kith display">${canvasMarkup}<div id="calibration-guides" aria-hidden="true"><span class="guide-center">+</span><span class="guide-left">+</span><span class="guide-bottom">+</span></div><section data-glasses-control id="hardware-controls" aria-label="Glasses controls"><p id="tracking-note">Direction tracking needs a brief calibration.</p><button id="tracking-start" type="button">Enable head tracking</button><button id="calibrate" type="button" hidden>Confirm right turn</button><div id="hardware-actions" hidden><button data-action="pet" type="button">♡ Pet</button><button data-action="feed" type="button">✦ Feed</button><button data-action="play" type="button">↻ Play</button><button id="move-here" type="button">Move here</button><button id="align-hands" type="button">Hands</button></div></section><section data-glasses-control id="hand-controls" hidden><p id="camera-status" role="status"></p><p id="hand-instructions">Hold your index fingertip over the +, then pinch Confirm.</p><button id="confirm-hand" type="button">Fingertip on + · Confirm</button><button id="cancel-hand" type="button">Back</button></section></main>`;
 
 const canvas = element<HTMLCanvasElement>('#nova-canvas');
 const errorMessage = element<HTMLParagraphElement>('#render-error');
@@ -118,7 +118,7 @@ const ui = simulator ? {
 } : null;
 
 function logEvent(type: string, message: string): void {
-  console.info(`[Bondimals] ${type}`, { message, anchor: { ...anchor } });
+  console.info(`[Kith] ${type}`, { message, anchor: { ...anchor } });
   if (!ui) return;
   const item = document.createElement('li');
   const time = document.createElement('time');

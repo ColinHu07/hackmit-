@@ -26,7 +26,7 @@ The [0.9.0 changelog](https://github.com/facebook/meta-wearables-dat-android/blo
 
 ## Display Web App capabilities
 
-| Capability | Evidence and Bondimals decision |
+| Capability | Evidence and Kith decision |
 | --- | --- |
 | Display | **VERIFIED:** fixed 600×600 viewport; additive waveguide; pure black contributes no light. Use `#000000` on the page and bright, small creature geometry. [Display guidelines](https://github.com/facebook/meta-wearables-webapp/blob/main/plugins/meta-wearables-webapp/references/display-guidelines.md) |
 | Rendering | **VERIFIED:** DOM, Canvas 2D, and WebGL are documented. Three.js can use the WebGL surface; its desktop simulator behavior still requires separate glasses testing. [Display guidelines](https://github.com/facebook/meta-wearables-webapp/blob/main/plugins/meta-wearables-webapp/references/display-guidelines.md) |
@@ -35,7 +35,7 @@ The [0.9.0 changelog](https://github.com/facebook/meta-wearables-dat-android/blo
 | Camera and microphone | **UNSUPPORTED in the Web App documentation summary:** the official `search_webapps_docs` response lists both as unsupported. Native DAT camera access is a separate path. [Web Apps build guide](https://wearables.developer.meta.com/docs/develop/webapps/build/), retrieved through MCP |
 | Web deployment | **VERIFIED:** glasses require a public HTTPS URL. Local Vite is for desktop development; a successful localhost test is not an on-glasses test. [Web Apps setup guide](https://wearables.developer.meta.com/docs/develop/webapps/setup/), retrieved through MCP |
 
-No documented WebXR, SLAM, depth maps, world meshes, native spatial anchors, or calibrated 6DoF API was established by this audit. Bondimals must not claim these capabilities. `PseudoWorldAnchor` stores a direction and performs an approximate angular projection; it does not track translation, reconstruct objects, or establish a physical world coordinate system.
+No documented WebXR, SLAM, depth maps, world meshes, native spatial anchors, or calibrated 6DoF API was established by this audit. Kith must not claim these capabilities. `PseudoWorldAnchor` stores a direction and performs an approximate angular projection; it does not track translation, reconstruct objects, or establish a physical world coordinate system.
 
 ## Concurrent Web App and DAT camera: NEEDS_DEVICE_TEST
 

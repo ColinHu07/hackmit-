@@ -1,4 +1,4 @@
-# Bondimals
+# Kith
 
 ## Play with friends in a browser
 
@@ -18,7 +18,7 @@ The browser game includes tap-to-move controls, shared pet actions, quests, and 
 
 | Version | Folder | Use it for |
 | --- | --- | --- |
-| **iPhone app** | [`phone-ios/`](phone-ios/README.md) | Install Bondimals on an iPhone with native camera, GPS, and compass. |
+| **iPhone app** | [`phone-ios/`](phone-ios/README.md) | Install Kith on an iPhone with native camera, GPS, and compass. |
 | Browser companion | [`companion-web/`](companion-web/README.md) | Run the phone playground in a web browser. |
 | Glasses camera bridge | [`glasses-ios/`](docs/hand-camera-bridge.md) | Connect the glasses camera; this is a separate app. |
 | Shared game server | [`bridge/play-server.mjs`](docs/phone-server.md) | Run multiplayer and nearby discovery for both phone clients. |

@@ -624,6 +624,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
   const app = createPlayServer({ allowedOrigins, webRoot });
-  app.server.listen(port, host, () => console.log(`Bondimals ${webRoot ? 'web game and playground' : 'playground'} listening on http://${host}:${port}`));
+  app.server.listen(port, host, () => console.log(`Kith ${webRoot ? 'web game and playground' : 'playground'} listening on http://${host}:${port}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void app.close().then(() => process.exit(0)); });
 }

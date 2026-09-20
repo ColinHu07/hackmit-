@@ -22,7 +22,7 @@ pairing.simulatorLink = `${site}?simulator#${config(pairing.viewerToken)}`;
 await writeFile(stateFile, JSON.stringify(pairing, null, 2), { mode: 0o600 });
 const app = createRelay(pairing);
 app.server.listen(port, process.env.BONDIMALS_BIND || '127.0.0.1', () => {
-  console.log(`Bondimals landmark relay listening on port ${port}. Pairing links: ${stateFile}`);
+  console.log(`Kith landmark relay listening on port ${port}. Pairing links: ${stateFile}`);
   if (!relay.startsWith('wss:')) console.log('Local testing only: set BONDIMALS_RELAY_URL to a public wss:// endpoint for glasses.');
 });
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void app.close().then(() => process.exit(0)); });

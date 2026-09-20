@@ -7,7 +7,7 @@
 	<key>BondimalsWebURL</key>
 	<string>$(BONDIMALS_WEB_URL)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Bondimals</string>
+	<string>Kith</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -32,7 +32,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Record a short quest clip using your iPhone camera when you tap Record quest clip.</string>
+	<string>Record a short quest clip using your device camera when you tap Record quest clip.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to the multiplayer server on your local Wi-Fi during the hackathon.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -40,7 +40,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Include sound in the quest clips you choose to record.</string>
 	<key>NSMotionUsageDescription</key>
-	<string>Detect your walking steps so your pet moves with you while the game is open.</string>
+	<string>Detect steps, turns, and tilt so your pet and view follow your movement while Kith is open.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -48,6 +48,13 @@
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

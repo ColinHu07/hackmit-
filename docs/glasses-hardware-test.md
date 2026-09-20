@@ -1,6 +1,6 @@
 # Glasses interaction and anchoring test — Build 004
 
-Use **https://colinhu07.github.io/bondimals-display/** in the saved Bondimals web app. Restart the app from the glasses' web-app menu to load the update. The phone's saved URL screen is a settings page, not a launch button.
+Use **https://colinhu07.github.io/bondimals-display/** in the saved Kith web app. Restart the app from the glasses' web-app menu to load the update. The phone's saved URL screen is a settings page, not a launch button.
 
 The desktop version is **https://colinhu07.github.io/bondimals-display/?simulator**. It uses simulated orientation and works without glasses.
 

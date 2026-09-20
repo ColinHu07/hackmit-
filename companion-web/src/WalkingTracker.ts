@@ -26,6 +26,13 @@ export class WalkingTracker {
     this.anchor = null; this.lastTimestamp = -Infinity; this.hasHeading = false;
     this.pose = { ...this.pose, x, z };
   }
+  /** A touch destination becomes the next step's origin, preserving facing. */
+  moveTo(x: number, z: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    this.anchor = null; this.lastTimestamp = -Infinity;
+    this.pose = { ...this.pose, x, z };
+    this.translate(0, 0);
+  }
   setWorldLimit(limit: number): void {
     if (!Number.isFinite(limit) || limit <= 0) return;
     this.worldLimit = Math.min(limit, PLAY_WORLD_LIMIT);

@@ -1,4 +1,4 @@
-# Bondimals · Phone playground
+# Kith · Phone playground
 
 Players discover nearby pets through opt-in foreground location sharing, agree to meet, and enter a shared virtual meadow automatically. Each controls a pet; movement, greetings, treats, jumps, cooperative play, and friendship progress are synchronized by a small Node server. The meadow is an illustrative 3D view, not camera AR or measured physical pet placement.
 

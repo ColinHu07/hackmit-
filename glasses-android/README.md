@@ -1,4 +1,4 @@
-# Bondimals · Android perception
+# Kith · Android perception
 
 Reserved for Milestone 4. No Android app or SDK dependency is installed yet.
 

@@ -15,7 +15,7 @@ final class BundledSite: NSObject, WKURLSchemeHandler {
         let data: Data
         do { data = try Data(contentsOf: url) }
         catch {
-            print("Bondimals resource read failed: \(error)")
+            print("Kith resource read failed: \(error)")
             task.didFailWithError(error); return
         }
         let types = ["js": "application/javascript", "css": "text/css", "html": "text/html", "glb": "model/gltf-binary", "svg": "image/svg+xml"]

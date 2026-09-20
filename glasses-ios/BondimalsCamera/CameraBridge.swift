@@ -132,7 +132,7 @@ final class CameraBridge: ObservableObject {
                         if self.firstFrameTask != nil {
                             self.firstFrameTask?.cancel(); self.firstFrameTask = nil
                             self.status = "Glasses camera live. Move your hand into view to see the tracking overlay."
-                            print("Bondimals: first glasses-camera image received")
+                            print("Kith: first glasses-camera image received")
                         }
                     }
                 }, onError: { [weak self] message in
@@ -169,14 +169,14 @@ final class CameraBridge: ObservableObject {
                 guard let self, generation == self.generation, !Task.isCancelled else { return }
                 self.lastSessionError = error
                 self.status = error.localizedDescription
-                print("Bondimals: session error: \(error.localizedDescription)")
+                print("Kith: session error: \(error.localizedDescription)")
             }
         }
         sessionStateTask = Task { [weak self] in
             for await state in states {
                 guard let self, generation == self.generation, !Task.isCancelled else { return }
                 self.sessionStatus = "Session: \(state.description) · Camera: \(self.camera.map { String(describing: $0.stream.state) } ?? "off")"
-                print("Bondimals: \(self.sessionStatus)")
+                print("Kith: \(self.sessionStatus)")
                 if state == .paused {
                     self.phoneFrame = nil
                     self.status = "Glasses session paused. Wear the glasses and resume on the glasses."
@@ -199,7 +199,7 @@ final class CameraBridge: ObservableObject {
             if target.state == .stopped {
                 await sessionErrorTask?.value
                 if let error = lastSessionError { throw error }
-                throw BridgeError.message("Meta ended the glasses session before the camera could start. Check Bondimals Camera's Bluetooth and Local Network access in iPhone Settings.")
+                throw BridgeError.message("Meta ended the glasses session before the camera could start. Check Kith Camera's Bluetooth and Local Network access in device Settings.")
             }
             if let error = lastSessionError { throw error }
             guard ProcessInfo.processInfo.systemUptime < deadline else {
@@ -207,7 +207,7 @@ final class CameraBridge: ObservableObject {
             }
             try await Task.sleep(for: .milliseconds(100))
         }
-        print("Bondimals: session confirmed started; attaching camera")
+        print("Kith: session confirmed started; attaching camera")
     }
     private func connectWeb(generation: Int) {
         webStatus = "Connecting hand points to the web app…"
@@ -246,7 +246,7 @@ final class CameraBridge: ObservableObject {
             Task { @MainActor in
                 guard let self, generation == self.generation else { return }
                 self.sessionStatus = "Session: \(session.state.description) · Camera: \(state)"
-                print("Bondimals: \(self.sessionStatus)")
+                print("Kith: \(self.sessionStatus)")
                 if state == .streaming { self.hasStreamed = true; self.status = "Camera streaming. Waiting for the first image…" }
                 else if state == .paused { self.phoneFrame = nil; self.status = "Glasses camera paused. Waiting for fresh frames." }
                 else if state == .stopped && self.hasStreamed { self.stop("Glasses camera stopped. Start again to reconnect.") }
@@ -262,7 +262,7 @@ final class CameraBridge: ObservableObject {
         firstFrameTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(20)) } catch { return }
             guard let self, generation == self.generation, self.phoneFrame == nil else { return }
-            self.stop("No camera image arrived after 20 seconds (camera: \(attached.stream.state)). Check Bluetooth and Local Network access for Bondimals Camera in iPhone Settings, and stop any other glasses-camera session before retrying.")
+            self.stop("No camera image arrived after 20 seconds (camera: \(attached.stream.state)). Check Bluetooth and Local Network access for Kith Camera in device Settings, and stop any other glasses-camera session before retrying.")
         }
     }
     func stopIfStreamingInBackground() {
@@ -288,6 +288,6 @@ final class CameraBridge: ObservableObject {
         handStatus = "Source: glasses camera only"
         status = message
         webStatus = "Web sharing is stopped."
-        print("Bondimals: stopped: \(message)")
+        print("Kith: stopped: \(message)")
     }
 }

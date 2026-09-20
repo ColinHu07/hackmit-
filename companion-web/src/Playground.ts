@@ -78,6 +78,8 @@ export class Playground {
   private onSelectNearby: ((peerId: string) => void) | undefined;
   private snapshotReceivedAt = 0;
   private walkingPose: WalkingPose | null = null;
+  private viewTilt = { pitch: 0, roll: 0 };
+  private renderedTilt = { pitch: 0, roll: 0 };
   private enabled = false;
   private disposed = false;
   private visible = true;
@@ -168,6 +170,10 @@ export class Playground {
   }
 
   private predictWalkingMovement = false;
+
+  setViewTilt(pitch = 0, roll = 0): void {
+    if (Number.isFinite(pitch) && Number.isFinite(roll)) this.viewTilt = { pitch, roll };
+  }
 
   setWalkingPose(pose: WalkingPose | null, initialHeading = false, predictMovement = false): void {
     this.predictWalkingMovement = predictMovement;
@@ -604,8 +610,12 @@ export class Playground {
       const { x, z } = followedPet.root.position;
       // Follow the smoothed walking heading. A play animation can turn the body
       // toward a friend without abruptly swinging the whole meadow around.
-      this.camera.position.set(...followingCamera(followedPet.yaw, x, z));
+      const blend = reducedMotion ? 1 : 1 - Math.exp(-8 * delta);
+      this.renderedTilt.pitch += (this.viewTilt.pitch - this.renderedTilt.pitch) * blend;
+      this.renderedTilt.roll += (this.viewTilt.roll - this.renderedTilt.roll) * blend;
+      this.camera.position.set(...followingCamera(followedPet.yaw, x, z, this.renderedTilt.pitch));
       this.camera.lookAt(x, 0, z);
+      this.camera.rotateZ(this.renderedTilt.roll);
       this.sun.position.set(x - 3, 9, z + 5);
       this.sun.target.position.set(x, 0, z);
       this.weatherParticles.position.set(x, 0, z);

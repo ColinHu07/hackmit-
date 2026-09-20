@@ -39,3 +39,9 @@
 .quest-tools select{display:block;width:100%;margin:8px 0 12px;padding:12px;border:1px solid #cbd8c1;border-radius:12px;background:#fffef7;color:#36533e;font:inherit;font-size:12px}.quest-tools label{font-size:11px;line-height:1.6}.evidence-consent{display:flex;gap:10px;margin:16px 0;align-items:flex-start}.evidence-consent input{width:18px;height:18px;flex-shrink:0;margin:2px 0}#evidence-status{overflow-wrap:anywhere}
 .share-button{display:flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:10px 12px;border:1px solid #d7e2c9;border-radius:12px;background:#eaf0de;color:#45643b;font-size:11px;font-weight:600}.share-button svg{width:16px;height:16px}.server-pulse{margin-top:22px;border-top:1px solid var(--line);padding-top:16px;color:#6b7b61;font-size:11px}.server-pulse summary{cursor:pointer;min-height:32px}.server-pulse p{font-size:11px;line-height:1.7;margin:6px 0;overflow-wrap:anywhere}
 @media(max-width:720px){input,.quest-tools select{font-size:16px}.share-button{font-size:10px;padding:10px}.entry-mode{min-height:36px;padding:8px 0}.icon-button{width:44px;height:44px}.player-row strong{overflow-wrap:anywhere}.player-row>div{min-width:0}}
+
+/* Native iPhone and iPad movement remains available alongside step tracking. */
+.movement-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.movement-controls button { min-width: 48px; min-height: 48px; padding: 10px 16px; border: 1px solid #cbd8c6; border-radius: 12px; background: #f5f8ee; color: #314d38; font: inherit; cursor: pointer; touch-action: manipulation; }
+.movement-controls button[data-move] { font-size: 22px; }
+.movement-controls button:disabled { opacity: .45; cursor: default; }

@@ -63,3 +63,24 @@ it('keeps a moving pet centered and facing screen top through a full turn', () =
     }
   }
 });
+
+it('keeps the pet centered while pitch changes the camera elevation', () => {
+  const camera = new OrthographicCamera(-6, 6, 6, -6, .1, 70);
+  for (const pitch of [-.3, 0, .3]) {
+    camera.position.set(...followingCamera(1.2, 23, -42, pitch));
+    camera.lookAt(23, 0, -42); camera.rotateZ(.2); camera.updateMatrixWorld();
+    const center = new Vector3(23, 0, -42).project(camera);
+    expect(center.x).toBeCloseTo(0); expect(center.y).toBeCloseTo(0);
+    expect(camera.position.distanceTo(new Vector3(23, 0, -42))).toBeCloseTo(Math.hypot(13, 10));
+  }
+  expect(followingCamera(0, 0, 0, .3)[1]).toBeGreaterThan(followingCamera(0)[1]);
+});
+
+it('continues walking from a touch destination without returning to the old origin', () => {
+  const tracker = new WalkingTracker(); tracker.setStepTracking(true); tracker.heading(90, 0);
+  tracker.steps(2); tracker.moveTo(20, -30); tracker.steps(1);
+  expect(tracker.hasHeading).toBe(true);
+  expect(tracker.pose.x).toBeCloseTo(20.35); expect(tracker.pose.z).toBeCloseTo(-30);
+  tracker.heading(180, 0);
+  expect(tracker.pose.x).toBeCloseTo(20.35); expect(tracker.pose.z).toBeCloseTo(-30);
+});

@@ -11,7 +11,8 @@ export function nativeCommand(command: string, extra: object = {}): void {
   window.webkit?.messageHandlers?.bondimals?.postMessage({ command, ...extra });
 }
 export interface NativeEvent {
-  type: 'evidence' | 'active' | 'location' | 'heading' | 'motion' | 'motionStatus' | 'paused' | 'unavailable' | 'status' | 'recording';
+  type: 'evidence' | 'active' | 'location' | 'heading' | 'attitude' | 'motion' | 'motionStatus' | 'paused' | 'unavailable' | 'status' | 'recording';
+  yaw?: number; gravityX?: number; gravityY?: number; gravityZ?: number; screenAngle?: number;
   verticalG?: number; available?: boolean;
   requestId?: string; frames?: string[]; durationSeconds?: number;
   latitude?: number; longitude?: number; accuracy?: number; timestamp?: number;
