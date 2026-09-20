@@ -4,6 +4,33 @@ import { createQuestPhotoVerifier, validatePhoto } from './quest-verification.mj
 
 const tinyPhoto = 'data:image/png;base64,iVBORw0KGgo=';
 
+for (const [questId, action, people] of [
+  ['touchGrass', /hand physically touching natural grass outdoors/, 1],
+  ['meetFriend', /two people together, visibly greeting each other with a wave or high-five/, 2],
+  ['dapHandshake', /hands together into a handshake, fist bump, or high-five and then releasing/, 2],
+  ['squadCircle', /full group gathered together in a circle.*shared cheer/, 4],
+]) {
+  test(`${questId} sends its own action criteria and participant count to Muse`, async () => {
+    let body;
+    const verifier = createQuestPhotoVerifier({
+      apiKey: 'test', baseUrl: 'https://model.example/v1', model: 'vision',
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(init.body);
+        return { ok: true, json: async () => ({ choices: [{ message: { content: '{"verified":false,"reason":"Required action is not visible."}' } }] }) };
+      },
+    });
+    await verifier.verify({ questId, participantCount: people, frames: Array(12).fill(tinyPhoto), durationSeconds: 6 });
+    const prompt = body.messages[0].content[0].text;
+    assert.match(prompt, action);
+    assert.ok(prompt.includes(`Required visible participants: at least ${people}.`));
+    assert.match(prompt, /12 images are chronological, evenly spaced samples from a 6-second clip/);
+    assert.match(prompt, /Check the sequence, not just one frame/);
+    assert.match(prompt, /Approve only when the action and participant count are unambiguous/);
+    assert.match(prompt, /Reject images of screens, game characters, illustrations/);
+    assert.equal(body.messages[0].content.length, 13);
+  });
+}
+
 test('the Meta verifier sends an image_url request and returns only a concise decision', async () => {
   let request;
   const verifier = createQuestPhotoVerifier({
