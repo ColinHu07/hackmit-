@@ -22,7 +22,7 @@ import { createInviteUrl, defaultPlayServerUrl, nativeServerSelection } from './
 import type { LocationFix } from './LocationDiscovery';
 import type { NearbyPet, MeetRequest } from '../../shared/nearby-protocol';
 import type { ConnectionState, Membership, CompatibleSnapshot } from './RoomClient';
-import { PLAY_WORLD_LIMIT, type QuestReward, type EvidenceQuestId, type PetActionKind, type PlayerQuests } from '../../shared/play-protocol';
+import { PLAY_TOGETHER_DISTANCE, PLAY_WORLD_LIMIT, type QuestReward, type EvidenceQuestId, type PetActionKind, type PlayerQuests } from '../../shared/play-protocol';
 
 const paths: Record<string, string> = {
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
@@ -116,10 +116,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section id="compact-quests" class="compact-quests" aria-label="Quest board"><h2>Quests</h2><div id="quest-board-list" class="compact-quest-list"></div></section>
       <div id="native-tools" class="native-tools" hidden>
         <div class="native-walking-heading"><strong id="view-title">Walk with your pet</strong><span id="compass-reading">Compass off</span></div>
-        <p id="walking-status" role="status">Your pet follows your steps. Turn or tilt your device to look around, or tap to move.</p>
+        <p id="walking-status" role="status">Your pet follows your location. Turn or tilt your device to look around.</p>
         <div class="movement-controls" aria-label="Move your pet"><button data-move="forward" aria-label="Move forward">↑</button><button data-move="left" aria-label="Move left">←</button><button data-move="back" aria-label="Move backward">↓</button><button data-move="right" aria-label="Move right">→</button><button id="recenter-view">Recenter view</button></div>
       </div>
-      <div id="browser-view-tools" class="native-tools" hidden><div class="native-walking-heading"><strong>Your pet’s view</strong><span id="browser-compass-status">Facing forward</span></div><p>Your pet stays in the middle, facing the top of the screen. Tap the ground or use arrow keys to move. On a phone, enable walking to move with your steps, and the compass to turn together. Hold the phone facing the way you walk.</p><p id="browser-walking-status" role="status">Walking is off · tap to move, or enable walking on your phone.</p><div class="native-buttons"><button id="enable-compass">Enable phone compass</button><button id="enable-walking">Enable walking</button></div></div>
+      <div id="browser-view-tools" class="native-tools" hidden><div class="native-walking-heading"><strong>Your pet’s view</strong><span id="browser-compass-status">Facing forward</span></div><p>Your pet stays in the middle. On mobile, location moves your pet and the compass turns the view. Desktop players can use the ground or arrow keys to move.</p><p id="browser-walking-status" role="status">Walking is off · tap to move, or enable walking on your phone.</p><div class="native-buttons"><button id="enable-compass">Enable phone compass</button><button id="enable-walking">Enable walking</button></div></div>
       <section id="quest-tools" class="native-tools quest-tools" aria-label="Quest clips" hidden>
         <div class="native-walking-heading evidence-heading"><strong>Quest clip</strong></div>
         <div class="evidence-selector"><label for="evidence-quest">Quest to verify</label><select id="evidence-quest"><option value="touchGrass">Solo · touch grass</option><option value="meetFriend">Duo · say hello</option><option value="dapHandshake">Duo · handshake / dap</option><option value="squadCircle">Squad · circle and cheer</option></select></div>
@@ -195,6 +195,7 @@ function readResume(): (Membership & { serverUrl: string }) | null {
     return saved;
   } catch { return null; }
 }
+const mobileMovement = isNativePhone() || window.matchMedia('(pointer: coarse)').matches;
 const params = new URLSearchParams(location.search);
 const devServer = isNativePhone() ? 'ws://127.0.0.1:8788/play' : defaultPlayServerUrl(location.href);
 const nativeSelection = nativeServerSelection(window.bondimalsNative?.serverURL, stored('bondimals:applied-native-server'), stored('bondimals:server'));
@@ -406,15 +407,16 @@ function updateControls(): void {
   const friends = snapshot?.players.filter(p => p.id !== membership?.playerId && p.connected) ?? [];
   const friend = friends[0];
   const near = !!local && friends.some(other => Math.hypot(local.x - other.x, local.z - other.z) <= 1.5);
+  const playNear = !!local && friends.some(other => Math.hypot(local.x - other.x, local.z - other.z) <= PLAY_TOGETHER_DISTANCE);
   const connected = connection === 'connected';
   playground?.setEnabled(ready && (nearbyActive ? locationActive && discoveryConnected : connected));
   document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     const survival = local?.survival;
     const unavailableTreat = button.dataset.action === 'feed' && !!survival && ((survival.inventory.berry ?? 0) < 1 || survival.treatCooldownMs > 0);
-    button.disabled = !connected || !!local?.action || unavailableTreat || ((button.dataset.action === 'play' || button.dataset.action === 'dap') && !near);
+    button.disabled = !connected || !!local?.action || unavailableTreat || (button.dataset.action === 'play' && !playNear) || (button.dataset.action === 'dap' && !near);
   });
   el<HTMLButtonElement>('quest-button').disabled = !connected || !local;
-  document.querySelectorAll<HTMLButtonElement>('[data-move]').forEach(button => { button.disabled = !connected || !local; });
+  document.querySelectorAll<HTMLButtonElement>('[data-move]').forEach(button => { button.disabled = mobileMovement || !connected || !local; });
   el<HTMLButtonElement>('quest-button').disabled = !connected || !local;
   el<HTMLButtonElement>('zoom-out-button').hidden = !membership || !connected || nearbyActive;
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
@@ -428,7 +430,7 @@ function updateControls(): void {
   el('scene-hint').textContent = connection === 'offline' ? 'Offline. Leave the playground to connect again.'
     : !connected ? 'Reconnecting. Your pets are waiting for you.'
     : !friend ? snapshot?.publicLobby ? 'Your friend appears automatically when they open the app on this server.' : snapshot?.legacyServer ? 'Invite a friend using this room code.' : 'Touch grass to finish your solo quest, or invite a friend.'
-    : near ? 'You’re close! Wave hello or play together.' : 'Tap to move, or meet in the middle.';
+    : playNear ? 'You’re close! Wave hello or play together.' : 'Walk closer to another pet to play together.';
   updateQuestDetail();
   updateEvidenceReadiness();
 }
@@ -593,7 +595,7 @@ const client = new RoomClient({
     updateControls();
     if (entering) {
       el('error-message').hidden = true;
-      canvas.setAttribute('aria-label', 'Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move.');
+      canvas.setAttribute('aria-label', mobileMovement ? 'Pet playground. Walk with your device to move; turn or tilt to look around.' : 'Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move.');
       if (!next.encounter) el('copy-code').focus();
     }
   },
@@ -816,7 +818,7 @@ function stopNearby(): void {
   el('home-panel').hidden = false;
   el('app').classList.remove('in-nearby');
   el('scene-caption').textContent = 'Small paws. Big adventures.';
-  canvas.setAttribute('aria-label', 'Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move.');
+  canvas.setAttribute('aria-label', mobileMovement ? 'Pet playground. Walk with your device to move; turn or tilt to look around.' : 'Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move.');
   setConnection('idle');
 }
 
@@ -1128,7 +1130,7 @@ if (!isNativePhone()) {
   el('local-weather').hidden = false;
   el('browser-view-tools').hidden = false;
   el('enable-compass').hidden = !window.matchMedia('(pointer: coarse)').matches;
-  el('enable-walking').hidden = !window.matchMedia('(pointer: coarse)').matches;
+  el('enable-walking').hidden = mobileMovement || !window.matchMedia('(pointer: coarse)').matches;
   el('weather-status').textContent = 'Local weather is ready when you allow location';
 }
 let browserHasHeading = false;
@@ -1293,10 +1295,12 @@ window.addEventListener('pageshow', event => {
 updateEntry();
 try {
   playground = new Playground(canvas, (x, z) => {
+    if (mobileMovement) return;
     el('error-message').hidden = true;
     if (walking) { walkingTracker.moveTo(x, z); publishWalking(true); }
     else client.move(x, z);
   });
+  if (mobileMovement) { canvas.tabIndex = -1; canvas.setAttribute('aria-label', 'Pet playground. Walk with your device to move; turn or tilt to look around.'); }
   await playground.load();
   renderMood();
   ready = true;
@@ -1318,10 +1322,20 @@ try {
   error('We couldn’t load the 3D playground. Check your connection and WebGL support, then refresh.');
 }
 
+function receiveGameLocation(fix: LocationFix): void {
+  if (!walking || !mobileMovement) return;
+  if (fix.accuracy > 25) { el('walking-status').textContent = 'Waiting for a clearer GPS signal. Your pet stays put.'; return; }
+  if (membership && connection === 'connected') client.location(fix);
+  el('walking-status').textContent = `Following your location · GPS ±${Math.ceil(fix.accuracy)} m`;
+}
+const browserGameLocation = new LocationDiscovery({ fix: receiveGameLocation,
+  status: message => { el('browser-walking-status').textContent = message; },
+  unavailable: message => { el('browser-walking-status').textContent = message; }, paused: () => {} });
 function stopWalking(): void {
   if (!walking) return;
   walking = false;
   stepSensorAvailable = false; stepDetector.reset(); walkingTracker.setStepTracking(false);
+  browserGameLocation.stop();
   nativeCommand('stopLocation', { purpose: 'walking' });
   playground?.setWalkingPose(null);
   playground?.setViewTilt();
@@ -1331,25 +1345,26 @@ function stopWalking(): void {
   updateControls();
 }
 function startWalking(): void {
-  if ((!isNativePhone() && !browserWalkingEnabled) || !ready || walking || document.hidden) return;
+  if ((!mobileMovement && !browserWalkingEnabled) || !ready || walking || document.hidden) return;
   walking = true;
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
   walkingTracker.reset(local?.targetX ?? walkingTracker.pose.x, local?.targetZ ?? walkingTracker.pose.z);
   stepDetector.reset(); walkingSteps = 0;
   deviceView.reset((Math.PI - walkingTracker.pose.yaw) * 180 / Math.PI);
-  stepSensorAvailable = browserWalkingEnabled;
+  stepSensorAvailable = browserWalkingEnabled && !mobileMovement;
   walkingTracker.setStepTracking(stepSensorAvailable);
   el('walking-status').textContent = 'Aligning your pet with your device…';
   el('compass-reading').textContent = 'Reading your starting direction…';
   publishWalking();
   updateControls();
   nativeCommand('startLocation', { purpose: 'walking' });
+  if (!isNativePhone() && mobileMovement) browserGameLocation.start();
 }
 function publishWalking(moved = false, initialHeading = false): void {
   if (!walking) return;
   playground?.setWalkingPose(walkingTracker.pose, initialHeading, connection !== 'connected');
   if (membership && connection === 'connected') {
-    if (moved) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
+    if (moved && !mobileMovement) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
     client.heading(walkingTracker.pose.yaw);
   }
 }
@@ -1390,12 +1405,12 @@ if (isNativePhone()) {
     if (!walking) return;
     if (event.type === 'unavailable' && event.message) el('walking-status').textContent = event.message;
     if (event.type === 'motionStatus') {
-      stepSensorAvailable = event.available === true;
+      stepSensorAvailable = !mobileMovement && event.available === true;
       stepDetector.reset(); walkingTracker.setStepTracking(stepSensorAvailable);
-      el('walking-status').textContent = event.message ?? '';
+      if (!mobileMovement) el('walking-status').textContent = event.message ?? '';
     }
     if (event.type === 'motion') receiveWalkingMotion(event.verticalG ?? NaN, event.timestamp ?? NaN);
-    if (event.type === 'status' && !stepSensorAvailable) el('walking-status').textContent = event.message ?? '';
+    if (event.type === 'status' && !stepSensorAvailable && !mobileMovement) el('walking-status').textContent = event.message ?? '';
     if (event.type === 'attitude') {
       const view = deviceView.sample({ yaw: event.yaw ?? NaN, gravityX: event.gravityX ?? NaN,
         gravityY: event.gravityY ?? NaN, gravityZ: event.gravityZ ?? NaN,
@@ -1417,7 +1432,8 @@ if (isNativePhone()) {
       } else if (!walkingTracker.hasHeading) el('compass-reading').textContent = 'Waiting for motion or compass…';
     }
     const fix = nativeFix(event);
-    if (fix && !stepSensorAvailable) {
+    if (fix && mobileMovement) receiveGameLocation(fix);
+    else if (fix && !stepSensorAvailable) {
       const result = walkingTracker.location(fix);
       el('walking-status').textContent = result.message;
       publishWalking(result.moved);

@@ -1,6 +1,7 @@
 import { FEED_DURATION_MS } from './feeding.mjs';
 export const PLAY_WORLD_LIMIT = 10_000;
 export const PLAY_FRIEND_DISTANCE = 1.5;
+export const PLAY_TOGETHER_DISTANCE = 3; // 15 real meters in the scaled meadow.
 export const PLAY_TICK_MS = 50;
 export const PLAY_MAX_PLAYERS = 4;
 export const PLAY_ACTIONS = Object.freeze(['wave', 'feed', 'play', 'jump', 'dap']);
@@ -14,6 +15,7 @@ export function parsePlayMessage(input) {
   const allowed = {
     lobby: ['type', 'name', 'playerToken'],
     create: ['type', 'name'], join: ['type', 'roomCode', 'name', 'playerToken'],
+    location: ['type', 'latitude', 'longitude', 'accuracy', 'timestamp'],
     heading: ['type', 'yaw', 'lock'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'], ready_squad_quest: ['type'], ready_raid: ['type'],
   };
   if (typeof input.type !== 'string' || !Object.hasOwn(allowed, input.type) || Object.keys(input).some(key => !allowed[input.type].includes(key))) return null;
@@ -27,6 +29,10 @@ export function parsePlayMessage(input) {
     return { type: 'heading', yaw: Math.atan2(Math.sin(input.yaw), Math.cos(input.yaw)),
       ...(input.lock === undefined ? {} : { lock: input.lock }),
     };
+  }
+  if (input.type === 'location') {
+    if (![input.latitude, input.longitude, input.accuracy, input.timestamp].every(value => typeof value === 'number' && Number.isFinite(value)) || Math.abs(input.latitude) > 90 || Math.abs(input.longitude) > 180 || input.accuracy < 0) return null;
+    return { type: 'location', latitude: input.latitude, longitude: input.longitude, accuracy: input.accuracy, timestamp: input.timestamp };
   }
   if (input.type === 'move') {
     if (typeof input.x !== 'number' || typeof input.z !== 'number' || !Number.isFinite(input.x) || !Number.isFinite(input.z)) return null;

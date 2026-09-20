@@ -152,3 +152,9 @@ node --test bridge/play-server.test.mjs bridge/nearby-discovery.test.mjs
 Tests open real WebSocket clients to verify multiplayer motion, cooperative quests, room capacity, token isolation and reconnection, malformed inputs, message bounds, room expiry, and origin restrictions.
 
 Native recordings are copied into `Documents/QuestClips` before old clips are cleaned up. Cleanup uses a list captured before copying, so `/var` versus `/private/var` URL aliases cannot delete the new clip. A failed or empty retake keeps the prior recording. Regression check: `xcrun swiftc phone-ios/BondimalsPhone/QuestClipStore.swift scripts/phone-quest-clip-tests.swift -o /tmp/kith-quest-clip-tests && /tmp/kith-quest-clip-tests`.
+
+### Location movement and nearby play
+
+Native phones and tablets, and touch browsers, use geolocation for movement. Scene taps no longer create destinations on mobile; desktop pointer/keyboard movement remains available. Mobile step detection does not override GPS. Location permission and a usable fix are required; poor GPS leaves the pet stationary. Heading and tilt still control the view.
+
+The `location` playground message uses a shared room origin and 0.2 world units per meter, so physically nearby devices are placed nearby. Raw coordinates remain in server memory and never enter snapshots or the pet database. Fixes older than 20 seconds, accuracy worse than 25 meters, and implausible walking jumps are ignored; a small dead zone reduces stationary jitter. Play together uses a shared 3-world-unit radius (approximately 15 real meters) in both the client and server, and one tap starts the dance for the nearby group. This proximity remains approximate because GPS accuracy varies.

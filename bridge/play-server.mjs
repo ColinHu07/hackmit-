@@ -7,11 +7,12 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { attachNearbyDiscovery } from './nearby-discovery.mjs';
 import { createStaticWebHandler } from './static-web.mjs';
 import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
+import { locationPosition, validPlayLocation } from '../shared/play-location.mjs';
 import { createPetStore } from './pet-store.mjs';
 import { createGlassesCameraBridge } from './glasses-camera.mjs';
 import { QUEST_REWARD } from '../shared/quest-rewards.mjs';
 import {
-  PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES, PLAY_WORLD_LIMIT,
+  PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_TOGETHER_DISTANCE, PLAY_MAX_MESSAGE_BYTES, PLAY_WORLD_LIMIT,
   PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
 } from '../shared/play-protocol.mjs';
 
@@ -631,6 +632,22 @@ export function createPlayServer(options = {}) {
       } else if (!player.action && Math.hypot(player.targetX - player.x, player.targetZ - player.z) < 0.05) player.yaw = message.yaw;
       return;
     }
+    if (message.type === 'location') {
+      if (!validPlayLocation(message, now) || (player.lastLocation && message.timestamp <= player.lastLocation.timestamp)) return;
+      if (player.action?.kind === 'play' && now < player.action.startedAt + player.action.duration) return;
+      if (player.lastLocation && message.timestamp - player.lastLocation.timestamp <= 20_000) {
+        const change = locationPosition(player.lastLocation, message);
+        const meters = Math.hypot(change.x, change.z) / 0.2;
+        if (meters < Math.max(2, Math.min(5, message.accuracy / 2))) return;
+        if (meters / ((message.timestamp - player.lastLocation.timestamp) / 1000) > 6) return;
+      }
+      room.locationOrigin ??= { latitude: message.latitude, longitude: message.longitude };
+      const position = locationPosition(room.locationOrigin, message);
+      if (Math.abs(position.x) > PLAY_WORLD_LIMIT || Math.abs(position.z) > PLAY_WORLD_LIMIT) return;
+      player.lastLocation = message;
+      player.targetX = position.x; player.targetZ = position.z;
+      return;
+    }
     if (message.type === 'move') {
       if (player.action?.kind === 'play' && now < player.action.startedAt + player.action.duration) return;
       player.targetX = message.x;
@@ -677,7 +694,7 @@ export function createPlayServer(options = {}) {
       return;
     }
     if (message.action === 'play') {
-      const playmates = [player, ...connectedPlayers.filter(friend => friend !== player && Math.hypot(player.x - friend.x, player.z - friend.z) <= PLAY_FRIEND_DISTANCE)];
+      const playmates = [player, ...connectedPlayers.filter(friend => friend !== player && Math.hypot(player.x - friend.x, player.z - friend.z) <= PLAY_TOGETHER_DISTANCE)];
       if (playmates.length < 2) return fail(ws, 'friend_too_far', 'Bring another connected pet close together to play.');
       if (now - room.lastPlayAt < 5000) return fail(ws, 'play_cooldown', 'Your pets are catching their breath. Try again in a moment.');
       if (playmates.some(friend => friend.action?.kind === 'play' && now < friend.action.startedAt + friend.action.duration)) {

@@ -94,6 +94,7 @@ export type PlayClientMessage =
   | { type: 'create'; name: string }
   | { type: 'join'; roomCode: string; name: string; playerToken?: string }
   | { type: 'heading'; yaw: number; lock?: boolean }
+  | { type: 'location'; latitude: number; longitude: number; accuracy: number; timestamp: number }
   | { type: 'move'; x: number; z: number }
   | { type: 'action'; action: PetActionKind }
   | { type: 'ready_squad_quest' }
@@ -111,5 +112,6 @@ export type ServerMessage = PlayServerMessage;
 
 export const PLAY_WORLD_LIMIT = 10_000;
 export const PLAY_FRIEND_DISTANCE = 1.5;
+export const PLAY_TOGETHER_DISTANCE = 3; // 15 real meters in the scaled meadow.
 export const PLAY_TICK_MS = 50;
 export const PLAY_MAX_PLAYERS = 4;

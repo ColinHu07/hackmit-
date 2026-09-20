@@ -585,3 +585,35 @@ test('demo admin controls update only the authenticated connected pet', async t 
   assert.equal(updated.players.find(p => p.id === second.playerId).survival.inventory.berry, 3);
   assert.equal((await post({ roomCode: first.roomCode, playerToken: first.playerToken, changes: { happiness: 101 } })).status, 400);
 });
+
+test('nearby pets can play from one tap without both requesting it', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'lobby', name: 'A' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'lobby', name: 'B' }); const second = await welcome(b);
+  a.send({ type: 'action', action: 'play' });
+  const playing = await state(b, s => s.players.every(p => p.action?.kind === 'play'));
+  assert.equal(playing.players.length, 2);
+  assert.equal(playing.bond, 1);
+  assert.ok(playing.players.some(p => p.id === first.playerId));
+  assert.ok(playing.players.some(p => p.id === second.playerId));
+});
+
+test('GPS uses one shared origin, ignores bad fixes, and never appears in snapshots', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'lobby', name: 'GPS A' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'lobby', name: 'GPS B' }); const second = await welcome(b);
+  const timestamp = Date.now();
+  const fix = { type: 'location', latitude: 42, longitude: -71, accuracy: 2, timestamp };
+  a.send(fix);
+  b.send({ ...fix, latitude: 42 + 5 / 111194.9266 });
+  const positioned = await state(a, s => Math.abs(s.players.find(p => p.id === first.playerId).targetX) < .001 && Math.abs(s.players.find(p => p.id === second.playerId).targetZ + 1) < .001);
+  assert.equal(JSON.stringify(positioned).includes('latitude'), false);
+  assert.equal(JSON.stringify(positioned).includes('longitude'), false);
+  a.clear();
+  a.send({ ...fix, latitude: 43, timestamp: timestamp + 1 });
+  a.send({ ...fix, latitude: 43, accuracy: 100, timestamp: timestamp + 2 });
+  const unchanged = await state(a, s => s.players.find(p => p.id === first.playerId).targetZ === 0);
+  assert.equal(unchanged.players.find(p => p.id === first.playerId).targetX, 0);
+  a.send({ type: 'action', action: 'play' });
+  await state(b, s => s.players.every(p => p.action?.kind === 'play'));
+});
