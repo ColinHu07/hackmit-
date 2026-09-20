@@ -14,7 +14,7 @@ import { BrowserCompass } from './BrowserCompass';
 import { BrowserWalking } from './BrowserWalking';
 import { StepDetector } from './StepDetector';
 import { DeviceView } from './DeviceView';
-import { TreatCooldown } from './TreatCooldown';
+import { TreatCooldown, formatTreatTime } from './TreatCooldown';
 import { createInviteUrl, defaultPlayServerUrl, nativeServerSelection } from './WebConnection';
 import type { LocationFix } from './LocationDiscovery';
 import type { NearbyPet, MeetRequest } from '../../shared/nearby-protocol';
@@ -95,12 +95,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section class="playground-panel" aria-label="Your local world">
       <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
       <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><aside class="status-effects" aria-label="Pet status effects"><span class="status-effects-title">PET STATUS</span><div class="status-effect"><span class="status-effect-icon">${icon('heart')}</span><span><strong>Happiness</strong><small id="effect-mood">70% · Content</small></span></div><div class="status-effect"><span class="status-effect-icon">${icon('leaf')}</span><span><strong>Local sky</strong><small id="effect-weather">Weather unavailable</small></span></div><div class="status-effect" id="effect-bond-row" hidden><span class="status-effect-icon">${icon('people')}</span><span><strong>Bond</strong><small id="effect-bond">0 shared moments</small></span></div></aside><div id="treat-timer" class="treat-timer" role="img" aria-label="Treat cooldown" hidden><svg class="treat-timer-donut" viewBox="0 0 48 48" aria-hidden="true"><circle class="treat-timer-track" cx="24" cy="24" r="20"/><circle class="treat-timer-ring" cx="24" cy="24" r="20" pathLength="100"/></svg><span class="treat-timer-berry" aria-hidden="true">🫐</span><span class="treat-timer-count" aria-hidden="true"></span></div><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
-      <div class="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-note"><span class="mood-fill"></span></div><p id="mood-note">Each bite brings a little happiness. Keep your pet fed and explore together.</p></div>
-      <div class="survival-card" id="survival-card"><div><strong>Pet care</strong><span id="survival-points">0 points</span></div><meter id="health-meter" min="0" max="100" value="100" aria-label="Pet health"></meter><p id="survival-stats">Connect to the server to load your pet’s health.</p><p id="food-inventory">Food: loading…</p><button id="health-treat" class="health-treat" data-action="feed" type="button">Give a treat</button><small id="treat-cooldown" class="treat-cooldown" role="status"></small></div>
+      <div class="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-note"><span class="mood-fill"></span></div><p id="mood-note">Berries add 3% happiness over three bites. Normally, happiness drops 1% every minute.</p></div>
+      <div class="survival-card" id="survival-card"><div><strong>Pet care</strong><span id="survival-points">0 points</span></div><meter id="health-meter" min="0" max="100" value="100" aria-label="Pet health"></meter><p id="survival-stats">Connect to the server to load your pet’s health.</p><p id="food-inventory">Food: loading…</p><button id="health-treat" class="health-treat" data-action="feed" type="button">Give a treat</button><p id="treat-boost-notice" role="status" hidden></p><small id="treat-cooldown" class="treat-cooldown" role="status"></small></div>
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
         <div class="moment-line"><span id="scene-hint">Tap the ground to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
-        <div class="action-bar action-bar-five"><button data-action="wave">${icon('wave')}<span>Wave</span></button><button id="quest-button" class="co-op-action" type="button" disabled>${icon('quest')}<span>Quests</span></button><button data-action="feed">${icon('treat')}<span>Treat</span></button><button data-action="jump">${icon('jump')}<span>Jump</span></button><button data-action="play" class="co-op-action">${icon('play')}<span>Play together</span></button></div>
+        <div class="action-bar action-bar-five"><button data-action="wave">${icon('wave')}<span>Wave</span></button><button data-action="feed">${icon('treat')}<span>Treat</span></button><button data-action="jump">${icon('jump')}<span>Jump</span></button><button data-action="play" class="co-op-action">${icon('play')}<span>Play together</span></button><button id="quest-button" class="co-op-action" type="button" disabled>${icon('quest')}<span>Quests</span></button></div>
         <p class="action-notice" id="action-notice" role="status" aria-live="polite">Your little adventure starts here.</p>
       </div>
       <div id="native-tools" class="native-tools" hidden>
@@ -110,15 +110,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <div id="browser-view-tools" class="native-tools" hidden><div class="native-walking-heading"><strong>Your pet’s view</strong><span id="browser-compass-status">Facing forward</span></div><p>Your pet stays in the middle, facing the top of the screen. Tap the ground or use arrow keys to move. On a phone, enable walking to move with your steps, and the compass to turn together. Hold the phone facing the way you walk.</p><p id="browser-walking-status" role="status">Walking is off · tap to move, or enable walking on your phone.</p><div class="native-buttons"><button id="enable-compass">Enable phone compass</button><button id="enable-walking">Enable walking</button></div></div>
       <section id="quest-tools" class="native-tools quest-tools" aria-label="Quest clips" hidden>
-        <div class="native-walking-heading"><strong>Quest clips</strong></div>
-        <p>Complete the in-game step, then capture the real-world action.</p>
-        <label for="evidence-quest">Quest to verify</label><select id="evidence-quest"><option value="touchGrass">Solo · touch grass</option><option value="meetFriend">Duo · say hello</option><option value="dapHandshake">Duo · handshake / dap</option><option value="squadCircle">Squad · circle and cheer</option></select>
+        <div class="native-walking-heading evidence-heading"><strong>Quest clip</strong></div>
+        <div class="evidence-selector"><label for="evidence-quest">Quest to verify</label><select id="evidence-quest"><option value="touchGrass">Solo · touch grass</option><option value="meetFriend">Duo · say hello</option><option value="dapHandshake">Duo · handshake / dap</option><option value="squadCircle">Squad · circle and cheer</option></select></div>
         <p id="evidence-instructions">Show your hand touching natural grass outdoors.</p>
-        <div class="native-buttons"><button id="record-clip">Record quest clip</button><button id="review-clip">Review clip</button><button id="delete-clip">Delete clip</button></div>
-        <p id="recording-status" role="status">Record 1–10 seconds and review your clip before sending.</p>
-        <label class="evidence-consent"><input id="evidence-consent" type="checkbox" /> Everyone shown agrees to send this evidence to Meta for this quest check.</label>
-        <div class="native-buttons"><button id="submit-clip">Submit clip to Meta</button><button id="submit-photo">Choose photo to submit</button></div>
-        <p id="evidence-status" role="status">Clips send 12 sampled frames; audio stays on your phone. No upload happens until you submit.</p>
+        <div class="native-buttons"><button id="record-clip">Record clip</button><button id="retake-clip">Retake</button></div>
+        <p id="recording-status" role="status">Record a 1–10 second clip.</p>
+        <label class="evidence-consent"><input id="evidence-consent" type="checkbox" /> Everyone shown agrees to submit this evidence for grading.</label>
+        <div class="native-buttons"><button id="submit-clip">Submit</button><button id="submit-photo">Choose photo</button></div>
+        <p id="evidence-status" role="status">Submit clip for grading</p>
       </section>
       <div class="meadow-footer"><span>01 / THE FIRST HELLO</span><span>A WORLD WE MAKE TOGETHER</span></div>
     </section>
@@ -127,15 +126,17 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <details class="app-credits"><summary>Credits</summary><p>Weather data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></p></details>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="quest-dialog" class="quest-dialog" aria-labelledby="quest-dialog-title">
-    <div class="dialog-heading"><div><span class="small-label">SHARED ADVENTURES</span><h2 id="quest-dialog-title">Choose a quest</h2></div><button class="icon-button" type="button" id="close-quests" aria-label="Close quests">${icon('close')}</button></div>
+    <div class="dialog-heading"><div><span id="quest-dialog-category" class="small-label">SHARED ADVENTURES</span><h2 id="quest-dialog-title">Choose a quest</h2></div><button class="icon-button" type="button" id="close-quests" aria-label="Close quests">${icon('close')}</button></div>
+    <div class="quest-dialog-body">
     <p id="quest-dialog-intro">Pick a solo adventure or a shared challenge to see what you need to do.</p>
     <div id="quest-catalog" class="quest-catalog" aria-label="Available quests"></div>
     <section id="quest-detail" class="quest-detail" hidden>
       <button type="button" id="quest-back" class="text-button">${icon('arrow')} All quests</button>
-      <span id="quest-detail-category" class="small-label"></span><h3 id="quest-detail-title"></h3><p id="quest-detail-requirements"></p>
+      <p id="quest-detail-requirements"></p>
       <div class="quest-detail-actions"><button type="button" id="quest-start" class="native-buttons-button">Start in-game step</button></div>
       <p id="quest-detail-status" class="photo-verification-status" role="status">Complete the in-game step, then record and submit evidence.</p>
     </section>
+    </div>
   </dialog>
   <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both devices connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
 `;
@@ -505,10 +506,15 @@ const client = new RoomClient({
       el('survival-points').textContent = `${survival.points} points · ${survival.survivalHours}h alive`;
       el('survival-stats').textContent = `Health ${survival.health}% · Hunger ${survival.hunger}% · Happiness ${survival.happiness}%`;
       el('food-inventory').textContent = `Food: ${Object.entries(survival.inventory).map(([food, quantity]) => `${food} ${quantity}`).join(' · ')}`;
-      const cooldown = Math.ceil(survival.treatCooldownMs / 1000);
+      const cooldown = survival.treatCooldownMs;
+      const cooldownLabel = formatTreatTime(cooldown);
+      const boostNotice = el('treat-boost-notice');
+      boostNotice.hidden = cooldown <= 0;
+      const boostText = cooldown > 0 ? 'Berry boost: losing 1% happiness now takes 1.5× longer — 90 seconds instead of 60 — for one hour. You can have another berry when the timer ends.' : '';
+      if (boostNotice.textContent !== boostText) boostNotice.textContent = boostText;
       const berries = survival.inventory.berry ?? 0;
-      el('treat-cooldown').textContent = cooldown > 0 ? `Treat ready in ${cooldown}s` : berries > 0 ? 'Treat ready' : 'Out of berries';
-      el<HTMLButtonElement>('health-treat').textContent = cooldown > 0 ? `Treat · ${cooldown}s` : 'Give a treat';
+      el('treat-cooldown').textContent = cooldown > 0 ? `Treat ready in ${cooldownLabel}` : berries > 0 ? 'Treat ready' : 'Out of berries';
+      el<HTMLButtonElement>('health-treat').textContent = cooldown > 0 ? `Treat · ${cooldownLabel}` : 'Give a treat';
     }
     el('effect-bond').textContent = `${next.bond} shared ${next.bond === 1 ? 'moment' : 'moments'}`;
     el('effect-bond-row').hidden = false;
@@ -784,9 +790,10 @@ function selectedEvidence(): EvidenceQuestId { return evidenceChoice.value as Ev
 function updateEvidenceChoice(): void {
   el('evidence-instructions').textContent = evidenceInstructions[selectedEvidence()];
   el<HTMLButtonElement>('submit-photo').disabled = photoVerificationPending || selectedEvidence() === 'dapHandshake';
+  el('submit-photo').hidden = selectedEvidence() === 'dapHandshake';
   el('evidence-status').textContent = selectedEvidence() === 'dapHandshake' && !isNativePhone()
     ? 'Use the phone app to record and submit a handshake clip. A still photo cannot verify the motion.'
-    : 'Review the evidence and check consent before submitting it to Meta.';
+    : isNativePhone() ? 'Submit clip for grading' : 'Submit photo for grading';
   evidenceConsent.checked = false;
 }
 evidenceChoice.addEventListener('change', () => {
@@ -807,8 +814,8 @@ function questProgress(id: EvidenceQuestId): string {
   const local = membership && snapshot?.quests[membership.playerId];
   if (!local) return 'Join a shared pen to begin.';
   if (connection !== 'connected') return 'Reconnect to continue this quest.';
-  if (local.photoVerification[id] === 'approved') return 'Verified by Muse ✓';
-  if (local.photoVerification[id] === 'pending') return 'Muse is checking your evidence…';
+  if (local.photoVerification[id] === 'approved') return 'Quest complete ✓';
+  if (local.photoVerification[id] === 'pending') return 'Grading your clip…';
   if (local.photoVerification[id] === 'rejected') return 'Evidence needs another try.';
   if (id === 'dapHandshake' && local.dapHandshakeReady) return 'In-game step done · evidence needed';
   if (local[id]) return 'In-game step done · evidence needed';
@@ -838,8 +845,9 @@ function openQuestDetail(id: EvidenceQuestId): void {
   if (evidenceChoice.value !== id) { evidenceChoice.value = id; updateEvidenceChoice(); }
   el('quest-detail').append(el('quest-tools'));
   el('quest-catalog').hidden = true; el('quest-detail').hidden = false;
-  el('quest-detail-category').textContent = `${quest.group} QUEST`;
-  el('quest-detail-title').textContent = quest.title;
+  el('quest-dialog-category').textContent = `${quest.group} QUEST`;
+  el('quest-dialog-title').textContent = quest.title;
+  el('quest-dialog-intro').hidden = true;
   el('quest-detail-requirements').textContent = quest.requirements;
   el<HTMLButtonElement>('quest-start').hidden = !quest.start;
   el<HTMLButtonElement>('quest-start').textContent = quest.start === 'squad' ? 'Ready for squad circle' : 'Start dap step';
@@ -870,6 +878,9 @@ function updateQuestDetail(): void {
 function openQuestMenu(): void {
   if (el<HTMLButtonElement>('quest-button').disabled) return;
   renderQuestCatalog(); selectedQuest = null;
+  el('quest-dialog-title').textContent = 'Choose a quest';
+  el('quest-dialog-category').textContent = 'SHARED ADVENTURES';
+  el('quest-dialog-intro').hidden = false;
   el('quest-catalog').hidden = false; el('quest-detail').hidden = true;
   const dialog = el<HTMLDialogElement>('quest-dialog'); if (!dialog.open) dialog.showModal();
   updateQuestDetail();
@@ -877,7 +888,7 @@ function openQuestMenu(): void {
 el('quest-button').addEventListener('click', openQuestMenu);
 el('close-quests').addEventListener('click', () => el<HTMLDialogElement>('quest-dialog').close());
 el('quest-dialog').addEventListener('close', () => { evidenceHome.after(el('quest-tools')); selectedQuest = null; });
-el('quest-back').addEventListener('click', () => { selectedQuest = null; el('quest-catalog').hidden = false; el('quest-detail').hidden = true; renderQuestCatalog(); });
+el('quest-back').addEventListener('click', openQuestMenu);
 el('quest-start').addEventListener('click', () => {
   if (selectedQuest === 'dapHandshake') client.action('dap');
   else if (selectedQuest === 'squadCircle') client.readySquadQuest();
@@ -894,7 +905,7 @@ function evidenceSession() {
 }
 async function submitEvidence(session: ReturnType<typeof evidenceSession>, evidence: object): Promise<void> {
   if (membership?.playerToken !== session.playerToken) throw new Error('Your quest session changed. Select the quest again.');
-  el('evidence-status').textContent = 'Checking your evidence with Meta…';
+  el('evidence-status').textContent = 'Grading your submission…';
   const response = await fetch(verificationEndpoint(), {
     method: 'POST', signal: AbortSignal.timeout(40_000), headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ...session, ...evidence }),
@@ -952,10 +963,11 @@ touchGrassPhotoInput.addEventListener('change', () => {
 });
 el('quest-tools').hidden = false;
 el('submit-clip').hidden = !isNativePhone();
-if (!isNativePhone()) for (const id of ['record-clip', 'review-clip', 'delete-clip']) el(id).hidden = true;
+updateEvidenceChoice();
+if (!isNativePhone()) for (const id of ['record-clip', 'retake-clip']) el(id).hidden = true;
 if (!isNativePhone()) {
-  el('recording-status').textContent = 'Choose a photo after completing the in-game step. The native app also supports video clips.';
-  el('evidence-status').textContent = 'Your photo is sent only when you select it after checking consent. Movement and multiplayer actions work without a photo.';
+  el('recording-status').hidden = true;
+  el('evidence-status').textContent = 'Submit photo for grading';
   el('local-weather').hidden = false;
   el('browser-view-tools').hidden = false;
   el('enable-compass').hidden = !window.matchMedia('(pointer: coarse)').matches;
@@ -1156,7 +1168,7 @@ el('recenter-view').addEventListener('click', () => {
 if (isNativePhone()) {
   el('native-tools').hidden = false;
   el('quest-tools').hidden = false;
-  for (const [id, command] of [['record-clip', 'recordClip'], ['review-clip', 'reviewClip'], ['delete-clip', 'deleteClip']] as const) {
+  for (const [id, command] of [['record-clip', 'recordClip'], ['retake-clip', 'recordClip']] as const) {
     el(id).addEventListener('click', () => nativeCommand(command));
   }
   onNativeEvent(event => {

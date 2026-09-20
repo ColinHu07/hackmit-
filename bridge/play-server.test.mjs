@@ -492,7 +492,7 @@ test('a saved lobby pet retains inventory, bite progress, and cooldown after the
   assert.equal(resumed.playerToken, token);
   const care = resumed.snapshot.players.find(p => p.id === resumed.playerId).survival;
   assert.equal(care.inventory.berry, 2);
-  assert.equal(care.happiness, 70.56);
+  assert.equal(care.happiness, 70.84);
   assert.ok(care.treatCooldownMs > 0);
   const stranger = await connect();
   stranger.send({ type: 'lobby', name: 'Unknown', playerToken: 'e'.repeat(48) });

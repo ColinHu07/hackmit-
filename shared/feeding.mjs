@@ -1,5 +1,8 @@
 /** One timeline for the visible bites and their server-owned happiness reward. */
-export const TREAT_COOLDOWN_MS = 15_000;
+export const TREAT_COOLDOWN_MS = 3_600_000;
+export const HAPPINESS_DECAY_MS = 60_000;
+export const TREAT_DECAY_MULTIPLIER = 1.5;
+export const BERRY_HAPPINESS = 3;
 export const FEED_DURATION_MS = 6200;
 export const FEED_BITES = Object.freeze([
   Object.freeze({ start: .45, end: .47, share: .28 }),

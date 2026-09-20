@@ -5,6 +5,13 @@ export function cooldownState(remainingMs: number, elapsedMs = 0) {
   return { remaining, fraction: remaining / TREAT_COOLDOWN_MS, seconds: Math.ceil(remaining / 1000) };
 }
 
+export function formatTreatTime(remainingMs: number): string {
+  const seconds = Math.ceil(Math.max(0, remainingMs) / 1000);
+  if (seconds >= 3600) return '1h';
+  if (seconds >= 60) return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+  return `${seconds}s`;
+}
+
 /** Render from the server's remaining time, then animate locally between snapshots. */
 export class TreatCooldown {
   private deadline = 0;
@@ -25,10 +32,10 @@ export class TreatCooldown {
     const state = cooldownState(this.deadline - performance.now());
     this.root.hidden = state.remaining <= 0;
     this.ring.style.strokeDashoffset = String(100 * (1 - state.fraction));
-    const label = `Next treat ready in ${state.seconds} seconds`;
+    const label = `Next treat ready in ${formatTreatTime(state.remaining)}`;
     if (label !== this.label) {
       this.root.setAttribute('aria-label', label);
-      this.count.textContent = `${state.seconds}s`;
+      this.count.textContent = formatTreatTime(state.remaining);
       this.label = label;
     }
     if (state.remaining > 0) this.frame = requestAnimationFrame(this.draw);

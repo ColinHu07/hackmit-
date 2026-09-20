@@ -152,5 +152,21 @@ input,.quest-tools select{border:0;border-radius:18px;background:#edf1e5bd;box-s
 .treat-timer-track,.treat-timer-ring{fill:none;stroke-width:4}
 .treat-timer-track{stroke:#fffef6c9}.treat-timer-ring{stroke:#779e59;stroke-dasharray:100;stroke-dashoffset:0;stroke-linecap:round}
 .treat-timer-berry{position:absolute;top:15px;left:15px;width:28px;height:28px;display:grid;place-items:center;font-size:22px;line-height:1}
-.treat-timer-count{display:block;text-align:center;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;text-shadow:0 1px 3px #fffef8}
+.treat-timer-count{display:block;white-space:nowrap;text-align:center;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;text-shadow:0 1px 3px #fffef8}
 .mood-fill{transition:width 120ms linear}
+
+#treat-boost-notice{padding:10px 12px;border-radius:12px;background:#e7eed9;color:#486443;font-size:12px;line-height:1.5}
+
+/* The quest header stays outside the scrolling content on every device. */
+.quest-dialog{padding:0;overflow:hidden;max-height:min(720px,calc(100dvh - 32px))}
+.quest-dialog[open]{display:flex;flex-direction:column}
+.quest-dialog>.dialog-heading{flex-shrink:0;padding:20px 24px 16px;background:#fbfcf4;border-bottom:1px solid #e5eadb}
+.quest-dialog .dialog-heading .icon-button{width:44px;height:44px;flex-shrink:0}
+.quest-dialog-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 24px 24px}
+.quest-category{display:grid;gap:10px}.quest-category h3{margin:0}
+.quest-detail{padding-top:16px}.quest-detail .text-button{margin-bottom:16px}
+.quest-detail>p{margin-bottom:12px}.quest-detail-actions{margin-bottom:10px}
+.quest-detail .quest-tools{margin:0;padding:12px 0 0;border-top:1px solid #e5eadb;border-radius:0;background:transparent;box-shadow:none}
+.quest-detail .evidence-heading,.quest-detail .evidence-selector,.quest-detail #evidence-instructions{display:none}
+.quest-detail .evidence-consent{margin:14px 0;font-weight:400}
+.quest-detail .native-buttons{gap:10px}.quest-detail #submit-clip{background:#47653d;color:#fffef7;min-width:110px}
