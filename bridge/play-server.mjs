@@ -7,7 +7,7 @@ import { createStaticWebHandler } from './static-web.mjs';
 import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
 import {
   PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES,
-  PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
+  PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, PLAY_WORLD_LIMIT, parsePlayMessage,
 } from '../shared/play-protocol.mjs';
 
 /** Ephemeral, server-authoritative four-person playground; no account or camera data. */
@@ -169,7 +169,7 @@ export function createPlayServer(options = {}) {
   function fail(ws, code, message) { send(ws, { type: 'error', code, message }); }
   function snapshot(room, now = Date.now()) {
     return {
-      roomCode: room.code, serverTime: now,
+      roomCode: room.code, serverTime: now, worldLimit: PLAY_WORLD_LIMIT,
       players: [...room.players.values()].sort((a, b) => a.slot - b.slot).map(player => ({
         id: player.id, name: player.name, slot: player.slot,
         x: player.x, z: player.z, targetX: player.targetX, targetZ: player.targetZ,

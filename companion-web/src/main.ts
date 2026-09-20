@@ -17,7 +17,7 @@ import { createInviteUrl, defaultPlayServerUrl, nativeServerSelection } from './
 import type { LocationFix } from './LocationDiscovery';
 import type { NearbyPet, MeetRequest } from '../../shared/nearby-protocol';
 import type { ConnectionState, Membership, CompatibleSnapshot } from './RoomClient';
-import type { EvidenceQuestId, PetActionKind, PlayerQuests } from '../../shared/play-protocol';
+import { PLAY_WORLD_LIMIT, type EvidenceQuestId, type PetActionKind, type PlayerQuests } from '../../shared/play-protocol';
 
 const paths: Record<string, string> = {
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
@@ -75,6 +75,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h1>A very good<br><em>place to meet.</em></h1>
         <div class="invite-card" id="room-invite"><div><span class="small-label">ROOM CODE</span><button id="copy-code" class="room-code" title="Copy room code"><span id="room-code">------</span>${icon('copy')}</button></div><button id="invite-button" class="share-button" title="Share a link to this room">${icon('link')} Invite friends</button></div>
         <p id="invite-note" class="room-description">Share your room code. Your friend's pet will appear here.</p>
+        <p id="walking-compatibility" class="room-description" role="status" hidden>Long-distance walking needs a server update. Until then, pets stop at the edge of the small playground.</p>
         <div class="roster" id="roster" aria-label="Players"></div>
         <div id="dap-quest" class="quest-card dap-card" hidden><div class="quest-header"><span class="quest-symbol">${icon('wave')}</span><div><span class="small-label">MEET IN REAL LIFE</span><h2>Dap them up</h2></div></div><p>Walk over, introduce yourselves, and share a dap, high-five, or wave.</p><button class="primary-button" id="confirm-dap">We said hello ${icon('check')}</button><p id="dap-status" role="status">Both players confirm after meeting in person.</p></div>
         <p id="server-compatibility" class="room-description" role="status" hidden>This server runs an older game version. You can meet, move, wave, feed, jump, and play together. New quests and sharing compass turns need a server update.</p><button id="meet-button" class="text-button" disabled>Meet in the middle ${icon('arrow')}</button><div class="quest-card" id="modern-quests">
@@ -155,6 +156,7 @@ let browserWalkingEnabled = false;
 let walkingSteps = 0;
 let ready = false;
 let connection: ConnectionState = 'idle';
+let syncWalkingOnSnapshot = false;
 let membership: Membership | null = null;
 let snapshot: CompatibleSnapshot | null = null;
 let playground: Playground | null = null;
@@ -325,6 +327,7 @@ function updateControls(): void {
 }
 function setConnection(state: ConnectionState): void {
   connection = state;
+  syncWalkingOnSnapshot = state === 'connected';
   const labels: Record<ConnectionState, string> = { idle: 'Pet preview', connecting: 'Connecting', connected: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
   el('connection-status').dataset.state = state;
   el('connection-label').textContent = labels[state];
@@ -334,6 +337,7 @@ function setConnection(state: ConnectionState): void {
   // Local sensors and the preview keep working even when a server rejects a
   // join or disconnects. Only visibility/permission/user actions pause walking.
   startWalking();
+  if (walking) playground?.setWalkingPose(walkingTracker.pose, false, state !== 'connected');
 }
 function renderRoster(): void {
   if (!snapshot || !membership) return;
@@ -374,6 +378,8 @@ const client = new RoomClient({
     const entering = membership?.playerId !== member.playerId;
     membership = member;
     snapshot = next;
+    walkingTracker.setWorldLimit(next.worldLimit ?? 3);
+    el('walking-compatibility').hidden = (next.worldLimit ?? 3) >= PLAY_WORLD_LIMIT;
     el('server-compatibility').hidden = !next.legacyServer;
     for (const id of ['modern-quests', 'raid-card', 'quest-tools']) el(id).hidden = !!next.legacyServer;
     document.querySelector<HTMLButtonElement>('[data-action="dap"]')!.hidden = !!next.legacyServer;
@@ -467,7 +473,12 @@ const client = new RoomClient({
       el('action-notice').textContent = next.notice;
     }
     playground?.update(next, member.playerId);
+    if (walking) playground?.setWalkingPose(walkingTracker.pose, false, connection !== 'connected');
     if (entering) startWalking();
+    // Send offline steps only after welcome confirms this is the same pet.
+    // An expired session must start from its newly assigned spawn instead.
+    if (syncWalkingOnSnapshot && !entering) publishWalking(true);
+    syncWalkingOnSnapshot = false;
     updateControls();
     if (entering) {
       el('error-message').hidden = true;
@@ -960,7 +971,7 @@ function startWalking(): void {
   if ((!isNativePhone() && !browserWalkingEnabled) || !ready || walking || document.hidden) return;
   walking = true;
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
-  walkingTracker.reset(local?.x ?? 0, local?.z ?? 0);
+  walkingTracker.reset(local?.targetX ?? walkingTracker.pose.x, local?.targetZ ?? walkingTracker.pose.z);
   stepDetector.reset(); walkingSteps = 0;
   stepSensorAvailable = browserWalkingEnabled;
   walkingTracker.setStepTracking(stepSensorAvailable);
@@ -972,7 +983,7 @@ function startWalking(): void {
 }
 function publishWalking(moved = false, initialHeading = false): void {
   if (!walking) return;
-  playground?.setWalkingPose(walkingTracker.pose, initialHeading, true);
+  playground?.setWalkingPose(walkingTracker.pose, initialHeading, connection !== 'connected');
   if (membership && connection === 'connected') {
     if (moved) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
     client.heading(walkingTracker.pose.yaw);

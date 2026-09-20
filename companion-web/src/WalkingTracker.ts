@@ -1,4 +1,5 @@
 import type { LocationFix } from './LocationDiscovery';
+import { PLAY_WORLD_LIMIT } from '../../shared/play-protocol';
 
 export interface WalkingPose { x: number; z: number; yaw: number }
 export const WALK_SCALE = 0.2; // One real meter is 0.2 world units; this is a scaled world.
@@ -19,10 +20,16 @@ export class WalkingTracker {
   private lastTimestamp = -Infinity;
   hasHeading = false;
   private stepTracking = false;
+  private worldLimit = PLAY_WORLD_LIMIT;
   pose: WalkingPose = { x: 0, z: 0, yaw: Math.PI };
   reset(x = 0, z = 0): void {
     this.anchor = null; this.lastTimestamp = -Infinity; this.hasHeading = false;
     this.pose = { ...this.pose, x, z };
+  }
+  setWorldLimit(limit: number): void {
+    if (!Number.isFinite(limit) || limit <= 0) return;
+    this.worldLimit = Math.min(limit, PLAY_WORLD_LIMIT);
+    this.translate(0, 0);
   }
   heading(degrees: number, accuracy: number): boolean {
     if (!Number.isFinite(degrees) || degrees < 0 || degrees >= 360 || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 25) return false;
@@ -42,9 +49,9 @@ export class WalkingTracker {
   }
   private translate(dx: number, dz: number): boolean {
     const x = this.pose.x + dx, z = this.pose.z + dz;
-    const rebase = Math.abs(x) > 3 || Math.abs(z) > 3;
-    this.pose = { ...this.pose, x: rebase ? 0 : x, z: rebase ? 0 : z };
-    return rebase;
+    const clamp = (value: number) => Math.max(-this.worldLimit, Math.min(this.worldLimit, value));
+    this.pose = { ...this.pose, x: clamp(x), z: clamp(z) };
+    return this.pose.x !== x || this.pose.z !== z;
   }
   location(fix: LocationFix, now = Date.now()): { moved: boolean; message: string } {
     const waiting = (message: string) => ({ moved: false, message });
@@ -64,9 +71,9 @@ export class WalkingTracker {
       this.anchor = null; return waiting('GPS jumped. Finding your position again without moving your pet.');
     }
     this.anchor = fix;
-    const rebase = this.translate(east * WALK_SCALE, -north * WALK_SCALE);
-    return { moved: true, message: rebase
-      ? 'Your view adjusted automatically. Keep exploring.'
+    const atEdge = this.translate(east * WALK_SCALE, -north * WALK_SCALE);
+    return { moved: true, message: atEdge
+      ? 'You reached this server’s walking boundary.'
       : `Walking with you · GPS ±${Math.ceil(fix.accuracy)} m.` };
   }
 }

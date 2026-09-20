@@ -1,4 +1,4 @@
-export const PLAY_WORLD_LIMIT = 3;
+export const PLAY_WORLD_LIMIT = 10_000;
 export const PLAY_FRIEND_DISTANCE = 1.5;
 export const PLAY_TICK_MS = 50;
 export const PLAY_MAX_PLAYERS = 4;

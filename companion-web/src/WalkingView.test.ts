@@ -4,7 +4,7 @@ import { followingCamera, screenMovement, walkingPlayer } from './WalkingView';
 import { headingToYaw, WalkingTracker } from './WalkingTracker';
 import type { PlayPlayer } from '../../shared/play-protocol';
 
-it('renders detected steps in preview and against a frozen server snapshot', () => {
+it('renders detected steps in preview and while disconnected from the server', () => {
   const tracker = new WalkingTracker();
   tracker.setStepTracking(true);
   const stale: PlayPlayer = { id: 'me', name: '', slot: 0, x: 0, z: 0, targetX: 0, targetZ: 0, yaw: Math.PI, connected: true, action: null };
@@ -20,6 +20,19 @@ it('renders detected steps in preview and against a frozen server snapshot', () 
     expect(turned.yaw).toBe(tracker.pose.yaw);
   }
   expect(stale.z).toBe(0);
+});
+
+it('uses the same distant position as observers while connected, even after a compass turn', () => {
+  const shared: PlayPlayer = { id: 'me', name: '', slot: 0, x: -1.2, z: -10.5, targetX: -1.2, targetZ: -10.5, yaw: Math.PI, connected: true, action: null };
+  for (const heading of [0, 45, 90, 180, 270, 359]) {
+    // Even a stale local origin or a local target ahead of the server cannot
+    // move the connected pet into a different world than the observer sees.
+    for (const z of [0, -15]) {
+      const rendered = walkingPlayer(shared, { x: 0, z, yaw: headingToYaw(heading) }, false);
+      expect(rendered.x).toBe(shared.x); expect(rendered.z).toBe(shared.z);
+      expect(rendered.targetX).toBe(shared.targetX); expect(rendered.targetZ).toBe(shared.targetZ);
+    }
+  }
 });
 
 it('keeps server movement intact when only the browser compass is enabled', () => {

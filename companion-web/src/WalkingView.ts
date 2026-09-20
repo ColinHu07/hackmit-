@@ -10,8 +10,8 @@ export function screenMovement(yaw: number, right: number, down: number): [numbe
 import type { PlayPlayer } from '../../shared/play-protocol';
 import type { WalkingPose } from './WalkingTracker';
 
-/** Local steps render immediately, including with a stale or absent server.
- * Compass-only mode changes facing without overriding server movement. */
+/** Connected players share server positions. Local translation is only used
+ * while offline; compass changes can never replace a shared position. */
 export function walkingPlayer(player: PlayPlayer | undefined, pose: WalkingPose, predictMovement: boolean): PlayPlayer {
   const base = player ?? { id: 'local-walk', name: '', slot: 0, ...pose, targetX: pose.x, targetZ: pose.z, connected: true, action: null };
   return predictMovement

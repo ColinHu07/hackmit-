@@ -10,8 +10,8 @@ import { SoftHead } from '../../glasses-web/src/rendering/SoftHead';
 import type { WeatherKind } from './LocalWeather';
 import type { WalkingPose } from './WalkingTracker';
 import type { PlayPlayer, PlaySnapshot } from '../../shared/play-protocol';
+import { PLAY_WORLD_LIMIT } from '../../shared/play-protocol';
 
-const WORLD_LIMIT = 3;
 const PET_EXTENT = 1.5;
 const SLOT_COLORS = [0x759582, 0xd58e70, 0x8177a8, 0xd3aa5c] as const;
 
@@ -57,6 +57,8 @@ export class Playground {
   private readonly shadowTexture: THREE.CanvasTexture;
   private readonly flowers = new THREE.Group();
   private readonly weatherParticles = new THREE.Group();
+  private readonly meadowTiles: { plants: THREE.Group; flowers: THREE.Group; dx: number; dz: number }[] = [];
+  private readonly sun = new THREE.DirectionalLight(0xfff2cf, 3.2);
   private weatherKind: WeatherKind = 'unknown';
   private groundMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
   private readonly footprints: { mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; born: number }[] = [];
@@ -114,7 +116,7 @@ export class Playground {
     this.ball = this.buildBall();
     this.scene.add(this.ball);
     this.scene.add(new THREE.HemisphereLight(0xfffbec, 0x869477, 2.6));
-    const sun = new THREE.DirectionalLight(0xfff2cf, 3.2);
+    const sun = this.sun;
     sun.position.set(-3, 9, 5);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
@@ -127,7 +129,7 @@ export class Playground {
     sun.shadow.normalBias = 0.035;
     sun.shadow.bias = -0.00015;
     sun.shadow.radius = 3;
-    this.scene.add(sun);
+    this.scene.add(sun, sun.target);
 
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
     this.canvas.addEventListener('pointermove', this.onPointerMove);
@@ -166,8 +168,8 @@ export class Playground {
       const pet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
       if (pet) { pet.yaw = pose.yaw; pet.body.rotation.y = pose.yaw; }
     }
-    if (!pose) this.camera.position.set(0, 13, 10);
-    this.camera.lookAt(0, 0, 0);
+    // The render loop owns the follow camera. Sensor/mode changes must not
+    // point it back at the world origin after the pet has walked away.
   }
 
   moveByScreen(right: number, down: number): void {
@@ -175,7 +177,8 @@ export class Playground {
     const pet = this.pets.find(pet => pet.playerId === this.localPlayerId);
     if (!local || !pet || !this.enabled) return;
     const [x, z] = screenMovement(pet.body.rotation.y, right, down);
-    this.onMove(THREE.MathUtils.clamp(local.targetX + x, -WORLD_LIMIT, WORLD_LIMIT), THREE.MathUtils.clamp(local.targetZ + z, -WORLD_LIMIT, WORLD_LIMIT));
+    const limit = this.snapshot?.worldLimit ?? 3;
+    this.onMove(THREE.MathUtils.clamp(local.targetX + x, -limit, limit), THREE.MathUtils.clamp(local.targetZ + z, -limit, limit));
   }
 
   async load(): Promise<void> {
@@ -352,9 +355,10 @@ export class Playground {
   private buildIsland(): void {
     const grass = meadowTexture(); this.textures.add(grass);
     this.groundMaterial.map = grass;
-    // Ground extends beyond the playable pen so the follow camera never exposes
-    // a blank backdrop while walking toward an edge.
-    const lawn = this.mesh(new THREE.PlaneGeometry(24, 24), this.groundMaterial);
+    // Extend scenery, never reset player coordinates to keep them on the lawn.
+    const side = PLAY_WORLD_LIMIT * 2 + 48;
+    grass.repeat.set(side / 12, side / 12);
+    const lawn = this.mesh(new THREE.PlaneGeometry(side, side), this.groundMaterial);
     lawn.rotation.x = -Math.PI / 2;
     lawn.position.y = 0.001;
     lawn.receiveShadow = true;
@@ -370,8 +374,16 @@ export class Playground {
     for (const group of [details.plants, details.flowers]) {
       group.traverse(object => { if (object instanceof THREE.Mesh) this.trackMesh(object); });
     }
-    this.scene.add(details.plants);
-    this.flowers.add(details.flowers);
+    // Repeat deterministic scenery in world coordinates around the camera.
+    // Only offscreen tiles change at a boundary; players and footprints stay put.
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const plants = details.plants.clone(), flowers = details.flowers.clone();
+      plants.position.set(dx * 20, 0, dz * 20);
+      flowers.position.copy(plants.position);
+      this.meadowTiles.push({ plants, flowers, dx, dz });
+      this.scene.add(plants);
+      this.flowers.add(flowers);
+    }
   }
 
   private buildTarget(): THREE.Group {
@@ -522,8 +534,9 @@ export class Playground {
       return;
     }
     const point = this.raycaster.ray.intersectPlane(this.groundPlane, new THREE.Vector3());
-    if (!point || Math.abs(point.x) > 3.7 || Math.abs(point.z) > 3.7) return;
-    this.onMove(THREE.MathUtils.clamp(point.x, -WORLD_LIMIT, WORLD_LIMIT), THREE.MathUtils.clamp(point.z, -WORLD_LIMIT, WORLD_LIMIT));
+    if (!point) return;
+    const limit = this.snapshot?.worldLimit ?? 3;
+    this.onMove(THREE.MathUtils.clamp(point.x, -limit, limit), THREE.MathUtils.clamp(point.z, -limit, limit));
   };
 
   private onContextLost = (event: Event): void => {
@@ -574,6 +587,14 @@ export class Playground {
       // compass target, so the pet never swings sideways relative to the view.
       this.camera.position.set(...followingCamera(followedPet.body.rotation.y, x, z));
       this.camera.lookAt(x, 0, z);
+      this.sun.position.set(x - 3, 9, z + 5);
+      this.sun.target.position.set(x, 0, z);
+      this.weatherParticles.position.set(x, 0, z);
+      const tileX = Math.round(x / 20) * 20, tileZ = Math.round(z / 20) * 20;
+      for (const tile of this.meadowTiles) {
+        tile.plants.position.set(tileX + tile.dx * 20, 0, tileZ + tile.dz * 20);
+        tile.flowers.position.copy(tile.plants.position);
+      }
       this.updateFootprints(followedPet, now);
     }
     const local = this.snapshot?.players.find((player) => player.id === this.localPlayerId);

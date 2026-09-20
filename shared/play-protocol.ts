@@ -49,6 +49,8 @@ export interface RaidBossState {
 }
 
 export interface PlaySnapshot {
+  /** Shared movement bounds; absent on older servers with the small pen. */
+  worldLimit?: number;
   publicLobby?: true;
   roomCode: string;
   serverTime: number;
@@ -86,7 +88,7 @@ export type PlayServerMessage =
 export type ClientMessage = PlayClientMessage;
 export type ServerMessage = PlayServerMessage;
 
-export const PLAY_WORLD_LIMIT = 3;
+export const PLAY_WORLD_LIMIT = 10_000;
 export const PLAY_FRIEND_DISTANCE = 1.5;
 export const PLAY_TICK_MS = 50;
 export const PLAY_MAX_PLAYERS = 4;

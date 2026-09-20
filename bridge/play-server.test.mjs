@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import WebSocket from 'ws';
 import { createPlayServer } from './play-server.mjs';
-import { parsePlayMessage } from '../shared/play-protocol.mjs';
+import { parsePlayMessage, PLAY_WORLD_LIMIT } from '../shared/play-protocol.mjs';
 
 async function setup(t, options = {}) {
   const app = createPlayServer(options);
@@ -41,7 +41,35 @@ async function setup(t, options = {}) {
 }
 const welcome = client => client.next(message => message.type === 'welcome');
 const error = (client, code) => client.next(message => message.type === 'error' && message.code === code);
-const state = (client, match) => client.next(message => message.type === 'snapshot' && match(message.snapshot)).then(message => message.snapshot);
+const state = (client, match, timeoutMs = 3000) => client.next(message => message.type === 'snapshot' && match(message.snapshot), timeoutMs).then(message => message.snapshot);
+
+test('walking away and turning keeps both phones in the same world beyond the old pen', async t => {
+  const { connect } = await setup(t);
+  const phone = await connect(), ipad = await connect();
+  phone.send({ type: 'lobby', name: 'Walking phone' });
+  const session = await welcome(phone);
+  ipad.send({ type: 'lobby', name: 'Stationary iPad' });
+  await welcome(ipad);
+  assert.equal(session.snapshot.worldLimit, PLAY_WORLD_LIMIT);
+  const mine = s => s.players.find(p => p.id === session.playerId);
+  phone.send({ type: 'move', x: -1.2, z: -8 });
+  const arrived = s => mine(s)?.z === -8;
+  const [onPhone, onIpad] = await Promise.all([state(phone, arrived, 6000), state(ipad, arrived, 6000)]);
+  assert.deepEqual(mine(onPhone), mine(onIpad));
+  assert.equal(mine(onPhone).x, -1.2);
+  const stationary = onIpad.players.find(p => p.id !== session.playerId);
+  assert.ok(Math.hypot(stationary.x - mine(onPhone).x, stationary.z - mine(onPhone).z) > 8);
+  phone.clear(); ipad.clear();
+  phone.send({ type: 'heading', yaw: Math.PI / 2 });
+  const turned = s => Math.abs(mine(s)?.yaw - Math.PI / 2) < 0.001;
+  for (const s of await Promise.all([state(phone, turned), state(ipad, turned)])) {
+    assert.equal(mine(s).x, -1.2); assert.equal(mine(s).z, -8);
+    assert.equal(mine(s).targetZ, -8);
+  }
+  phone.send({ type: 'move', x: -0.5, z: -8 });
+  const onward = await state(ipad, s => mine(s)?.x === -0.5);
+  assert.equal(mine(onward).z, -8, 'a step after the turn preserves the accumulated distance');
+});
 
 test('phones automatically share one lobby, with independent pets, live motion, and private reconnect tokens', async t => {
   const { connect } = await setup(t);
@@ -283,9 +311,9 @@ test('room membership, token rejoin, and socket replacement isolate control', as
   replacement.send({ type: 'join', roomCode: session.roomCode, name: 'Alex', playerToken: session.playerToken });
   await welcome(replacement);
   assert.equal((await replacedClosed)[0], 4001);
-  replacement.send({ type: 'move', x: -99, z: 99 });
-  const moved = await state(stranger, snapshot => snapshot.players[0].targetX === -3);
-  assert.equal(moved.players[0].targetZ, 3);
+  replacement.send({ type: 'move', x: -PLAY_WORLD_LIMIT * 2, z: PLAY_WORLD_LIMIT * 2 });
+  const moved = await state(stranger, snapshot => snapshot.players[0].targetX === -PLAY_WORLD_LIMIT);
+  assert.equal(moved.players[0].targetZ, PLAY_WORLD_LIMIT);
   assert.ok(moved.players[0].connected, 'old socket closure cannot detach replacement');
   replacement.send({ type: 'leave' });
   await state(stranger, snapshot => snapshot.players.length === 1);

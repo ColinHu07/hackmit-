@@ -36,15 +36,40 @@ describe('native walking in a north-aligned meadow', () => {
     expect(tracker.location(fix(103, 0, 5000), 5000).moved).toBe(true);
     expect(tracker.pose.z).toBeCloseTo(-0.6);
   });
-  it('automatically rebases at the scene edge and continues walking', () => {
+  it('continues beyond the old meadow edge without resetting either coordinate', () => {
     const tracker = new WalkingTracker(); tracker.reset(2.8, 0);
     tracker.location(fix(0, 0), 1000);
     const edge = tracker.location(fix(0, 5, 4000), 4000);
-    expect(edge.message).toContain('automatically'); expect(tracker.pose.x).toBe(0);
-    tracker.location(fix(0, 10, 7000), 7000); expect(tracker.pose.x).toBeCloseTo(1);
-    tracker.location(fix(0, 100, 30000), 30000); expect(tracker.pose.x).toBeCloseTo(1);
+    expect(edge.moved).toBe(true); expect(tracker.pose.x).toBeCloseTo(3.8);
+    tracker.location(fix(0, 10, 7000), 7000); expect(tracker.pose.x).toBeCloseTo(4.8);
+    tracker.location(fix(0, 100, 30000), 30000); expect(tracker.pose.x).toBeCloseTo(4.8);
     tracker.reset(); tracker.location(fix(0, 100, 31000), 31000);
     expect(tracker.pose.x).toBe(0);
+  });
+  it('walks out of view then turns without jumping back toward another player', () => {
+    const tracker = new WalkingTracker();
+    tracker.reset(-1.2, 0); tracker.setStepTracking(true); tracker.heading(0, 5);
+    for (let step = 0; step < 30; step++) {
+      tracker.steps(1);
+      expect(tracker.pose.z).toBeCloseTo(-0.35 * (step + 1));
+    }
+    const before = { ...tracker.pose };
+    for (const heading of [90, 180, 270, 359, 0]) {
+      tracker.heading(heading, 5);
+      expect(tracker.pose.x).toBeCloseTo(before.x);
+      expect(tracker.pose.z).toBeCloseTo(before.z);
+    }
+    tracker.heading(90, 5); tracker.steps(2);
+    expect(tracker.pose.x).toBeCloseTo(before.x + 0.7);
+    expect(tracker.pose.z).toBeCloseTo(before.z);
+  });
+  it('stops at an older server boundary without teleporting and can walk back from it', () => {
+    const tracker = new WalkingTracker();
+    tracker.setWorldLimit(3); tracker.reset(2.8, 1.4);
+    tracker.setStepTracking(true); tracker.heading(90, 5); tracker.steps(2);
+    expect(tracker.pose.x).toBe(3); expect(tracker.pose.z).toBeCloseTo(1.4);
+    tracker.heading(270, 5); tracker.steps(1);
+    expect(tracker.pose.x).toBeCloseTo(2.65); expect(tracker.pose.z).toBeCloseTo(1.4);
   });
   it('handles longitude wrap and longitude scale at high latitude', () => {
     const from = { latitude: 60, longitude: 179.99999, accuracy: 1, timestamp: 0 };
