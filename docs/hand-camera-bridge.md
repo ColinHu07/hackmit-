@@ -61,3 +61,20 @@ Run `npm test`, `npm run typecheck`, and `npm run build`. Relay integration test
 Local validation on 2026-09-19: 95 web tests and six real-WebSocket relay tests passed; TypeScript and the web production build passed; the unsigned iPhone build passed. A browser test completed all three hand-calibration points, displayed a labeled synthetic JPEG beside the GLB, triggered pet reactions with a streamed stroke, retained the `0°` / `300,300` anchor, and cleared the preview/stopped interaction after frames were paused. No real glasses camera was used in that browser test. The detected iPhone was unavailable to Xcode, and the approved Cloudflare tunnel could not connect from the current network: its TCP/UDP port 7844 checks failed. The local relay passed its health check. The tunnel was subsequently stopped at the user’s request to remain on the current network. Old tunnel links are inactive. Local phone preview replaces the need to transmit images; optional web petting still requires a reachable hand-point relay.
 
 Phone-preview update: the signed iOS build passed. The camera starts independently of relay pairing, processes/draws image and landmarks in the same orientation, and hides stale frames. Physical streaming and overlay alignment remain unverified until the iPhone/glasses test.
+
+## One-tap quest camera setup on iPhone
+
+Kith Camera accepts `bondimals://quest-camera?server=ENCODED_HTTPS_ORIGIN&code=ONE_USE_CODE` on the paired **iPhone**. The code comes from the authenticated game's `/glasses/pair` endpoint and expires after five minutes. This link contains no player token or model API key. The server must match the HTTPS game server already selected in Kith Camera; credentials, extra paths, fragments, duplicate fields, unknown fields, and malformed codes are rejected before changing the current camera pairing.
+
+Opening a valid link enables quest controls, claims that one-use code, and starts the real glasses camera. Existing Meta registration and glasses-camera permission prompts still apply. If registration is needed, Kith opens the usual Meta flow and starts after registration completes and Kith returns to the foreground. Reopening the same link while its claim is in flight does not issue a second claim, and an already-running camera is reused. Unpairing or turning off quest controls cancels any pending automatic start. Manual server/code entry remains available for recovery.
+
+This is an iPhone setup link, not a claim that selecting a custom URL inside the glasses browser remotely launches an iPhone app. A connected-phone development install can open the link with `devicectl`; otherwise open it on the paired phone. Keep Kith Camera foregrounded while the glasses game runs. Camera/display concurrency still needs the hardware test described above.
+
+From the glasses, an explicit **Photo & grade** or **Clip & grade** action captures glasses-camera evidence and authorizes the game to submit it through `/verify` to Muse Spark. A separate review-and-submit flow may also be used. No phone camera or clip audio is substituted. The native bridge only captures and uploads evidence; the server still verifies current game membership and applies quest rewards after grading.
+
+Parser regression check:
+
+```sh
+xcrun swiftc glasses-ios/BondimalsCamera/QuestCameraSetupLink.swift scripts/glasses-camera-setup-tests.swift -o /tmp/kith-camera-setup-tests
+/tmp/kith-camera-setup-tests
+```

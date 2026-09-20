@@ -129,8 +129,9 @@ export function createPlayServer(options = {}) {
     resolveOwner(roomCode, playerToken) {
       const room = rooms.get(roomCode);
       const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
-      return player?.socket?.readyState === WebSocket.OPEN ? player : null;
+      return player ?? null;
     },
+    isOwnerConnected: player => player.socket?.readyState === WebSocket.OPEN,
   });
   const server = createServer((request, response) => {
     if (glassesCamera.handle(request, response)) return;
@@ -244,8 +245,9 @@ export function createPlayServer(options = {}) {
     const message = { type: 'snapshot', snapshot: snapshot(room, now) };
     for (const player of room.players.values()) send(player.socket, message);
   }
-  function closePlayer(player) {
-    glassesCamera.revoke(player);
+  function closePlayer(player, preserveCamera = false) {
+    if (preserveCamera) glassesCamera.disconnect(player);
+    else glassesCamera.revoke(player);
     player.headingLocked = false;
     const ws = player.socket;
     player.socket = null;
@@ -258,7 +260,7 @@ export function createPlayServer(options = {}) {
     if (!session) return;
     const { room, player } = session;
     if (player.socket !== ws) return;
-    closePlayer(player);
+    closePlayer(player, !intentional);
     const now = Date.now();
     room.lastActivity = now;
     player.targetX = player.x;
@@ -291,6 +293,7 @@ export function createPlayServer(options = {}) {
     player.socket = ws;
     player.disconnectedAt = null;
     ws.session = { room, player };
+    glassesCamera.resume(player);
     room.lastActivity = Date.now();
     send(ws, { type: 'welcome', roomCode: room.code, playerId: player.id, playerToken: player.token, snapshot: snapshot(room) });
     broadcast(room);
@@ -432,7 +435,9 @@ export function createPlayServer(options = {}) {
           }
           return fail(ws, 'invalid_token', 'This saved session has expired or belongs to a different room.');
         }
-        const oldSocket = closePlayer(player);
+        // A dropped socket can reclaim its camera binding; replacing an active
+        // connection is a new controlling session and revokes that authority.
+        const oldSocket = closePlayer(player, player.socket?.readyState !== WebSocket.OPEN);
         if (oldSocket) oldSocket.close(4001, 'Session resumed on another connection');
         player.name = message.name;
         room.notice = room.encounter ? `${player.name} joined the meetup.` : `${player.name} is back!`;
@@ -606,6 +611,7 @@ export function createPlayServer(options = {}) {
   function reapPlayers(room, now) {
     for (const player of room.players.values()) {
       if (!player.socket && player.disconnectedAt !== null && now - player.disconnectedAt >= rejoinGraceMs) {
+        glassesCamera.revoke(player);
         room.players.delete(player.id);
         room.squadReady.delete(player.id);
         clearDapsFor(room, player.id);

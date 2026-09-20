@@ -10,8 +10,9 @@ const ROUTES = new Map([
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
 /** Private, memory-only camera commands/evidence. Never verifies or rewards a quest. */
-export function createGlassesCameraBridge({ resolveOwner, writeJson, readJson, cors, now = Date.now,
+export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () => true, writeJson, readJson, cors, now = Date.now,
   pairTtlMs = 5 * 60_000, idleTtlMs = 60 * 60_000, evidenceTtlMs = 5 * 60_000,
+  disconnectGraceMs = 2 * 60_000,
   cameraFreshMs = 5_000, captureTimeoutMs = 30_000, maxSessions = 1000,
   maxEvidenceBytes = 64 * 1024 * 1024, maxConcurrentUploads = 4,
 } = {}) {
@@ -66,12 +67,42 @@ export function createGlassesCameraBridge({ resolveOwner, writeJson, readJson, c
       session.command = { id: randomUUID(), kind: 'cancel', requestId: session.requestId };
     }
   }
+  function disconnect(owner, at = now()) {
+    const session = owners.get(owner);
+    if (!session) return;
+    // An unclaimed code must never be usable while its game owner is absent.
+    if (!session.cameraToken) { revoke(owner); return; }
+    if (session.disconnectedAt !== null) return;
+    session.disconnectedAt = at;
+    cancel(session); clearEvidence(session);
+    session.status = 'idle'; session.requestId = null; session.error = null;
+    session.captureAt = null; session.kind = null; session.questId = null;
+    session.lastPoll = null;
+  }
+  function resume(owner, at = now()) {
+    const session = owners.get(owner);
+    if (!session || session.disconnectedAt === null) return;
+    if (at - session.disconnectedAt >= disconnectGraceMs
+      || resolveOwner(session.roomCode, session.playerToken) !== owner) { revoke(owner); return; }
+    if (!isOwnerConnected(owner)) return;
+    // Retain only the claimed binding. Evidence/requests were erased at detach.
+    session.disconnectedAt = null;
+    session.lastActivity = at;
+  }
   function sweep(at = now()) {
     for (const [owner, session] of owners) {
       if (at - session.lastActivity >= idleTtlMs
         || resolveOwner(session.roomCode, session.playerToken) !== owner
         || (!session.cameraToken && at >= session.expiresAt)) {
         revoke(owner); continue;
+      }
+      if (!isOwnerConnected(owner)) {
+        disconnect(owner, at);
+        if (!owners.has(owner)) continue;
+        if (at - session.disconnectedAt >= disconnectGraceMs) { revoke(owner); continue; }
+      } else if (session.disconnectedAt !== null) {
+        resume(owner, at);
+        if (!owners.has(owner)) continue;
       }
       if (session.status === 'capturing' && at - session.captureAt >= captureTimeoutMs) {
         cancel(session);
@@ -94,7 +125,7 @@ export function createGlassesCameraBridge({ resolveOwner, writeJson, readJson, c
       throw failure(401, 'A connected game session is required.');
     }
     const owner = resolveOwner(input.roomCode, input.playerToken);
-    if (!owner) throw failure(401, 'Reconnect to the game before using the glasses camera.');
+    if (!owner || !isOwnerConnected(owner)) throw failure(401, 'Reconnect to the game before using the glasses camera.');
     ownerLimit(owner, operation, at);
     const session = owners.get(owner);
     if (session) session.lastActivity = at;
@@ -139,6 +170,9 @@ export function createGlassesCameraBridge({ resolveOwner, writeJson, readJson, c
         return writeJson(response, 200, { command: cameraSession.command });
       }
       if (path === '/glasses/result') {
+        if (!isOwnerConnected(cameraSession.owner) || cameraSession.disconnectedAt !== null) {
+          throw failure(409, 'The game is offline. This capture was canceled; reconnect before capturing again.');
+        }
         if (uploading >= maxConcurrentUploads) throw failure(503, 'Camera uploads are busy. Please retry.');
         uploading++; uploadSlot = true;
       }
@@ -159,6 +193,9 @@ export function createGlassesCameraBridge({ resolveOwner, writeJson, readJson, c
       if (path === '/glasses/result') {
         if (tokens.get(cameraSession.cameraToken) !== cameraSession) throw failure(401, 'Camera pairing expired. Pair again.');
         const session = cameraSession;
+        if (!isOwnerConnected(session.owner) || session.disconnectedAt !== null) {
+          throw failure(409, 'The game is offline. This capture was canceled; reconnect before capturing again.');
+        }
         if (session.status !== 'capturing' || input?.requestId !== session.requestId) {
           throw failure(409, 'This capture was canceled, completed or replaced.');
         }
@@ -197,6 +234,7 @@ export function createGlassesCameraBridge({ resolveOwner, writeJson, readJson, c
         while (codes.has(code));
         const paired = { owner, roomCode: input.roomCode, playerToken: input.playerToken, code,
           expiresAt: at + pairTtlMs, cameraToken: null, lastActivity: at, lastPoll: null,
+          disconnectedAt: null,
           status: 'idle', requestId: null, command: null, captureAt: null, kind: null, questId: null,
           evidence: null, evidenceBytes: 0, evidenceAt: null, error: null, quota: { remaining: 10, at },
         };
@@ -241,6 +279,8 @@ export function createGlassesCameraBridge({ resolveOwner, writeJson, readJson, c
       return true;
     },
     revoke,
+    disconnect,
+    resume,
     close() {
       closed = true; clearInterval(cleanup);
       for (const owner of owners.keys()) revoke(owner);

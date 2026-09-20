@@ -9,6 +9,12 @@ export class SoftExpression {
 
   constructor(private readonly mesh: THREE.Mesh) {
     const geometry = mesh.geometry;
+    const prepared = geometry.morphAttributes.position?.findIndex(target => target.name === 'sadExpression0') ?? -1;
+    if (prepared >= 0) {
+      this.firstTarget = prepared;
+      if (!mesh.morphTargetInfluences) mesh.updateMorphTargets();
+      return;
+    }
     const positions = geometry.getAttribute('position');
     const morphs = geometry.morphAttributes.position!;
     const normals = geometry.morphAttributes.normal!;

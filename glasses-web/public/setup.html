@@ -2,15 +2,16 @@
 <html lang="en">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Add Kith to your glasses</title>
-<style>body{margin:0;background:#10190f;color:#f3ffe9;font:18px/1.5 system-ui,sans-serif}main{max-width:620px;margin:auto;padding:36px 24px}h1{font-size:38px;line-height:1.1}a{color:#d4ffac}.launch{display:block;padding:16px;background:#d4ffac;color:#192815;text-decoration:none;border-radius:14px;text-align:center;font-weight:700;margin:25px 0}li{margin:14px 0}code{word-break:break-all;font-size:14px}.note{color:#c0cfb7;font-size:15px}img{width:70px;border-radius:16px}</style>
+<style>body{margin:0;background:#10190f;color:#f3ffe9;font:18px/1.5 system-ui,sans-serif}main{max-width:620px;margin:auto;padding:36px 24px}h1{font-size:38px;line-height:1.1}a{color:#d4ffac}.launch{display:block;padding:16px;background:#d4ffac;color:#192815;text-decoration:none;border-radius:14px;text-align:center;font-weight:700;margin:25px 0}li{margin:14px 0}code{word-break:break-all;font-size:14px}.note{color:#c0cfb7;font-size:15px}img{width:70px;border-radius:16px}input{display:block;box-sizing:border-box;width:100%;font:24px system-ui;padding:12px;margin-top:8px;border-radius:10px}button.launch{border:0;cursor:pointer;width:100%;font:700 18px system-ui}form{margin:32px 0;padding-top:24px;border-top:1px solid #41543b}</style>
 <main><img src="./icon.png" alt="Kith"><h1>Your little world.<br>Now, heads up.</h1>
 <p>Play Kith on Meta Ray-Ban Display with your phone and iPad friends.</p>
-<p class="note"><strong>Meadow 2 update:</strong> this link opens the refreshed grass-and-flowers build. After adding or updating Kith, check for “Meadow 2” beneath its name on the glasses.</p>
+<p class="note"><strong>Meadow 3 update:</strong> your beaver loads first, and quest captures go straight to Muse for grading. After adding or updating Kith, check for “Meadow 3” beneath its name on the glasses.</p>
 <a id="add" class="launch">Add Kith to glasses</a>
-<ol><li>Open this page on the iPhone paired with your glasses. Enable Developer Mode in the Meta AI app, then add Kith.</li><li>Open Kith from the glasses’ app menu. Select <strong>Walk</strong> while facing forward. Swipe between actions; pinch to select.</li><li>For camera quests, keep <strong>Kith Camera</strong> open on your iPhone. On the glasses choose <strong>More → Camera quests</strong>, enter its eight-character code on the phone, and start the glasses camera.</li></ol>
+<ol><li>Open this page on the iPhone paired with your glasses. Enable Developer Mode in the Meta AI app, then add Kith.</li><li>Open Kith from the glasses’ app menu. Select <strong>Walk</strong> while facing forward. Swipe between actions; pinch to select.</li><li>For camera quests, open <strong>More → Glasses camera setup</strong> on the glasses. Enter the displayed code below to connect Kith Camera on this iPhone. Keep that app open while playing.</li></ol>
+<form id="camera-setup"><label for="camera-code">Glasses camera setup code</label><input id="camera-code" pattern="[A-HJ-NP-Za-hj-np-z2-9]{8}" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" required placeholder="Eight-character code"><button class="launch" type="submit">Connect Kith Camera on iPhone</button><p id="camera-status" class="note" role="status">Use the code shown inside Kith on your glasses. This opens the installed Kith Camera app on this phone.</p></form>
 <p><a id="game">Open game in a browser</a> · <a id="simulator">Try keyboard simulator</a></p>
 <p class="note">Game address, for manual setup in Meta AI → App Connections → Web Apps:</p><code id="url"></code>
-<p class="note">Walking is estimated from motion sensors. Camera access uses the paired iPhone; simultaneous web display and camera operation must be checked on your glasses firmware. Camera captures stay private until you choose Submit for quest verification.</p>
+<p class="note">Walking is estimated from motion sensors. Camera access uses the paired iPhone; simultaneous web display and camera operation must be checked on your glasses firmware. Photo &amp; grade and Clip &amp; grade capture from the glasses lens and send the evidence to Muse for quest verification. Clips contain no audio.</p>
 <p class="note">For this demo, the Mac running the multiplayer server and secure tunnel must stay awake.</p>
 </main>
 <script>
@@ -19,5 +20,18 @@ game.searchParams.set('v',params.get('v')||String(Date.now()));
 for(const key of ['server','name','room'])if(params.has(key))game.searchParams.set(key,params.get(key));
 document.getElementById('game').href=game.href;document.getElementById('url').textContent=game.href;
 document.getElementById('add').href='fb-viewapp://web_app_deep_link?appName=Kith&appUrl='+encodeURIComponent(game.href);
+document.getElementById('camera-setup').addEventListener('submit',event=>{
+  event.preventDefault();
+  const code=document.getElementById('camera-code').value.trim().toUpperCase();
+  if(!/^[A-HJ-NP-Z2-9]{8}$/.test(code))return;
+  try {
+    const server=new URL(params.get('server')||'wss://kith-colin.serveousercontent.com/play');
+    if(server.protocol==='wss:')server.protocol='https:';
+    if(server.protocol!=='https:'||server.username||server.password)throw new Error('Use your secure HTTPS game server.');
+    const target=new URL('bondimals://quest-camera');target.searchParams.set('server',server.origin);target.searchParams.set('code',code);
+    document.getElementById('camera-status').textContent='Opening Kith Camera. Complete any Meta camera permission prompt, then keep Kith Camera open.';
+    location.href=target.href;
+  }catch(error){document.getElementById('camera-status').textContent=error.message;}
+});
 game.searchParams.set('simulator','');document.getElementById('simulator').href=game.href;
 </script></html>

@@ -10,6 +10,45 @@ import { SoftPaws } from './SoftPaws';
 import { SoftExpression } from './SoftExpression';
 import { samplePetAction } from './PetActionPose';
 
+it('shares prepared beaver geometry while keeping each player’s face and animations independent', async () => {
+  const bytes = readFileSync(new URL('../../glasses-web/public/models/nova.glb', import.meta.url));
+  const { scene } = await new GLTFLoader().parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '');
+  let first;
+  scene.traverse(object => { if (object.isMesh) first = object; });
+  const rig = mesh => ({
+    head: new SoftHead(mesh), gait: new SoftGait(mesh), jump: new SoftJump(mesh),
+    paws: new SoftPaws(mesh), expression: new SoftExpression(mesh),
+  });
+  const original = rig(first);
+  const positions = [...first.geometry.morphAttributes.position];
+  const normals = [...first.geometry.morphAttributes.normal];
+  const second = new THREE.Mesh(first.geometry, first.material);
+  const reused = rig(second);
+  expect(second.geometry).toBe(first.geometry);
+  expect(first.geometry.morphAttributes.position).toHaveLength(45);
+  positions.forEach((attribute, index) => expect(first.geometry.morphAttributes.position[index]).toBe(attribute));
+  normals.forEach((attribute, index) => expect(first.geometry.morphAttributes.normal[index]).toBe(attribute));
+  expect(second.morphTargetInfluences).not.toBe(first.morphTargetInfluences);
+  const pose = (controls, amount) => {
+    controls.jump.set(amount, amount / 2);
+    controls.head.set(amount / 5, -amount / 8, controls.jump.torsoPitch);
+    controls.gait.set(12, amount);
+    controls.paws.set(amount * 2, amount / 2);
+    controls.expression.set(amount, amount / 5, -amount / 8, controls.jump.torsoPitch);
+  };
+  pose(original, 0.8);
+  const firstWeights = [...first.morphTargetInfluences];
+  pose(reused, 0.2);
+  expect(first.morphTargetInfluences).toEqual(firstWeights);
+  expect(second.morphTargetInfluences).not.toEqual(firstWeights);
+  pose(reused, 0.8);
+  expect(second.morphTargetInfluences).toEqual(firstWeights);
+  for (let index = 0; index < first.geometry.attributes.position.count; index += 173) {
+    expect(second.getVertexPosition(index, new THREE.Vector3()).distanceTo(first.getVertexPosition(index, new THREE.Vector3()))).toBeLessThan(1e-8);
+  }
+  first.geometry.dispose(); first.material.dispose();
+});
+
 it('composes the phone rigs without moving the face during a wave or sinking the feet during a jump', async () => {
   const bytes = readFileSync(new URL('../../glasses-web/public/models/nova.glb', import.meta.url));
   const { scene } = await new GLTFLoader().parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '');

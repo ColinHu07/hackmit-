@@ -28,12 +28,6 @@ export class SoftJump {
   constructor(private readonly mesh: THREE.Mesh) {
     const geometry = mesh.geometry;
     const positions = geometry.getAttribute('position');
-    const basePositions = new Float32Array(positions.count * 3);
-    for (let i = 0; i < positions.count; i++) {
-      basePositions[i * 3] = positions.getX(i);
-      basePositions[i * 3 + 1] = positions.getY(i);
-      basePositions[i * 3 + 2] = positions.getZ(i);
-    }
     if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
     const baseNormals = geometry.getAttribute('normal');
     const bounds = new THREE.Box3().setFromBufferAttribute(positions as THREE.BufferAttribute);
@@ -50,6 +44,20 @@ export class SoftJump {
     this.thighAngle = Math.atan2(this.knee.y - this.hip.y, this.knee.x - this.hip.x);
 
     const morphs = geometry.morphAttributes.position ?? [];
+    const prepared = morphs.findIndex(target => target.name === 'jumpShinSin');
+    const preparedNormals = morphs.findIndex(target => target.name === `jumpCrouchNormals${1 / 3}`);
+    if (prepared >= 0 && preparedNormals >= 0) {
+      this.firstTarget = prepared;
+      this.normalTargets = preparedNormals;
+      if (!mesh.morphTargetInfluences) mesh.updateMorphTargets();
+      return;
+    }
+    const basePositions = new Float32Array(positions.count * 3);
+    for (let i = 0; i < positions.count; i++) {
+      basePositions[i * 3] = positions.getX(i);
+      basePositions[i * 3 + 1] = positions.getY(i);
+      basePositions[i * 3 + 2] = positions.getZ(i);
+    }
     const normals = geometry.morphAttributes.normal ?? [];
     const relative = geometry.morphTargetsRelative;
     this.firstTarget = morphs.length;

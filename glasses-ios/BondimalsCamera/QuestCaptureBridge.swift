@@ -4,7 +4,7 @@ import UIKit
 
 /// Pairs a camera to one active game player without taking over their play socket.
 /// Frames stay in memory and only leave the phone after a capture command from
-/// that player. The game has a separate review/submit step before AI grading.
+/// that player. Grading starts only after the player's explicit game action.
 @MainActor
 final class QuestCaptureBridge: ObservableObject {
     @Published var enabled = false
@@ -20,8 +20,10 @@ final class QuestCaptureBridge: ObservableObject {
     @Published private(set) var preview: UIImage?
 
     var requestPhoto: () -> Bool = { false }
+    var onUnpaired: () -> Void = {}
     private var endpoint: URL?
     private var cameraToken: String?
+    private var setupLinkKey: String?
     private var pollTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
@@ -44,7 +46,22 @@ final class QuestCaptureBridge: ObservableObject {
         return URLSession(configuration: configuration, delegate: noRedirects, delegateQueue: nil)
     }()
 
-    func pair() {
+    func openSetupLink(_ url: URL, onConnected: @escaping () -> Void) throws {
+        let setup = try QuestCameraSetupLink(url, trustedServer: Self.serverOrigin(serverURL))
+        let key = setup.server.absoluteString + "|" + setup.code
+        if setupLinkKey == key {
+            if paired { onConnected(); return }
+            if connecting { return }
+        }
+        disconnect("Connecting your glasses camera…")
+        enabled = true
+        serverURL = setup.server.absoluteString
+        pairingCode = setup.code
+        setupLinkKey = key
+        pair(onConnected: onConnected)
+    }
+
+    func pair(onConnected: (() -> Void)? = nil) {
         guard enabled, !connecting, !paired else { return }
         do {
             endpoint = try Self.serverOrigin(serverURL)
@@ -70,8 +87,10 @@ final class QuestCaptureBridge: ObservableObject {
                     self.pairingCode = ""
                     self.status = "Paired. Start the glasses camera, then capture from Quests in the game."
                     self.startPolling()
+                    onConnected?()
                 } catch {
                     guard generation == self.generation, !Task.isCancelled else { return }
+                    self.setupLinkKey = nil
                     self.status = error.localizedDescription
                 }
             }
@@ -79,12 +98,13 @@ final class QuestCaptureBridge: ObservableObject {
     }
 
     func disconnect(_ message: String = "Camera unpaired. Make a new code in the game to reconnect.") {
+        onUnpaired()
         generation += 1
         connectionTask?.cancel(); connectionTask = nil
         pollTask?.cancel(); pollTask = nil
         captureTask?.cancel(); captureTask = nil
         paired = false; connecting = false; capturing = false
-        cameraToken = nil; endpoint = nil; activeRequest = nil
+        cameraToken = nil; endpoint = nil; activeRequest = nil; setupLinkKey = nil
         handledCommands.removeAll(); preview = nil; previewRequest = nil; photoData = nil
         status = message
     }
@@ -185,10 +205,10 @@ final class QuestCaptureBridge: ObservableObject {
                 guard generation == self.generation, self.activeRequest == id else { return }
                 evidence["requestId"] = id
                 evidence["status"] = "ready"
-                self.status = "Sending capture to your game for review…"
+                self.status = "Sending glasses capture to your game…"
                 _ = try await self.api("/glasses/result", body: evidence)
                 guard generation == self.generation, self.activeRequest == id, !Task.isCancelled else { return }
-                self.status = "Capture ready. Review it and choose Submit in the game to check the quest."
+                self.status = "Capture sent. The glasses game shows your quest grading or review."
             } catch {
                 guard generation == self.generation, self.activeRequest == id, !Task.isCancelled else { return }
                 self.preview = nil
@@ -346,7 +366,7 @@ struct QuestCapturePanel: View {
                 else { Button(quests.connecting ? "Pairing…" : "Pair with glasses game") { quests.pair() }.disabled(quests.connecting) }
                 Text(quests.status).font(.callout).accessibilityIdentifier("quest-camera-status")
                 if let image = quests.preview { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 200).accessibilityLabel("Latest quest capture from the glasses camera") }
-                Text("Start the camera below and keep this app open. In the glasses game, choose a quest and capture a photo or a six-second clip. Captures contain no audio and wait for Submit in the game before grading.").font(.footnote)
+                Text("Keep this app open. In the glasses game, Photo & grade or Clip & grade captures from your glasses and sends the evidence to Muse Spark. Review captures can also be submitted separately. Clips contain no audio.").font(.footnote)
                 Text("Camera and glasses Web App running together still require a test on your glasses firmware.").font(.footnote).foregroundStyle(.secondary)
             }
         }

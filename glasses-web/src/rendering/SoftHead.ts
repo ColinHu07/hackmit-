@@ -13,6 +13,12 @@ export class SoftHead {
 
   constructor(private readonly mesh: THREE.Mesh) {
     const geometry = mesh.geometry;
+    const prepared = geometry.morphAttributes.position?.findIndex(target => target.name === 'headRotation00') ?? -1;
+    if (prepared >= 0) {
+      this.firstTarget = prepared;
+      if (!mesh.morphTargetInfluences) mesh.updateMorphTargets();
+      return;
+    }
     const positions = geometry.getAttribute('position');
     if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
     const sourceNormals = geometry.getAttribute('normal');

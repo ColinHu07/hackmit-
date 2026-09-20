@@ -11,6 +11,12 @@ export class SoftGait {
 
   constructor(private readonly mesh: THREE.Mesh) {
     const geometry = mesh.geometry;
+    const prepared = geometry.morphAttributes.position?.findIndex(target => target.name === 'strideLeftForward') ?? -1;
+    if (prepared >= 0) {
+      this.firstTarget = prepared;
+      if (!mesh.morphTargetInfluences) mesh.updateMorphTargets();
+      return;
+    }
     const positions = geometry.getAttribute('position');
     // Read the undeformed positions: head morph bounds include rotated poses.
     const bounds = new THREE.Box3().setFromBufferAttribute(positions as THREE.BufferAttribute);

@@ -21,6 +21,9 @@ final class CameraBridge: ObservableObject {
     private let wearables = Wearables.shared
     private let deviceSelector: AutoDeviceSelector
     private var deviceMonitor: Task<Void, Never>?
+    private var registrationMonitor: Task<Void, Never>?
+    private var setupRegistrationTask: Task<Void, Never>?
+    private var questCameraStartRequested = false
     private let relay = LandmarkRelay()
     private var session: DeviceSession?
     private var camera: MWDATCamera.Camera?
@@ -48,6 +51,12 @@ final class CameraBridge: ObservableObject {
             }
         }
         refreshDevices()
+        registrationMonitor = Task { [weak self] in
+            for await state in Wearables.shared.registrationStateStream() {
+                guard !Task.isCancelled else { return }
+                if state == .registered { self?.continueQuestCameraSetup() }
+            }
+        }
         relay.onDisconnect = { [weak self] message in
             guard let self else { return }
             self.webConnected = false
@@ -62,8 +71,9 @@ final class CameraBridge: ObservableObject {
             guard let self, self.running, let camera = self.camera, camera.stream.state == .streaming else { return false }
             return camera.stream.capturePhoto(format: .jpeg)
         }
+        quests.onUnpaired = { [weak self] in self?.questCameraStartRequested = false }
     }
-    deinit { deviceMonitor?.cancel() }
+    deinit { deviceMonitor?.cancel(); registrationMonitor?.cancel(); setupRegistrationTask?.cancel() }
 
     func refreshDevices() {
         let devices = wearables.devices.compactMap { wearables.deviceForIdentifier($0) }
@@ -97,13 +107,49 @@ final class CameraBridge: ObservableObject {
         }
     }
     func open(_ url: URL) {
+        if url.host?.lowercased() == "quest-camera" {
+            do {
+                status = "Connecting your glasses game to its camera…"
+                try quests.openSetupLink(url) { [weak self] in
+                    guard let self else { return }
+                    self.questCameraStartRequested = true
+                    self.continueQuestCameraSetup()
+                }
+            } catch { status = error.localizedDescription }
+            return
+        }
         if url.host == "bridge" { pairingLink = url.absoluteString; status = "Pairing link loaded. Register, then Start."; return }
         Task {
             do {
                 _ = try await wearables.handleUrl(url)
-                if !running { status = "Meta AI callback received. You can start the camera." }
+                if questCameraStartRequested { continueQuestCameraSetup() }
+                else if !running { status = "Meta AI callback received. You can start the camera." }
             }
             catch { status = error.localizedDescription }
+        }
+    }
+    func resumeForeground() {
+        quests.setForeground(true)
+        continueQuestCameraSetup()
+    }
+    private func continueQuestCameraSetup() {
+        guard questCameraStartRequested, quests.paired, UIApplication.shared.applicationState == .active else { return }
+        if running { questCameraStartRequested = false; status = "Your glasses camera is connected to the game."; return }
+        if wearables.registrationState == .registered {
+            questCameraStartRequested = false
+            start()
+            return
+        }
+        status = "Complete camera registration in Meta AI. Kith will start the glasses camera when you return."
+        guard setupRegistrationTask == nil, wearables.registrationState != .registering else { return }
+        setupRegistrationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.setupRegistrationTask = nil }
+            do { try await self.wearables.startRegistration() }
+            catch {
+                self.questCameraStartRequested = false
+                self.status = error.localizedDescription
+            }
         }
     }
     func start() {
@@ -283,6 +329,8 @@ final class CameraBridge: ObservableObject {
         if camera != nil { stop("Camera paused while the phone app is in the background. Reopen and Start.") }
     }
     func stop(_ message: String = "Stopped. Camera and relay released.") {
+        questCameraStartRequested = false
+        setupRegistrationTask?.cancel(); setupRegistrationTask = nil
         UIApplication.shared.isIdleTimerDisabled = false
         generation += 1
         startTask?.cancel(); startTask = nil

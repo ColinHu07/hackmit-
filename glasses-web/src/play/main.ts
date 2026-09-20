@@ -45,7 +45,7 @@ let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let resumeAfterReconnect = false;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header class="glass-header"><span class="brand">kith<small>Meadow 2</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
+  <header class="glass-header"><span class="brand">kith<small>Meadow 3</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
   <canvas id="playground" aria-label="Your shared beaver playground"></canvas>
   <div id="tracking-status" class="glass-status">Loading your beaver…</div><div id="notice" class="glass-notice" role="status"></div>
   <nav class="action-rail" aria-label="Game actions"><button id="walk" type="button" disabled>Walk</button><button data-action="wave" type="button" disabled>Wave</button><button data-action="feed" id="feed" type="button" disabled>Berry</button><button id="quests" type="button" disabled>Quests</button><button id="more" type="button">More</button></nav>
@@ -215,11 +215,11 @@ async function enableWalking(): Promise<void> {
 }
 
 function more(): void {
-  panel('Your beaver', `<div class="button-row">${button('Jump', 'jump', connection !== 'connected')}${button('Play', 'play', connection !== 'connected')}${button('Dap', 'dap', connection !== 'connected')}</div><div class="button-row">${button(motionEnabled ? 'Pause walking' : 'Enable walking', 'enable-walking', connection !== 'connected')}${button('Recenter', 'recenter', !motionEnabled)}</div>${button('Camera quests · pair phone', 'pair-camera', connection !== 'connected')}${button('Connection & controls', 'settings')}<p id="panel-status" class="small">${simulator ? 'Simulator only: A / D turn, W walks a step. Arrow keys select buttons.' : 'Steps move your beaver; looking around changes its heading. Keep the phone camera bridge open for capture.'}</p>${button('Back to game', 'back')}`, 'more');
+  panel('Your beaver', `<div class="button-row">${button('Jump', 'jump', connection !== 'connected')}${button('Play', 'play', connection !== 'connected')}${button('Dap', 'dap', connection !== 'connected')}</div><div class="button-row">${button(motionEnabled ? 'Pause walking' : 'Enable walking', 'enable-walking', connection !== 'connected')}${button('Recenter', 'recenter', !motionEnabled)}</div>${button('Glasses camera setup', 'pair-camera', connection !== 'connected')}${button('Connection & controls', 'settings')}<p id="panel-status" class="small">${simulator ? 'Simulator only: A / D turn, W walks a step. Arrow keys select buttons.' : 'Steps move your beaver; looking around changes its heading. Keep the phone camera bridge open for capture.'}</p>${button('Back to game', 'back')}`, 'more');
   for (const action of ['jump', 'play', 'dap'] as const) bind(action, () => { client.action(action); closePanel(); });
   bind('enable-walking', enableWalking);
   bind('recenter', () => { motion.recenter(); closePanel(); });
-  bind('pair-camera', pairCamera);
+  bind('pair-camera', () => pairCamera());
   bind('settings', controls);
   bind('back', closePanel);
 }
@@ -304,65 +304,72 @@ function questPanel(message = ''): void {
   const quest = quests.find(item => item.id === selectedQuest)!;
   const readiness = evidenceReadiness(selectedQuest, snapshot, member?.playerId, connection === 'connected');
   const canReview = capture?.status === 'ready' && captureQuest === selectedQuest && capture.questId === selectedQuest;
-  panel(quest.title, `<p>${quest.instruction}</p><p id="panel-status" class="small">${escape(message || readiness.message)}</p><div class="button-row">${button('Photo', 'capture-photo', !readiness.ready || selectedQuest === 'dapHandshake')}${button('6s clip', 'capture-clip', !readiness.ready)}</div>${button('Review capture', 'review', !canReview)}${button('Pair glasses camera', 'pair-camera')}${button('Back', 'back')}`, 'quest');
+  panel(quest.title, `<p>${quest.instruction}</p><p id="panel-status" class="small">${escape(message || readiness.message)}</p><div class="button-row">${button('Photo & grade', 'capture-photo', !readiness.ready || selectedQuest === 'dapHandshake')}${button('6s clip & grade', 'capture-clip', !readiness.ready)}</div><p class="small">Captures from your glasses are sent to Muse for quest grading. Only capture people who agree.</p>${canReview ? button('Review last capture', 'review') : ''}${button('Back', 'back')}`, 'quest');
   bind('capture-photo', () => startCapture('photo'));
   bind('capture-clip', () => startCapture('clip'));
-  bind('pair-camera', pairCamera);
-  bind('review', reviewCapture);
+  bind('review', () => reviewCapture());
   bind('back', questList);
 }
-async function pairCamera(): Promise<void> {
+async function pairCamera(returnToQuest?: EvidenceQuestId): Promise<void> {
   if (cameraBusy || connection !== 'connected' || document.hidden) return;
   cameraBusy = true;
-  panel('Pair your glasses camera', `<p>Open Kith Camera on your paired iPhone. Enable quest controls and enter this game server and pairing code.</p><div id="pair-code" class="pair-code">…</div><p id="pair-server" class="small"></p><p id="panel-status" class="small">Checking your camera bridge…</p>${button('Check bridge', 'check-camera', true)}${button('New pairing code', 'new-camera-code', true)}<p class="small">Use a new code if Kith Camera restarted or you unpaired it.</p>${button('Back', 'back')}`, 'pairing');
+  panel('Enable glasses camera', `<p>The glasses web app needs Kith Camera on your paired iPhone to access the glasses lens.</p><p class="small">Open Kith Camera, enable quest controls and enter this code. Start the glasses camera and keep that app open.</p><div id="pair-code" class="pair-code">…</div><p id="pair-server" class="small"></p><p id="panel-status" class="small">Checking your camera connection…</p>${button('Reconnect camera', 'new-camera-code', true)}${button('Back', 'back')}`, 'pairing');
   const generation = cameraGeneration, session = camera.sessionKey;
+  let setupRevision = 0;
   const current = () => cameraViewMatches(generation, 'pairing', session);
   el('pair-server').textContent = camera.origin;
-  bind('back', more);
+  bind('back', () => { if (returnToQuest) { selectedQuest = returnToQuest; questPanel(); } else more(); });
   const showState = (state: CaptureStatus) => {
     if (!current()) return;
+    if (state.connected && returnToQuest) {
+      selectedQuest = returnToQuest;
+      questPanel('Camera relay connected. Start the glasses camera on your phone, then choose Photo or Clip.');
+      return;
+    }
     el('panel-status').textContent = state.connected
-      ? 'Camera bridge connected. Start the glasses camera in Kith Camera and keep the phone app open.'
-      : state.paired ? 'Paired. Reopen Kith Camera and start the glasses camera.' : 'Enter this eight-character code in Kith Camera on your phone.';
-    if (state.paired) el('pair-code').textContent = 'Paired';
+      ? 'Connected. Start the glasses camera in Kith Camera. Photo & grade or Clip & grade sends each capture to Muse.'
+      : state.paired ? 'Linked. Reopen Kith Camera and start the glasses camera.' : 'Enter this code in Kith Camera on the paired iPhone.';
+    if (state.paired) el('pair-code').textContent = 'Linked';
   };
   const showCode = (paired: { code: string; expiresAt: number }) => {
     if (!current()) return;
     el('pair-code').textContent = paired.code;
     const minutes = Math.max(1, Math.ceil((paired.expiresAt - Date.now()) / 60_000));
-    el('panel-status').textContent = `Enter this eight-character code in Kith Camera. Expires in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
+    el('panel-status').textContent = `Connect once for this game session. Code expires in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
   };
-  bind('check-camera', async () => {
-    if (cameraBusy || !current()) return;
-    cameraBusy = true; el<HTMLButtonElement>('check-camera').disabled = true;
-    try { showState(await camera.status()); }
-    catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Bridge unavailable.'; }
-    finally { cameraBusy = false; if (current()) el<HTMLButtonElement>('check-camera').disabled = false; }
-  });
+  const poll = async () => {
+    if (!current()) return;
+    if (!cameraBusy) {
+      const revision = setupRevision;
+      try {
+        const state = await camera.status();
+        if (!cameraBusy && current() && revision === setupRevision) showState(state);
+      }
+      catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Camera connection unavailable.'; }
+    }
+    if (current()) cameraPoll = setTimeout(() => { void poll(); }, 2500);
+  };
   bind('new-camera-code', async () => {
     if (cameraBusy || !current()) return;
-    cameraBusy = true;
-    el<HTMLButtonElement>('check-camera').disabled = true;
+    cameraBusy = true; setupRevision++;
     el<HTMLButtonElement>('new-camera-code').disabled = true;
-    el('panel-status').textContent = 'Creating a new camera pairing code…';
+    el('panel-status').textContent = 'Creating a new camera connection code…';
     try { showCode(await camera.pair(true)); capture = null; captureQuest = null; }
-    catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Pairing failed.'; }
-    finally {
-      cameraBusy = false;
-      if (current()) { el<HTMLButtonElement>('check-camera').disabled = false; el<HTMLButtonElement>('new-camera-code').disabled = false; }
-    }
+    catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Camera setup failed.'; }
+    finally { cameraBusy = false; if (current()) el<HTMLButtonElement>('new-camera-code').disabled = false; }
   });
   try {
     const state = await camera.status();
     if (!current()) return;
     if (state.paired) showState(state);
-    else {
-      showCode(await camera.pair());
-    }
-  } catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Pairing failed.'; }
+    else showCode(await camera.pair());
+  } catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Camera setup failed.'; }
   finally {
     cameraBusy = false;
-    if (current()) { el<HTMLButtonElement>('check-camera').disabled = false; el<HTMLButtonElement>('new-camera-code').disabled = false; }
+    if (current()) {
+      el<HTMLButtonElement>('new-camera-code').disabled = false;
+      cameraPoll = setTimeout(() => { void poll(); }, 2500);
+    }
   }
 }
 
@@ -384,6 +391,13 @@ async function startCapture(kind: 'photo' | 'clip'): Promise<void> {
     if (currentPanel === 'capture' && camera.sessionKey === session && !document.hidden) { selectedQuest = questId; questPanel('Capture discarded.'); }
   });
   try {
+    const cameraState = await camera.status();
+    if (!current()) { cameraBusy = false; captureSession = null; return; }
+    if (!cameraState.paired || !cameraState.connected) {
+      cameraBusy = false; captureSession = null; captureQuest = null;
+      await pairCamera(questId);
+      return;
+    }
     const request = await camera.capture(kind, questId);
     if (!current()) {
       cameraBusy = false;
@@ -400,7 +414,7 @@ async function startCapture(kind: 'photo' | 'clip'): Promise<void> {
         const state = await camera.status();
         if (!current()) return;
         if (state.requestId !== request.requestId || state.questId !== questId || state.status === 'error') throw new Error(state.error || 'Capture ended. Try again.');
-        if (state.status === 'ready') { captureSession = null; capture = state; captureQuest = questId; reviewCapture(); return; }
+        if (state.status === 'ready') { captureSession = null; capture = state; captureQuest = questId; reviewCapture(true); return; }
         if (!state.connected || Date.now() - startedAt > 35_000) throw new Error('Camera bridge disconnected. Keep Kith Camera open and try again.');
         cameraPoll = setTimeout(() => { void poll(); }, 1000);
       } catch (error) {
@@ -417,20 +431,19 @@ async function startCapture(kind: 'photo' | 'clip'): Promise<void> {
   }
 }
 
-function reviewCapture(): void {
+function reviewCapture(autoSubmit = false): void {
   if (!capture || capture.status !== 'ready' || !captureQuest || capture.questId !== captureQuest || document.hidden) return;
   const evidence = capture, questId = captureQuest, session = camera.sessionKey;
   selectedQuest = questId;
   const frameCount = evidence.frames?.length ?? 0;
   const seconds = evidence.durationSeconds ?? 6;
-  panel('Review your capture', `<img id="capture-preview" class="camera-preview" alt="Your glasses camera capture"><p id="capture-frame" class="small">${frameCount ? `${seconds.toFixed(1)}-second clip · ${frameCount} sampled frames` : 'Glasses photo'} · ${quests.find(quest => quest.id === questId)!.title}</p>${frameCount ? `<div class="button-row">${button('Pause preview', 'preview-toggle')}${button('Next frame', 'preview-next')}</div>` : ''}<label class="consent"><input id="evidence-consent" type="checkbox">Everyone shown agrees to submit.</label><p id="panel-status" class="small">Submit sends this evidence to the game server and Meta for quest verification.</p><div class="button-row">${button('Submit', 'submit', true)}${button('Discard', 'discard')}</div>${button('Back to quest', 'back')}`, 'review');
+  panel(autoSubmit ? 'Grading your quest' : 'Your glasses capture', `<img id="capture-preview" class="camera-preview" alt="Your glasses camera capture"><p id="capture-frame" class="small">${frameCount ? `${seconds.toFixed(1)}-second clip · ${frameCount} sampled frames` : 'Glasses photo'} · ${quests.find(quest => quest.id === questId)!.title}</p>${frameCount ? `<div class="button-row">${button('Pause preview', 'preview-toggle')}${button('Next frame', 'preview-next')}</div>` : ''}<p id="panel-status" class="small">${autoSubmit ? 'Sending your capture to Muse…' : 'Send this capture to Muse for quest grading, or discard and try again.'}</p><div class="button-row">${button('Grade capture', 'submit')}${button('Discard', 'discard')}</div>${button('Back to quest', 'back')}`, 'review');
   const generation = cameraGeneration;
   const current = () => cameraViewMatches(generation, 'review', session) && capture === evidence;
   // Returning from a hidden tab rebuilds the review controls. A verification
   // already requested by the user can finish into that same evidence view.
   const reviewingEvidence = () => currentPanel === 'review' && camera.sessionKey === session && capture === evidence && !document.hidden;
   const image = el<HTMLImageElement>('capture-preview');
-  const consent = el<HTMLInputElement>('evidence-consent');
   const submit = el<HTMLButtonElement>('submit');
   const discard = el<HTMLButtonElement>('discard');
   image.src = evidence.photoDataUrl || evidence.frames?.[0] || '';
@@ -450,11 +463,10 @@ function reviewCapture(): void {
     bind('preview-toggle', () => { playing = !playing; clearTimeout(cameraPoll); el('preview-toggle').textContent = playing ? 'Pause preview' : 'Play preview'; if (playing) cycle(); });
     bind('preview-next', () => { playing = false; clearTimeout(cameraPoll); el('preview-toggle').textContent = 'Play preview'; showFrame(); frame++; });
   }
-  consent.addEventListener('change', () => { submit.disabled = cameraBusy || !consent.checked; });
   bind('back', () => { if (!cameraBusy) questPanel(); });
-  bind('submit', async () => {
-    if (!current() || !consent.checked || cameraBusy) return;
-    cameraBusy = true; submit.disabled = true; discard.disabled = true; consent.disabled = true;
+  const submitEvidence = async () => {
+    if (!current() || cameraBusy) return;
+    cameraBusy = true; submit.disabled = true; discard.disabled = true;
     el<HTMLButtonElement>('back').disabled = true;
     el('panel-status').textContent = 'Checking your quest…';
     try {
@@ -466,26 +478,34 @@ function reviewCapture(): void {
         if (showCompletion) {
           selectedQuest = questId; questPanel(`Quest complete! ${result.reason}`);
         } else tell(`Quest complete! ${result.reason}`);
-      } else if (reviewingEvidence()) el('panel-status').textContent = result.reason || 'Try capturing the action again.';
-    } catch (error) { if (reviewingEvidence()) el('panel-status').textContent = error instanceof Error ? error.message : 'Quest check failed. Please retry.'; }
+      } else if (reviewingEvidence()) {
+        el('panel-title').textContent = 'Try another capture';
+        el('panel-status').textContent = result.reason || 'Try capturing the action again.';
+      }
+    } catch (error) { if (reviewingEvidence()) {
+      el('panel-title').textContent = 'Could not grade capture';
+      el('panel-status').textContent = error instanceof Error ? error.message : 'Quest check failed. Please retry.';
+    } }
     finally {
       cameraBusy = false;
       if (reviewingEvidence()) {
         el<HTMLButtonElement>('discard').disabled = false;
-        el<HTMLInputElement>('evidence-consent').disabled = false;
-        el<HTMLButtonElement>('submit').disabled = !el<HTMLInputElement>('evidence-consent').checked;
+        el<HTMLButtonElement>('submit').disabled = false;
         el<HTMLButtonElement>('back').disabled = false;
+        if (!el('panel').contains(document.activeElement)) el('discard').focus();
       }
     }
-  });
+  };
+  bind('submit', submitEvidence);
+  if (autoSubmit) void submitEvidence();
   bind('discard', async () => {
     if (cameraBusy || !current()) return;
-    cameraBusy = true; discard.disabled = true; submit.disabled = true; consent.disabled = true;
+    cameraBusy = true; discard.disabled = true; submit.disabled = true;
     try {
       await camera.discard(); capture = null; captureQuest = null; clearTimeout(cameraPoll);
       if (cameraGeneration === generation && currentPanel === 'review' && !document.hidden) { selectedQuest = questId; questPanel('Capture discarded.'); }
     } catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Discard failed. Please retry.'; }
-    finally { cameraBusy = false; if (current()) { discard.disabled = false; consent.disabled = false; submit.disabled = !consent.checked; } }
+    finally { cameraBusy = false; if (current()) { discard.disabled = false; submit.disabled = false; } }
   });
 }
 
@@ -538,8 +558,8 @@ try {
     posePublisher.move(motion.pose.x, motion.pose.z);
     if (motionEnabled) playground.setWalkingPose(motion.pose);
   }, { display: true });
-  await playground.load(); ready = true;
+  await playground.load(message => { el('tracking-status').textContent = message; }); ready = true;
   el('tracking-status').textContent = simulator ? 'Simulator · select Walk, then W / A / D' : 'Select Walk while facing forward';
   updateGameControls();
   if (el('join')) el<HTMLButtonElement>('join').disabled = false;
-} catch { el('tracking-status').textContent = 'Could not load the beaver. Reopen Kith to retry.'; }
+} catch (error) { el('tracking-status').textContent = error instanceof Error ? error.message : 'Could not load the beaver. Reopen Kith to retry.'; }

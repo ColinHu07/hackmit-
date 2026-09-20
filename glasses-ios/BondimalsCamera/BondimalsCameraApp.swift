@@ -58,7 +58,7 @@ struct BondimalsCameraApp: App {
              .onChange(of: phase) { _, phase in
                  // Do not interrupt registration permission prompts while no camera is running.
                  if phase == .background { bridge.stopIfStreamingInBackground() }
-                 else if phase == .active { bridge.quests.setForeground(true) }
+                 else if phase == .active { bridge.resumeForeground() }
              }
         }
     }

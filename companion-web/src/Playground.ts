@@ -30,6 +30,7 @@ interface NearbyPet {
 }
 
 interface PetVisual {
+  slot: number;
   root: THREE.Group;
   stage: THREE.Group;
   presented: { x: number; z: number } | null;
@@ -67,6 +68,11 @@ export class Playground {
   private readonly materials = new Set<THREE.Material>();
   private readonly textures = new Set<THREE.Texture>();
   private readonly pets: PetVisual[] = [];
+  private readonly preparedGeometry = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
+  private readonly pendingPets = new Map<number, Promise<void>>();
+  private readonly failedPets = new Set<number>();
+  private petPreparation = Promise.resolve();
+  private modelSource: THREE.Group | null = null;
   private readonly dances = new Map<number, PlayDance>();
   private readonly target: THREE.Group;
   private readonly ball: THREE.Group;
@@ -203,7 +209,7 @@ export class Playground {
     this.predictWalkingMovement = predictMovement;
     this.walkingPose = pose ? { ...pose } : null;
     if (pose && initialHeading) {
-      const pet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
+      const pet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets.find(pet => pet.slot === 0);
       if (pet) { pet.yaw = pose.yaw; pet.body.rotation.y = pose.yaw; }
     }
     // The render loop owns the follow camera. Sensor/mode changes must not
@@ -224,10 +230,22 @@ export class Playground {
     this.refreshAnimation();
   }
 
-  async load(): Promise<void> {
-    const gltf = await new GLTFLoader().loadAsync(`${import.meta.env.BASE_URL}models/nova.glb`);
-    // Build the shared playground pair and two discovery visitors once. Each
-    // has independent morph geometry, reused as nearby people come and go.
+  async load(onProgress: (message: string) => void = () => {}): Promise<void> {
+    onProgress('Downloading your beaver…');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    let bytes: ArrayBuffer;
+    try {
+      const response = await fetch(`${import.meta.env.BASE_URL}models/nova.glb`, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Beaver download failed (${response.status}). Please reopen Kith to retry.`);
+      bytes = await response.arrayBuffer();
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('Beaver download timed out. Check your connection and reopen Kith.');
+      throw error;
+    } finally { clearTimeout(timeout); }
+    if (this.disposed) return;
+    onProgress('Opening your beaver…');
+    const gltf = await new GLTFLoader().parseAsync(bytes, `${import.meta.env.BASE_URL}models/`);
     gltf.scene.traverse((object) => {
       if (object instanceof THREE.Mesh) this.trackMesh(object);
     });
@@ -235,8 +253,40 @@ export class Playground {
       this.disposeResources();
       return;
     }
-    for (let slot = 0; slot < 4; slot++) this.pets.push(this.buildPet(gltf.scene, slot));
+    this.modelSource = gltf.scene;
+    if (this.options.display) {
+      // Make the local pet playable before preparing any visitors. All display
+      // pets share immutable morph buffers, with their own animation weights.
+      const localSlot = this.snapshot?.players.find(player => player.id === this.localPlayerId)?.slot ?? 0;
+      await this.preparePet(localSlot, onProgress);
+    } else {
+      for (let slot = 0; slot < 4; slot++) {
+        const pet = await this.buildPet(gltf.scene, slot);
+        if (pet) this.pets.push(pet);
+      }
+    }
     this.update(this.snapshot, this.localPlayerId);
+  }
+
+  private preparePet(slot: number, onProgress?: (message: string) => void): Promise<void> {
+    if (!this.modelSource || this.disposed || this.pets.some(pet => pet.slot === slot) || this.failedPets.has(slot)) return Promise.resolve();
+    const existing = this.pendingPets.get(slot);
+    if (existing) return existing;
+    const source = this.modelSource;
+    const task = this.petPreparation.then(async () => {
+      if (this.disposed) return;
+      const pet = await this.buildPet(source, slot, onProgress);
+      if (pet) {
+        this.pets.push(pet);
+        this.update(this.snapshot, this.localPlayerId);
+      }
+    });
+    this.pendingPets.set(slot, task);
+    this.petPreparation = task.catch(error => {
+      this.failedPets.add(slot);
+      console.warn('Could not prepare a beaver', error);
+    }).finally(() => this.pendingPets.delete(slot));
+    return task;
   }
 
   update(snapshot: PlaySnapshot | null, localPlayerId: string | null): void {
@@ -253,10 +303,14 @@ export class Playground {
       return;
     }
     const players = snapshot?.players ?? [];
+    if (this.options.display && this.modelSource) {
+      const slots = snapshot ? players.filter(player => player.connected).map(player => player.slot) : [0];
+      for (const slot of slots) void this.preparePet(slot).catch(() => {});
+    }
     for (let index = 0; index < this.pets.length; index++) {
       const pet = this.pets[index]!;
-      const player = players.find((candidate) => candidate.slot === index);
-      const isPreview = !snapshot && index === 0;
+      const player = players.find((candidate) => candidate.slot === pet.slot);
+      const isPreview = !snapshot && pet.slot === 0;
       pet.root.visible = isPreview || Boolean(player?.connected);
       if (isPreview) {
         pet.playerId = null;
@@ -298,16 +352,19 @@ export class Playground {
 
   private updateNearbyPets(): void {
     if (this.nearby === null) return;
+    if (this.options.display && this.modelSource) {
+      for (let slot = 0; slot <= this.nearby.length; slot++) void this.preparePet(slot).catch(() => {});
+    }
     const remaining = new Map(this.nearby.map((peer) => [peer.id, peer]));
     // Keep each visitor in the same slot when distance updates reorder the list.
-    for (let index = 1; index < this.pets.length; index++) {
-      const pet = this.pets[index]!;
+    for (const pet of this.pets) {
+      if (pet.slot === 0) continue;
       if (pet.playerId && remaining.has(pet.playerId)) remaining.delete(pet.playerId);
       else pet.playerId = null;
     }
     const unassigned = remaining.values();
-    for (let index = 0; index < this.pets.length; index++) {
-      const pet = this.pets[index]!;
+    for (const pet of this.pets) {
+      const index = pet.slot;
       if (index === 0) {
         pet.playerId = null;
         pet.root.visible = true;
@@ -465,7 +522,7 @@ export class Playground {
     return new THREE.ShapeGeometry(shape, 10);
   }
 
-  private buildPet(source: THREE.Group, slot: number): PetVisual {
+  private async buildPet(source: THREE.Group, slot: number, onProgress: (message: string) => void = () => {}): Promise<PetVisual | null> {
     const root = new THREE.Group();
     const stage = new THREE.Group();
     root.add(stage);
@@ -476,21 +533,37 @@ export class Playground {
     const gaits: SoftGait[] = [];
     const jumps: SoftJump[] = [];
     const paws: SoftPaws[] = [];
-    model.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      object.geometry = object.geometry.clone();
+    const meshes: THREE.Mesh[] = [];
+    model.traverse(object => { if (object instanceof THREE.Mesh) meshes.push(object); });
+    for (const object of meshes) {
+      const sourceGeometry = object.geometry;
+      const prepared = this.options.display ? this.preparedGeometry.get(sourceGeometry) : undefined;
+      object.geometry = prepared ?? sourceGeometry.clone();
       if (!object.geometry.getAttribute('normal')) object.geometry.computeVertexNormals();
       this.trackMesh(object);
       object.castShadow = true;
       object.receiveShadow = false;
-      if (!(object instanceof THREE.SkinnedMesh) && !object.geometry.morphAttributes.position?.length) {
-        heads.push(new SoftHead(object));
-        gaits.push(new SoftGait(object));
-        jumps.push(new SoftJump(object));
-        paws.push(new SoftPaws(object));
-        expressions.push(new SoftExpression(object));
+      if (!(object instanceof THREE.SkinnedMesh) && !sourceGeometry.morphAttributes.position?.length) {
+        const steps = [
+          () => heads.push(new SoftHead(object)),
+          () => gaits.push(new SoftGait(object)),
+          () => jumps.push(new SoftJump(object)),
+          () => paws.push(new SoftPaws(object)),
+          () => expressions.push(new SoftExpression(object)),
+        ];
+        for (let index = 0; index < steps.length; index++) {
+          if (this.options.display && !prepared) {
+            onProgress(`Preparing beaver animations (${index + 1}/${steps.length})…`);
+            // Give the display a chance to paint progress and process controls
+            // between the expensive normal/morph generation passes.
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            if (this.disposed) { this.disposeResources(); return null; }
+          }
+          steps[index]!();
+        }
+        if (this.options.display && !prepared) this.preparedGeometry.set(sourceGeometry, object.geometry);
       }
-    });
+    }
     const bounds = new THREE.Box3().setFromObject(source);
     const size = bounds.getSize(new THREE.Vector3());
     const center = bounds.getCenter(new THREE.Vector3());
@@ -539,7 +612,7 @@ export class Playground {
       return crumb;
     });
     this.scene.add(root);
-    return { root, stage, presented: null, danceDistance: 0, danceYaw: Math.PI, danceGait: 0, body, ring, shadow, hearts, treat, crumbs, contact, jumps, paws, heads, expressions, sadness: 0, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
+    return { slot, root, stage, presented: null, danceDistance: 0, danceYaw: Math.PI, danceGait: 0, body, ring, shadow, hearts, treat, crumbs, contact, jumps, paws, heads, expressions, sadness: 0, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
   }
 
   private resize = (): void => {
@@ -635,13 +708,13 @@ export class Playground {
       const pet = this.pets[index]!;
       if (!pet.root.visible) continue;
       let player = this.snapshot?.players.find((candidate) => candidate.id === pet.playerId);
-      if (this.walkingPose && ((!this.snapshot && index === 0) || player?.id === this.localPlayerId)) {
+      if (this.walkingPose && ((!this.snapshot && pet.slot === 0) || player?.id === this.localPlayerId)) {
         player = walkingPlayer(player, this.walkingPose, this.predictWalkingMovement);
       }
       this.animatePet(pet, player, delta, now / 1000, serverTime, reducedMotion);
     }
     this.animateSocialSpacing(serverTime, delta, reducedMotion);
-    const followedPet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
+    const followedPet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets.find(pet => pet.slot === 0);
     if (followedPet?.root.visible) {
       const { x, z } = followedPet.root.position;
       // Follow the smoothed walking heading. A play animation can turn the body
@@ -723,7 +796,7 @@ export class Playground {
     const lift = pose.lift;
     let tilt = reducedMotion ? 0 : Math.sin(seconds * 1.7) * 0.018;
     tilt += pose.tilt;
-    const isLocal = this.snapshot ? pet.playerId === this.localPlayerId : pet === this.pets[0];
+    const isLocal = this.snapshot ? pet.playerId === this.localPlayerId : pet.slot === 0;
     const happiness = player?.survival?.happiness ?? (isLocal ? this.happiness : 70);
     const sad = happinessState(happiness) === 'sad' ? 1 : 0;
     pet.sadness += (sad - pet.sadness) * (reducedMotion ? 1 : 1 - Math.exp(-5 * delta));
@@ -808,19 +881,19 @@ export class Playground {
       }
     }
     const candidates = visible.map(pet => {
-      const slot = this.pets.indexOf(pet);
+      const slot = pet.slot;
       const dance = pet.playerId ? dancePositions.get(pet.playerId) : undefined;
       return { id: pet.playerId ?? `preview-${slot}`, slot,
         x: dance?.x ?? pet.root.position.x + pet.body.position.x,
         z: dance?.z ?? pet.root.position.z + pet.body.position.z };
     });
     const previous = visible.flatMap(pet => {
-      const slot = this.pets.indexOf(pet);
+      const slot = pet.slot;
       return pet.presented ? [{ id: pet.playerId ?? `preview-${slot}`, slot, ...pet.presented }] : [];
     });
     // Include spectators and resting pets in contacts, not just the dancers.
     for (const point of advancePetStage(candidates, previous, delta, reducedMotion)) {
-      const pet = this.pets[point.slot]!;
+      const pet = this.pets.find(pet => pet.slot === point.slot)!;
       const dance = pet.playerId ? dancePositions.get(pet.playerId) : undefined;
       pet.stage.position.set(point.x - pet.root.position.x - pet.body.position.x, 0,
         point.z - pet.root.position.z - pet.body.position.z);
