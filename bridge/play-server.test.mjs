@@ -572,3 +572,16 @@ test('verified quests can reward the same pair again only after the demo cooldow
     assert.equal(player.survival.questCooldowns.meetFriend, 60_000);
   }
 });
+
+test('demo admin controls update only the authenticated connected pet', async t => {
+  const { origin, connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'lobby', name: 'Admin A' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'lobby', name: 'Admin B' }); const second = await welcome(b);
+  const post = body => fetch(origin + '/api/admin/pet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await post({ roomCode: first.roomCode, playerToken: '0'.repeat(48), changes: { berries: 50 } })).status, 401);
+  assert.equal((await post({ roomCode: first.roomCode, playerToken: first.playerToken, changes: { berries: 50, happiness: 25, questCooldownMs: 0 } })).status, 200);
+  const updated = await state(b, s => s.players.find(p => p.id === first.playerId)?.survival.inventory.berry === 50);
+  assert.equal(updated.players.find(p => p.id === first.playerId).survival.happiness, 25);
+  assert.equal(updated.players.find(p => p.id === second.playerId).survival.inventory.berry, 3);
+  assert.equal((await post({ roomCode: first.roomCode, playerToken: first.playerToken, changes: { happiness: 101 } })).status, 400);
+});

@@ -45,7 +45,7 @@ const icon = (name: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="cur
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="site-header">
     <a class="brand" href="${import.meta.env.BASE_URL}" aria-label="Kith home"><span class="brand-mark">${icon('leaf')}</span>kith</a>
-    <div class="header-right"><span class="edition">A LITTLE CLOSER, TOGETHER</span><button class="icon-button" id="server-settings" aria-label="Server settings" title="Server settings">${icon('settings')}</button></div>
+    <div class="header-right"><span class="edition">A LITTLE CLOSER, TOGETHER</span><button class="icon-button" id="server-settings" aria-label="Admin control" title="Admin control">${icon('settings')}</button></div>
   </header>
   <main class="layout">
     <section class="side-panel" aria-label="Your playground">
@@ -157,7 +157,18 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <p id="zoom-status" class="photo-verification-status" role="status">Nearby discovery is off until you share your location.</p>
     <div id="zoom-nearby-list" class="nearby-list" aria-label="Nearby beavers"></div>
   </dialog>
-  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both phones connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
+  <dialog id="settings-dialog" aria-labelledby="admin-title"><div class="dialog-heading"><h2 id="admin-title">Admin control</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close admin control">${icon('close')}</button></div>
+    <p class="admin-intro">Demo controls for your pet. Drag a slider to save its value.</p>
+    <div id="admin-controls">
+      <label class="admin-slider" for="admin-berries"><span>Berries <output id="admin-berries-value"></output></span><input id="admin-berries" type="range" min="0" max="999" step="1" data-admin="berries" /></label>
+      <label class="admin-slider" for="admin-happiness"><span>Happiness <output id="admin-happiness-value"></output></span><input id="admin-happiness" type="range" min="0" max="100" step="1" data-admin="happiness" /></label>
+      <label class="admin-slider" for="admin-treat"><span>Berry cooldown remaining <output id="admin-treat-value"></output></span><input id="admin-treat" type="range" min="0" max="3600" step="1" data-admin="treatCooldownMs" /></label>
+      <button type="button" class="admin-reset" data-reset="admin-treat">Allow a berry now</button>
+      <label class="admin-slider" for="admin-quests"><span>Quest cooldown remaining <output id="admin-quests-value"></output></span><input id="admin-quests" type="range" min="0" max="60" step="1" data-admin="questCooldownMs" /></label>
+      <button type="button" class="admin-reset" data-reset="admin-quests">Reset my quest cooldowns</button>
+      <p class="admin-note">Quest control applies to all four camera quests for your pet. A partner’s active cooldown still applies. New completions use the normal demo cooldown.</p>
+    </div><p id="admin-status" role="status"></p>
+    <details class="admin-server"><summary>Server settings</summary><form id="settings-form"><p>Both phones connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></details></dialog>
 `;
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -170,6 +181,7 @@ settingsExtras.append(el('native-tools'), el('browser-view-tools'), document.que
 el('quest-detail').append(el('quest-tools'));
 el('raid-detail').append(el('raid-card'));
 el('action-notice').hidden = true;
+el('survival-card').before(el('play-controls'));
 
 function stored(key: string): string | null { try { return localStorage.getItem(key); } catch { return null; } }
 function save(key: string, value: string): void { try { localStorage.setItem(key, value); } catch { /* Private browsing can disable storage. */ } }
@@ -559,7 +571,7 @@ const client = new RoomClient({
       const cooldownLabel = formatTreatTime(cooldown);
       const boostNotice = el('treat-boost-notice');
       boostNotice.hidden = cooldown <= 0;
-      const boostText = cooldown > 0 ? 'Berry boost: losing 1% happiness now takes 1.5× longer — 90 seconds instead of 60 — for one hour. You can have another berry when the timer ends.' : '';
+      const boostText = cooldown > 0 ? 'Berry boost: losing 1% happiness now takes 1.5× longer — 90 seconds instead of 60 — while the cooldown is active. You can have another berry when the timer ends.' : '';
       if (boostNotice.textContent !== boostText) boostNotice.textContent = boostText;
       const berries = survival.inventory.berry ?? 0;
       el('treat-cooldown').textContent = cooldown > 0 ? `Treat ready in ${cooldownLabel}` : berries > 0 ? 'Treat ready' : 'Out of berries';
@@ -1198,11 +1210,60 @@ el('invite-button').addEventListener('click', () => {
   if (navigator.share) void navigator.share(share).catch(cause => { if (cause.name !== 'AbortError') toast('Share the room code shown on screen.'); });
   else void copy(url).then(() => toast('Invite link copied. Send it to your friend.')).catch(cause => toast(String(cause.message)));
 });
+function adminLabel(input: HTMLInputElement): void {
+  const value = Number(input.value);
+  el(`${input.id}-value`).textContent = input.dataset.admin === 'happiness' ? `${value}%`
+    : input.dataset.admin?.endsWith('Ms') ? value === 0 ? 'Ready now' : formatTreatTime(value * 1000) : String(value);
+}
+function loadAdminControls(): void {
+  const pet = snapshot?.players.find(player => player.id === membership?.playerId)?.survival;
+  const values: Record<string, number> = { berries: pet?.inventory.berry ?? 0, happiness: Math.round(pet?.happiness ?? 0),
+    treatCooldownMs: Math.ceil((pet?.treatCooldownMs ?? 0) / 1000),
+    questCooldownMs: Math.ceil(Math.max(0, ...Object.values(pet?.questCooldowns ?? {}).map(value => value ?? 0)) / 1000) };
+  document.querySelectorAll<HTMLInputElement>('[data-admin]').forEach(input => {
+    if (input.dataset.admin === 'questCooldownMs') input.max = String(Math.max(60, values.questCooldownMs!));
+    input.value = String(values[input.dataset.admin!] ?? 0); input.disabled = !pet || connection !== 'connected'; adminLabel(input);
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-reset]').forEach(button => { button.disabled = !pet || connection !== 'connected'; });
+  el('admin-status').textContent = pet && connection === 'connected' ? 'Changes save to your current pet.' : 'Connect to the playground to edit your pet.';
+}
+let adminSaving = false;
+async function saveAdminControl(input: HTMLInputElement): Promise<void> {
+  if (adminSaving || !membership || connection !== 'connected') return;
+  adminSaving = true;
+  const key = input.dataset.admin!;
+  const value = Number(input.value) * (key.endsWith('Ms') ? 1000 : 1);
+  document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-admin], [data-reset]').forEach(control => { control.disabled = true; });
+  el('admin-status').textContent = 'Saving…';
+  try {
+    const response = await fetch(new URL('/api/admin/pet', verificationEndpoint()), {
+      method: 'POST', signal: AbortSignal.timeout(10_000), headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ roomCode: membership.roomCode, playerToken: membership.playerToken, changes: { [key]: value } }),
+    });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(result.error || 'Could not save your pet.');
+    el('admin-status').textContent = 'Saved. Your pet is updated.';
+  } catch (cause) {
+    loadAdminControls();
+    el('admin-status').textContent = cause instanceof Error ? cause.message : 'Could not save your pet.';
+  } finally {
+    adminSaving = false;
+    document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-admin], [data-reset]').forEach(control => { control.disabled = connection !== 'connected'; });
+  }
+}
+document.querySelectorAll<HTMLInputElement>('[data-admin]').forEach(input => {
+  input.addEventListener('input', () => adminLabel(input));
+  input.addEventListener('change', () => { void saveAdminControl(input); });
+});
+document.querySelectorAll<HTMLButtonElement>('[data-reset]').forEach(button => button.addEventListener('click', () => {
+  const input = el<HTMLInputElement>(button.dataset.reset!); input.value = '0'; adminLabel(input); void saveAdminControl(input);
+}));
 const settings = el<HTMLDialogElement>('settings-dialog');
 el('server-settings').addEventListener('click', () => {
   if (nearbyActive) stopNearby();
   el<HTMLInputElement>('server-url').value = serverUrl;
   el('settings-error').hidden = true;
+  loadAdminControls();
   settings.showModal();
 });
 el('close-settings').addEventListener('click', () => settings.close());

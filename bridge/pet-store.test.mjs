@@ -193,3 +193,38 @@ test('each quest has its own cooldown and capped happiness still awards all berr
   assert.throws(() => store.completeQuest([token], 'unknown'));
   store.close();
 });
+
+test('admin values persist, reset cooldowns, and never fabricate quest rewards', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'kith-admin-'));
+  const file = join(directory, 'pets.sqlite');
+  let clock = 1_800_000_000_000;
+  let store = createPetStore(file, () => clock);
+  const token = '6'.repeat(48); store.ensure(token, 'Demo');
+  store.feed(token); store.completeQuest([token], 'meetFriend');
+  const receipt = store.profile(token).lastQuestReward;
+  store.adminUpdate(token, { berries: 15, happiness: 42, treatCooldownMs: 0, questCooldownMs: 0 });
+  let pet = store.profile(token);
+  assert.equal(pet.happiness, 42); assert.equal(pet.inventory.berry, 15);
+  assert.equal(pet.treatCooldownMs, 0); assert.equal(pet.questCooldowns.meetFriend, 0);
+  assert.deepEqual(pet.lastQuestReward, receipt); assert.equal(pet.points, 14);
+  clock += 10_000; assert.equal(store.profile(token).happiness, 42, 'old bites must not override explicit happiness');
+  store.close(); store = createPetStore(file, () => clock);
+  assert.equal(store.profile(token).inventory.berry, 15); assert.equal(store.questCooldown(token, 'meetFriend'), 0);
+  store.completeQuest([token], 'meetFriend');
+  assert.equal(store.questCooldown(token, 'meetFriend'), 60_000, 'next reward restores the normal cooldown');
+  store.feed(token); assert.equal(store.profile(token).treatCooldownMs, 3_600_000);
+  pet = store.adminUpdate(token, { treatCooldownMs: 5000, questCooldownMs: 3000 });
+  assert.equal(pet.treatCooldownMs, 5000); assert.equal(pet.questCooldowns.touchGrass, 3000);
+  assert.throws(() => store.feed(token), error => error.code === 'treat_cooldown');
+  clock += 5000; assert.equal(store.profile(token).treatCooldownMs, 0);
+  assert.equal(store.questCooldown(token, 'touchGrass'), 0);
+  store.close(); rmSync(directory, { recursive: true, force: true });
+});
+
+test('admin values are validated before any changes are applied', () => {
+  const store = createPetStore(':memory:'); const token = '7'.repeat(48); store.ensure(token, 'Demo');
+  for (const changes of [{ berries: -1 }, { happiness: 101 }, { berries: 1.5 }, { berries: 15, points: 99 }, { treatCooldownMs: 3_600_001 }, { questCooldownMs: 86_400_001 }]) {
+    assert.throws(() => store.adminUpdate(token, changes));
+  }
+  assert.equal(store.profile(token).inventory.berry, 3); store.close();
+});

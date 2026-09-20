@@ -242,6 +242,27 @@ export function createPlayServer(options = {}) {
   const server = createServer((request, response) => {
     if (glassesCamera.handle(request, response)) return;
     const path = request.url?.split('?')[0];
+    if (path === '/api/admin/pet' && request.method === 'OPTIONS') {
+      if (!cors(request, response)) return writeJson(response, 403, { error: 'Origin not allowed.' });
+      response.writeHead(204); response.end(); return;
+    }
+    if (path === '/api/admin/pet' && request.method === 'POST') {
+      void (async () => {
+        try {
+          if (!cors(request, response)) return writeJson(response, 403, { error: 'Origin not allowed.' });
+          const input = await readJson(request, 20_000);
+          if (typeof input?.playerToken !== 'string' || !/^[a-f0-9]{48}$/.test(input.playerToken)) return writeJson(response, 401, { error: 'Valid player token required.' });
+          const room = rooms.get(input.roomCode);
+          const player = room && [...room.players.values()].find(peer => sameToken(peer.token, input.playerToken));
+          if (!player?.socket) return writeJson(response, 401, { error: 'Connect your pet before using admin controls.' });
+          if (Object.values(player.quests.photoVerification).includes('pending')) return writeJson(response, 409, { error: 'Wait for quest grading to finish before changing your pet.' });
+          const profile = petStore.adminUpdate(player.token, input.changes);
+          broadcast(room);
+          writeJson(response, 200, profile);
+        } catch (cause) { writeJson(response, 400, { error: cause.message }); }
+      })();
+      return;
+    }
     if (path === '/api/pet' && request.method === 'GET') {
       const url = new URL(request.url, 'http://localhost');
       const token = url.searchParams.get('playerToken');

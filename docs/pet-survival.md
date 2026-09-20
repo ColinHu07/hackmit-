@@ -48,3 +48,11 @@ Feeding slows happiness decay by 1.5× during that hour: one point is lost every
 An approved solo, duo, or squad camera quest grants every submission participant 12 happiness points, 2 berries, and 10 points. One database transaction awards the entire group and saves each pet’s completion time, reward receipt, and cooldown. Duplicate submissions during cooldown receive HTTP 409 before reaching the grader; rejection and provider errors award nothing. Each quest has its own cooldown, and the group must be eligible to repeat it.
 
 `shared/quest-rewards.mjs` sets the active demo cooldown to 60 seconds and defines the intended 24-hour duration for later. Saved cooldowns survive reconnects and server restarts. After expiry, the same quest can be verified and rewarded again; prior completion still counts toward progression. Snapshots include `questCooldowns` and `lastQuestReward`. The phone shows a countdown, an explicit reward receipt, the updated happiness meter, and a prominent berry balance in Your treats. Remaining health and hunger details are collapsed under Pet stats.
+
+## Demo admin controls
+
+The top-right Admin control panel edits the current connected pet with sliders for 0–999 berries, 0–100 happiness, remaining berry cooldown (0–60 minutes), and remaining camera-quest cooldowns (0–60 seconds in the demo). Changes save on release. Reset buttons make berries or all four camera quests available immediately for that pet; a group partner's cooldown still applies. Future feeding and quest completion restore normal durations. Server settings and movement controls remain inside the panel.
+
+`POST /api/admin/pet` accepts the connected pet's room credential and a `changes` object containing `berries`, `happiness`, `treatCooldownMs`, or `questCooldownMs`. This is a demo self-edit panel available to each player, not a separate administrator role or an editor for other accounts. Values are bounded and saved transactionally; grading must finish before editing. Quest overrides do not grant completion or rewards. Explicit happiness changes cancel any remaining bite happiness so it cannot overwrite the selected value. Cooldown changes do not change feeding animation timestamps.
+
+Points currently record a cumulative score only. They are displayed under Pet stats and have no spending, shop, or unlock mechanic.

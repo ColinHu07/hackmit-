@@ -33,6 +33,10 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
       event_id TEXT NOT NULL, completed_at INTEGER NOT NULL, happiness REAL NOT NULL,
       PRIMARY KEY(token_hash, quest_id)
     );
+    CREATE TABLE IF NOT EXISTS quest_cooldown_overrides (
+      token_hash TEXT NOT NULL REFERENCES pets(token_hash), quest_id TEXT NOT NULL,
+      ready_at INTEGER NOT NULL, PRIMARY KEY(token_hash, quest_id)
+    );
     CREATE INDEX IF NOT EXISTS point_events_player ON point_events(token_hash, created_at);
   `);
   const get = (sql, ...args) => db.prepare(sql).get(...args);
@@ -49,6 +53,10 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
   }
   if (!get('SELECT 1 FROM pragma_table_info(?) WHERE name = ?', 'pets', 'happiness_decay_progress')) {
     db.exec('ALTER TABLE pets ADD COLUMN happiness_decay_progress REAL NOT NULL DEFAULT 0');
+  }
+  if (!get('SELECT 1 FROM pragma_table_info(?) WHERE name = ?', 'pets', 'treat_ready_at')) {
+    db.exec('ALTER TABLE pets ADD COLUMN treat_ready_at INTEGER NOT NULL DEFAULT 0');
+    run('UPDATE pets SET treat_ready_at = last_feed_at + ? WHERE last_feed_at > 0', TREAT_COOLDOWN_MS);
   }
   const foodTypes = ['berry', 'kibble', 'treat'];
   function advance(token, settleDecay = false) {
@@ -67,8 +75,8 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
       }
     }
     const elapsed = Math.max(0, current - row.happiness_updated_at);
-    const boosted = row.last_feed_at > 0 ? Math.max(0,
-      Math.min(current, row.last_feed_at + TREAT_COOLDOWN_MS) - Math.max(row.happiness_updated_at, row.last_feed_at)) : 0;
+    const boosted = row.treat_ready_at > 0 ? Math.max(0,
+      Math.min(current, row.treat_ready_at) - Math.max(row.happiness_updated_at, row.last_feed_at)) : 0;
     const progress = row.happiness_decay_progress
       + (elapsed - boosted + boosted / TREAT_DECAY_MULTIPLIER) / HAPPINESS_DECAY_MS;
     const lost = Math.floor(progress + 1e-9);
@@ -92,6 +100,8 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
     return get('SELECT * FROM pets WHERE token_hash = ?', hash);
   }
   function questCooldown(token, questId) {
+    const override = get('SELECT ready_at FROM quest_cooldown_overrides WHERE token_hash = ? AND quest_id = ?', tokenHash(token), questId);
+    if (override) return Math.max(0, override.ready_at - now());
     const row = get('SELECT completed_at FROM quest_rewards WHERE token_hash = ? AND quest_id = ?', tokenHash(token), questId);
     return row ? Math.max(0, row.completed_at + QUEST_COOLDOWN_MS - now()) : 0;
   }
@@ -111,6 +121,7 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
       return tokens.map(token => {
         const row = advance(token, true);
         const happiness = Math.min(QUEST_REWARD.happiness, 100 - row.happiness);
+        run('DELETE FROM quest_cooldown_overrides WHERE token_hash = ? AND quest_id = ?', row.token_hash, questId);
         const eventId = randomUUID();
         run('UPDATE pets SET happiness = MIN(100, happiness + ?), points = points + ? WHERE token_hash = ?', happiness, QUEST_REWARD.points, row.token_hash);
         run('INSERT INTO food_inventory (token_hash, food, quantity) VALUES (?, ?, ?) ON CONFLICT(token_hash, food) DO UPDATE SET quantity = quantity + excluded.quantity', row.token_hash, 'berry', QUEST_REWARD.berries);
@@ -125,11 +136,11 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
     if (!row) return null;
     const inventory = Object.fromEntries(foodTypes.map(food => [food, get('SELECT quantity FROM food_inventory WHERE token_hash = ? AND food = ?', row.token_hash, food)?.quantity ?? 0]));
     const rewards = db.prepare('SELECT * FROM quest_rewards WHERE token_hash = ? ORDER BY completed_at DESC, rowid DESC').all(row.token_hash);
-    const questCooldowns = Object.fromEntries(rewards.map(reward => [reward.quest_id, Math.max(0, reward.completed_at + QUEST_COOLDOWN_MS - now())]));
+    const questCooldowns = Object.fromEntries(REWARD_QUEST_IDS.map(id => [id, questCooldown(token, id)]));
     const latest = rewards[0];
     const lastQuestReward = latest ? { eventId: latest.event_id, questId: latest.quest_id, completedAt: latest.completed_at,
       happiness: latest.happiness, berries: QUEST_REWARD.berries, points: QUEST_REWARD.points } : null;
-    return { questCooldowns, lastQuestReward, points: row.points, health: Math.round(row.health), hunger: Math.round(row.hunger), happiness: Math.round(row.happiness * 100) / 100, survivalHours: row.survival_hours, inventory, treatCooldownMs: row.last_feed_at > 0 ? Math.max(0, TREAT_COOLDOWN_MS - (now() - row.last_feed_at)) : 0, updatedAt: row.updated_at };
+    return { questCooldowns, lastQuestReward, points: row.points, health: Math.round(row.health), hunger: Math.round(row.hunger), happiness: Math.round(row.happiness * 100) / 100, survivalHours: row.survival_hours, inventory, treatCooldownMs: Math.max(0, row.treat_ready_at - now()), updatedAt: row.updated_at };
   }
   function ensure(token, name) {
     if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) throw invalid('Invalid pet credential.');
@@ -162,18 +173,39 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
     const hash = tokenHash(token);
     if (!advance(token, true)) throw invalid('Pet profile not found.');
     return db.transaction(() => {
-      const cooldown = get('SELECT last_feed_at FROM pets WHERE token_hash = ?', hash);
-      const remaining = cooldown.last_feed_at > 0 ? TREAT_COOLDOWN_MS - (now() - cooldown.last_feed_at) : 0;
+      const cooldown = get('SELECT treat_ready_at FROM pets WHERE token_hash = ?', hash);
+      const remaining = Math.max(0, cooldown.treat_ready_at - now());
       if (remaining > 0) { const error = new Error(`Treat is cooling down for ${Math.ceil(remaining / 60_000)} minutes.`); error.code = 'treat_cooldown'; error.retryAfterMs = remaining; throw error; }
       const item = get('SELECT quantity FROM food_inventory WHERE token_hash = ? AND food = ?', hash, food);
       if (!item || item.quantity < 1) { const error = new Error(`No ${food} left.`); error.code = 'food_empty'; throw error; }
       const effects = { berry: { hunger: 18, happiness: BERRY_HAPPINESS, health: 1, points: 4 }, kibble: { hunger: 30, happiness: 4, health: 3, points: 7 }, treat: { hunger: 10, happiness: 10, health: 5, points: 10 } }[food];
       run('UPDATE food_inventory SET quantity = quantity - 1 WHERE token_hash = ? AND food = ?', hash, food);
       const current = get('SELECT health, hunger, happiness FROM pets WHERE token_hash = ?', hash);
-      run('UPDATE pets SET health = ?, hunger = ?, feed_happiness = ?, feed_happiness_applied = 0, points = points + ?, last_feed_at = ? WHERE token_hash = ?', clamp(current.health + effects.health), clamp(current.hunger + effects.hunger), Math.min(effects.happiness, 100 - current.happiness), effects.points, now(), hash);
+      run('UPDATE pets SET health = ?, hunger = ?, feed_happiness = ?, feed_happiness_applied = 0, points = points + ?, last_feed_at = ?, treat_ready_at = ? WHERE token_hash = ?', clamp(current.health + effects.health), clamp(current.hunger + effects.hunger), Math.min(effects.happiness, 100 - current.happiness), effects.points, now(), now() + TREAT_COOLDOWN_MS, hash);
       run('INSERT INTO point_events VALUES (?, ?, ?, ?, ?)', randomUUID(), hash, effects.points, `feed_${food}`, now());
       return profile(token);
     })();
   }
-  return { profile, ensure, award, feed, questCooldown, completeQuest, close: () => db.close() };
+  function adminUpdate(token, changes) {
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) throw invalid('Choose a value to change.');
+    const ranges = { berries: 999, happiness: 100, treatCooldownMs: TREAT_COOLDOWN_MS, questCooldownMs: 86_400_000 };
+    for (const [key, value] of Object.entries(changes)) {
+      if (!Object.hasOwn(ranges, key) || !Number.isInteger(value) || value < 0 || value > ranges[key]) throw invalid('Invalid admin value.');
+    }
+    return db.transaction(() => {
+      const row = advance(token, true);
+      if (!row) throw invalid('Pet profile not found.');
+      if (changes.berries !== undefined) run('UPDATE food_inventory SET quantity = ? WHERE token_hash = ? AND food = ?', changes.berries, row.token_hash, 'berry');
+      if (changes.happiness !== undefined) {
+        // An explicit happiness override supersedes any still-pending bite reward.
+        run('UPDATE pets SET happiness = ?, happiness_updated_at = ?, happiness_decay_progress = 0, feed_happiness = 0, feed_happiness_applied = 0 WHERE token_hash = ?', changes.happiness, now(), row.token_hash);
+      }
+      if (changes.treatCooldownMs !== undefined) run('UPDATE pets SET treat_ready_at = ? WHERE token_hash = ?', now() + changes.treatCooldownMs, row.token_hash);
+      if (changes.questCooldownMs !== undefined) for (const id of REWARD_QUEST_IDS) {
+        run('INSERT INTO quest_cooldown_overrides VALUES (?, ?, ?) ON CONFLICT(token_hash, quest_id) DO UPDATE SET ready_at = excluded.ready_at', row.token_hash, id, now() + changes.questCooldownMs);
+      }
+      return profile(token);
+    })();
+  }
+  return { profile, ensure, award, feed, adminUpdate, questCooldown, completeQuest, close: () => db.close() };
 }
