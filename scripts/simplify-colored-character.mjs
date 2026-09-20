@@ -4,6 +4,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { repairCharacterEye } from "./repair-character-eye.mjs";
 
 const input = process.argv[2] && resolve(process.argv[2]);
 const output = process.argv[3] && resolve(process.argv[3]);
@@ -50,6 +51,8 @@ compactPrimitive(primitive);
 if (primitive.getAttribute("POSITION").getCount() < 65_535) {
   primitive.getIndices().setArray(new Uint16Array(primitive.getIndices().getArray()));
 }
+const compactColors = primitive.getAttribute("COLOR_0");
+compactColors.setArray(repairCharacterEye(primitive.getAttribute("POSITION").getArray(), compactColors.getArray()));
 await document.transform(prune());
 await io.write(output, document);
 console.log(JSON.stringify({ triangles: simplified.length / 3, appearanceError: error }));

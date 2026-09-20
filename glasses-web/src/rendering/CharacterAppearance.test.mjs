@@ -74,3 +74,19 @@ it('has an opaque, closed surface without missing or reversed triangle edges', (
     expect(translucentVertices).toHaveLength(0);
   }
 });
+
+
+it('keeps the cheek below the right eye orange instead of projecting a second eye patch', () => {
+  const positions = character.geometry.getAttribute('position');
+  const colors = character.geometry.getAttribute('color');
+  let checked = 0;
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
+    // Interior of the paint spill, away from the eye and muzzle feathering.
+    if (x < -0.12 || x > -0.04 || y < 0.53 || y > 0.56 || z < 0.48 || z > 0.515) continue;
+    checked++;
+    expect(colors.getY(i) / colors.getX(i)).toBeLessThan(0.4);
+    expect(colors.getZ(i) / colors.getX(i)).toBeLessThan(0.12);
+  }
+  expect(checked).toBeGreaterThan(10);
+});
