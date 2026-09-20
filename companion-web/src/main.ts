@@ -93,7 +93,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <details id="server-pulse" class="server-pulse" hidden><summary>Multiplayer server</summary><p id="server-pulse-status">Checking server…</p><p>Up to 4 players per room. Start more rooms to test a larger group.</p></details>
     </section>
     <section class="playground-panel" aria-label="Your local world">
-      <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
+      <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div class="scene-topline-actions"><button id="zoom-out-button" class="zoom-out-button" type="button" hidden>Zoom out</button><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div></div>
       <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><aside class="status-effects" aria-label="Pet status effects"><span class="status-effects-title">PET STATUS</span><div class="status-effect"><span class="status-effect-icon">${icon('heart')}</span><span><strong>Happiness</strong><small id="effect-mood">70% · Content</small></span></div><div class="status-effect"><span class="status-effect-icon">${icon('leaf')}</span><span><strong>Local sky</strong><small id="effect-weather">Weather unavailable</small></span></div><div class="status-effect" id="effect-bond-row" hidden><span class="status-effect-icon">${icon('people')}</span><span><strong>Bond</strong><small id="effect-bond">0 shared moments</small></span></div></aside><div id="treat-timer" class="treat-timer" role="img" aria-label="Treat cooldown" hidden><svg class="treat-timer-donut" viewBox="0 0 48 48" aria-hidden="true"><circle class="treat-timer-track" cx="24" cy="24" r="20"/><circle class="treat-timer-ring" cx="24" cy="24" r="20" pathLength="100"/></svg><span class="treat-timer-berry" aria-hidden="true">🫐</span><span class="treat-timer-count" aria-hidden="true"></span></div><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
       <div class="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-note"><span class="mood-fill"></span></div><p id="mood-note">Each bite brings a little happiness. Keep your pet fed and explore together.</p></div>
       <div class="survival-card" id="survival-card"><div><strong>Pet care</strong><span id="survival-points">0 points</span></div><meter id="health-meter" min="0" max="100" value="100" aria-label="Pet health"></meter><p id="survival-stats">Connect to the server to load your pet’s health.</p><p id="food-inventory">Food: loading…</p><button id="health-treat" class="health-treat" data-action="feed" type="button">Give a treat</button><small id="treat-cooldown" class="treat-cooldown" role="status"></small></div>
@@ -133,11 +133,18 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section id="quest-detail" class="quest-detail" hidden>
       <button type="button" id="quest-back" class="text-button">${icon('arrow')} All quests</button>
       <span id="quest-detail-category" class="small-label"></span><h3 id="quest-detail-title"></h3><p id="quest-detail-requirements"></p>
-      <div class="quest-detail-actions"><button type="button" id="quest-start" class="native-buttons-button">Start in-game step</button></div>
+      <div class="quest-detail-actions"><button type="button" id="quest-start" class="native-buttons-button">Start in-game step</button><button type="button" id="quest-record" class="native-buttons-button">Record evidence</button><button type="button" id="quest-submit" class="primary-button">Submit to Muse</button></div>
       <p id="quest-detail-status" class="photo-verification-status" role="status">Complete the in-game step, then record and submit evidence.</p>
     </section>
   </dialog>
-  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both devices connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
+  <dialog id="zoom-dialog" class="quest-dialog zoom-dialog" aria-labelledby="zoom-dialog-title">
+    <div class="dialog-heading"><div><span class="small-label">BEYOND THE PEN</span><h2 id="zoom-dialog-title">Nearby beavers</h2></div><button class="icon-button" type="button" id="close-zoom" aria-label="Close nearby view">${icon('close')}</button></div>
+    <p>Zoom out to see beavers playing nearby. Distances are approximate and locations are never shown.</p>
+    <label class="nearby-visibility"><input id="nearby-visibility" type="checkbox" checked /> Let nearby players find my beaver while I’m zoomed out</label>
+    <p id="zoom-status" class="photo-verification-status" role="status">Nearby discovery is off until you share your location.</p>
+    <div id="zoom-nearby-list" class="nearby-list" aria-label="Nearby beavers"></div>
+  </dialog>
+  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both phones connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
 `;
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -181,11 +188,14 @@ let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let lastRoster = '';
 let lastNotice = '';
 let nearbyActive = false;
+let zoomOutActive = false;
+let zoomSharing = false;
 let locationActive = false;
 let discoveryConnected = false;
 let nearbyPeers: NearbyPet[] = [];
 let pendingMeet: (MeetRequest & { incoming: boolean }) | null = null;
 let nearbyListKey = '';
+const nearbyOptOutKey = 'bondimals:nearby-opt-out';
 let photoVerificationPending = false;
 const canvas = el<HTMLCanvasElement>('playground');
 const treatTimer = new TreatCooldown(el('treat-timer'));
@@ -340,6 +350,8 @@ function updateControls(): void {
   });
   el<HTMLButtonElement>('quest-button').disabled = !connected || !local;
   document.querySelectorAll<HTMLButtonElement>('[data-move]').forEach(button => { button.disabled = !connected || !local; });
+  el<HTMLButtonElement>('quest-button').disabled = !connected || friends.length < 1;
+  el<HTMLButtonElement>('zoom-out-button').hidden = !membership || !connected || nearbyActive;
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
   el<HTMLButtonElement>('ready-squad').disabled = !connected || !local || (snapshot?.players.filter(p => p.connected).every(p => snapshot?.quests[p.id]?.squadCircle) ?? false) || (snapshot?.players.filter(player => player.connected).length ?? 0) < 3;
   const raid = snapshot?.raid;
@@ -532,6 +544,28 @@ const client = new RoomClient({
   },
 });
 
+function renderZoomNearby(): void {
+  const list = el('zoom-nearby-list');
+  list.replaceChildren();
+  if (!zoomSharing) {
+    const empty = document.createElement('div'); empty.className = 'nearby-empty';
+    empty.innerHTML = `${icon('leaf')}<strong>You are hidden</strong><p>Turn on sharing above when you want nearby beavers to find you.</p>`;
+    list.append(empty); return;
+  }
+  if (!nearbyPeers.length) {
+    const empty = document.createElement('div'); empty.className = 'nearby-empty';
+    empty.innerHTML = `${icon('leaf')}<strong>No beavers nearby yet</strong><p>Only approximate distances are shared. Keep this view open while discovery looks around.</p>`;
+    list.append(empty); return;
+  }
+  for (const pet of nearbyPeers) {
+    const item = document.createElement('div'); item.className = 'nearby-pet zoom-nearby-pet';
+    const avatar = document.createElement('span'); avatar.className = 'player-avatar'; avatar.textContent = pet.name.slice(0, 1).toUpperCase();
+    const text = document.createElement('span'); text.className = 'nearby-pet-text';
+    const name = document.createElement('strong'); name.textContent = `${pet.name}’s beaver`;
+    const distance = document.createElement('span'); distance.textContent = `${pet.distanceMeters === 0 ? 'Very close' : `About ${pet.distanceMeters} m away`}${pet.uncertain ? ' · estimated' : ''}`;
+    text.append(name, distance); item.append(avatar, text); list.append(item);
+  }
+}
 function renderNearby(): void {
   el('nearby-count').textContent = `${nearbyPeers.length} ${nearbyPeers.length === 1 ? 'pet' : 'pets'} nearby`;
   const key = JSON.stringify([nearbyPeers, !!pendingMeet, locationActive, discoveryConnected]);
@@ -570,6 +604,33 @@ function renderNearby(): void {
   playground?.setNearby(nearbyPeers, requestMeet);
   playground?.setEnabled(ready && discoveryConnected && locationActive && !pendingMeet);
 }
+function stopZoomOut(): void {
+  if (!zoomOutActive) return;
+  zoomOutActive = false; zoomSharing = false; nearbyPeers = [];
+  playground?.setZoomedOut(false);
+  nearbyClient.stop();
+  if (!nearbyActive && !walking) locationTracker.stop();
+  const dialog = el<HTMLDialogElement>('zoom-dialog'); if (dialog.open) dialog.close();
+  el('zoom-nearby-list').replaceChildren();
+  updateControls();
+}
+function startZoomOut(): void {
+  if (!membership || connection !== 'connected' || nearbyActive) return;
+  zoomOutActive = true;
+  playground?.setZoomedOut(true);
+  const optedOut = stored(nearbyOptOutKey) === 'true';
+  zoomSharing = !optedOut;
+  const checkbox = el<HTMLInputElement>('nearby-visibility'); checkbox.checked = zoomSharing;
+  const dialog = el<HTMLDialogElement>('zoom-dialog'); if (!dialog.open) dialog.showModal();
+  renderZoomNearby();
+  if (!zoomSharing) {
+    el('zoom-status').textContent = 'You are hidden from nearby discovery.';
+    return;
+  }
+  el('zoom-status').textContent = 'Requesting location to find nearby beavers…';
+  nearbyClient.start(serverUrl, nameInput.value.trim() || 'Explorer');
+  locationTracker.start();
+}
 function requestMeet(peerId: string): void {
   if (!nearbyActive || !locationActive || !discoveryConnected || pendingMeet) return;
   nearbyClient.meet(peerId);
@@ -601,6 +662,10 @@ function pauseLocation(): void {
 const nearbyClient = new NearbyClient({
   state(state) {
     discoveryConnected = state === 'connected';
+    if (zoomOutActive && !nearbyActive) {
+      el('zoom-status').textContent = state === 'connected' ? 'Zoomed out · looking for nearby beavers.' : state === 'connecting' ? 'Connecting to nearby discovery…' : 'Nearby discovery is off.';
+      return;
+    }
     if (!nearbyActive) return;
     el('connection-status').dataset.state = state === 'connected' && !locationActive ? 'idle' : state;
     el('connection-label').textContent = state === 'connected' ? locationActive ? 'Finding nearby pets' : 'Nearby paused' : state === 'connecting' ? 'Connecting' : state === 'offline' ? 'Offline' : 'Nearby paused';
@@ -611,8 +676,14 @@ const nearbyClient = new NearbyClient({
     }
     renderNearby();
   },
-  ready() { if (!locationActive) nearbyClient.pause(); renderNearby(); },
+  ready() { if (!locationActive && !zoomSharing) nearbyClient.pause(); renderNearby(); },
   nearby(peers, accuracy, notice) {
+    if (zoomOutActive && !nearbyActive) {
+      nearbyPeers = zoomSharing ? peers : [];
+      el('zoom-status').textContent = zoomSharing ? notice : 'You are hidden from nearby discovery.';
+      renderZoomNearby();
+      return;
+    }
     if (!nearbyActive) return;
     nearbyPeers = locationActive ? peers : [];
     el('nearby-accuracy').textContent = accuracy === null ? 'Waiting for a fresh location. Pet placement is illustrative.' : `Location accuracy: ±${Math.ceil(accuracy)} m. Distances are estimates; pet placement is illustrative.`;
@@ -641,10 +712,10 @@ const nearbyClient = new NearbyClient({
     el('location-status').textContent = 'Opening your shared playground…';
     client.start(serverUrl, { type: 'join', roomCode, playerToken, name: nameInput.value.trim() });
   },
-  error(message) { if (nearbyActive) { el('location-status').textContent = message; toast(message); } },
+  error(message) { if (zoomOutActive && !nearbyActive) { el('zoom-status').textContent = message; toast(message); } else if (nearbyActive) { el('location-status').textContent = message; toast(message); } },
 });
 const locationCallbacks = {
-  fix(fix: LocationFix) { void weather.update(fix); if (nearbyActive && locationActive) nearbyClient.location(fix); },
+  fix(fix: LocationFix) { void weather.update(fix); if ((nearbyActive && locationActive) || (zoomOutActive && zoomSharing)) nearbyClient.location(fix); },
   status(message: string) { if (nearbyActive) el('location-status').textContent = message; },
   unavailable(message: string) { pauseLocation(); if (nearbyActive) el('location-status').textContent = message; },
   paused() { pauseLocation(); if (nearbyActive) el('location-status').textContent = 'Location paused while you were away. Tap Resume nearby.'; },
@@ -696,6 +767,23 @@ function stopNearby(): void {
 
 el('entry-mode').addEventListener('click', () => { mode = mode === 'nearby' || mode === 'lobby' ? 'join' : 'lobby'; updateEntry(); });
 el('nearby-mode').addEventListener('click', () => { mode = 'nearby'; updateEntry(); });
+el('zoom-out-button').addEventListener('click', startZoomOut);
+el('close-zoom').addEventListener('click', stopZoomOut);
+el<HTMLDialogElement>('zoom-dialog').addEventListener('cancel', event => { event.preventDefault(); stopZoomOut(); });
+el<HTMLInputElement>('nearby-visibility').addEventListener('change', event => {
+  const checkbox = event.currentTarget as HTMLInputElement;
+  save(nearbyOptOutKey, checkbox.checked ? 'false' : 'true');
+  zoomSharing = checkbox.checked;
+  if (!zoomOutActive) return;
+  if (zoomSharing) {
+    el('zoom-status').textContent = 'Requesting location to find nearby beavers…';
+    nearbyClient.start(serverUrl, nameInput.value.trim() || 'Explorer');
+    locationTracker.start();
+  } else {
+    nearbyClient.pause(); nearbyPeers = []; renderZoomNearby();
+    el('zoom-status').textContent = 'You are hidden from nearby discovery.';
+  }
+});
 el('start-squad-room').addEventListener('click', () => { stopNearby(); clearResume(); client.start(serverUrl, { type: 'create', name: nameInput.value.trim() }); });
 el('join-nearby-room').addEventListener('click', () => { stopNearby(); mode = 'join'; updateEntry(); codeInput.focus(); });
 el('stop-nearby').addEventListener('click', () => { autoNearby = false; save('bondimals:auto-nearby', 'off'); stopNearby(); });
@@ -730,6 +818,7 @@ el('entry-form').addEventListener('submit', event => {
 function leavePlayground(): void {
   el<HTMLDialogElement>('quest-dialog').close();
   stopWalking();
+  stopZoomOut();
   clearResume();
   if (snapshot?.publicLobby) save(lobbyTokenKey(), '');
   membership = null;

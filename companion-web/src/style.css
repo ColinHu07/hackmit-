@@ -57,6 +57,7 @@ body{background:radial-gradient(ellipse at 90% 0,#e8eddc70,transparent 55%),var(
 .playground-panel[data-weather=night]{background:radial-gradient(ellipse at 50% 26%,#8792aa 0%,#c6cfce 45%,var(--cream) 78%)}
 .playground-panel[data-weather=night] .scene-title,.playground-panel[data-weather=night] .weather-line,.playground-panel[data-weather=night] .weather-line a,.playground-panel[data-weather=night] .scene-caption{color:#344c49}
 .scene-topline{padding:26px 28px 0;z-index:2}
+.scene-topline-actions{display:flex;align-items:center;gap:8px}.zoom-out-button{border:0;border-radius:999px;background:#fffef7b8;color:#536b46;padding:8px 11px;font-size:9px;box-shadow:0 4px 16px #43573c08}.zoom-out-button:hover{background:#fffef2}.nearby-visibility{display:flex;align-items:flex-start;gap:10px;font-size:11px;line-height:1.5;color:#5e725c}.nearby-visibility input{width:18px;height:18px;flex:none;margin:0}.zoom-nearby-pet{pointer-events:none}
 .connection-status{border:0;background:#fffef7a6;padding:9px 12px;box-shadow:0 4px 18px #43573c05}
 .weather-line{position:relative;z-index:2;align-items:center;padding:12px 28px 0;color:#627468;line-height:1.5}
 .weather-line .text-button{padding:0;font-size:10px}
