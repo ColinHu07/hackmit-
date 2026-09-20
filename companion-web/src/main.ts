@@ -83,7 +83,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </section>
     <section class="playground-panel" aria-label="Your local world">
       <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
-      <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><a href="https://open-meteo.com/" target="_blank" rel="noopener">Weather by Open-Meteo</a></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
+      <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
       <div class="mood-card"><div><strong>Your pet’s happiness</strong><span id="mood-label"></span></div><meter id="mood-meter" min="0" max="100" value="70" aria-label="Pet happiness"></meter><p id="mood-note">Complete a quest together for +12 happiness. Slowly drifts down between adventures.</p></div>
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
@@ -102,6 +102,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </section>
   </main>
   <footer class="site-footer"><span>More play. More connection.</span><span>PHONE EDITION <span class="tiny-star">✳</span> BONDIMALS</span></footer>
+  <details class="app-credits"><summary>Credits</summary><p>Weather data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></p></details>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both phones connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
 `;
