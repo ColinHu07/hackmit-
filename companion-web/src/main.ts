@@ -290,8 +290,17 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) { re
 
 function toast(message: string): void {
   clearTimeout(toastTimer);
-  el('toast').textContent = message;
-  el('toast').hidden = false;
+  const notice = el('toast');
+  const dialog = document.querySelector<HTMLDialogElement>('dialog[open]');
+  notice.classList.toggle('dialog-toast', !!dialog);
+  if (dialog) {
+    // A modal's top layer sits above every document z-index and its backdrop.
+    // Place the notice inside that layer, ahead of the scrollable body.
+    const body = dialog.querySelector('.quest-dialog-body');
+    dialog.insertBefore(notice, body);
+  } else el('app').append(notice);
+  notice.textContent = message;
+  notice.hidden = false;
   toastTimer = setTimeout(() => { el('toast').hidden = true; }, 4000);
 }
 function verificationEndpoint(): string {
@@ -871,7 +880,7 @@ const evidenceChoice = el<HTMLSelectElement>('evidence-quest');
 const evidenceConsent = el<HTMLInputElement>('evidence-consent');
 const evidenceInstructions: Record<EvidenceQuestId, string> = {
   touchGrass: 'Show your hand physically touching natural grass outdoors.',
-  meetFriend: 'Show both people greeting each other with a wave or high-five. Faces are not required.',
+  meetFriend: 'Show someone waving hello or a shared high-five. The other player may be behind the camera. Faces are not required.',
   dapHandshake: 'Record both hands approaching, making contact, and releasing. Use a clip, not a still photo.',
   squadCircle: 'Show everyone from your squad gathered in a circle with hands together or raised in a shared cheer.',
 };
@@ -895,7 +904,7 @@ el('quest-tools').before(evidenceHome);
 
 const questDefinitions: { id: EvidenceQuestId; group: string; title: string; requirements: string }[] = [
   { id: 'touchGrass', group: 'Solo', title: 'Touch grass', requirements: 'Record a hand touching natural grass outdoors. You can submit as soon as you are connected.' },
-  { id: 'meetFriend', group: 'Duo', title: 'Say hello', requirements: 'Keep two players connected in the same pen, then submit both people greeting each other.' },
+  { id: 'meetFriend', group: 'Duo', title: 'Say hello', requirements: 'Keep two players connected in the same pen, then submit someone waving hello. The other player can be behind the camera.' },
   { id: 'dapHandshake', group: 'Duo', title: 'Dap up', requirements: 'Keep two players connected in the same pen. Submit a clip of hands meeting and releasing.' },
   { id: 'squadCircle', group: 'Squad', title: 'Circle up', requirements: 'Keep at least three players connected in the same pen, then submit the group circle or cheer.' },
 ];
@@ -1001,6 +1010,7 @@ function setEvidenceBusy(busy: boolean): void {
 function evidenceError(cause: unknown): void {
   const message = cause instanceof Error ? cause.message : 'Evidence verification is unavailable.';
   el('evidence-status').textContent = message; toast(message);
+  if (/No saved clip|Record a quest clip first/.test(message)) el('recording-status').textContent = message;
 }
 el('submit-clip').addEventListener('click', async () => {
   if (photoVerificationPending) return;

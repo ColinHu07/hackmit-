@@ -6,7 +6,7 @@ const tinyPhoto = 'data:image/png;base64,iVBORw0KGgo=';
 
 for (const [questId, action, people] of [
   ['touchGrass', /hand physically touching natural grass outdoors/, 1],
-  ['meetFriend', /two people together, visibly greeting each other with a wave or high-five/, 2],
+  ['meetFriend', /a person visibly waving hello.*other player may be behind the camera/, 1],
   ['dapHandshake', /hands together into a handshake, fist bump, or high-five and then releasing/, 2],
   ['squadCircle', /full group gathered together in a circle.*shared cheer/, 4],
 ]) {
@@ -19,7 +19,7 @@ for (const [questId, action, people] of [
         return { ok: true, json: async () => ({ choices: [{ message: { content: '{"verified":false,"reason":"Required action is not visible."}' } }] }) };
       },
     });
-    await verifier.verify({ questId, participantCount: people, frames: Array(12).fill(tinyPhoto), durationSeconds: 6 });
+    await verifier.verify({ questId, participantCount: questId === 'meetFriend' ? 2 : people, frames: Array(12).fill(tinyPhoto), durationSeconds: 6 });
     const prompt = body.messages[0].content[0].text;
     assert.match(prompt, action);
     assert.ok(prompt.includes(`Required visible participants: at least ${people}.`));

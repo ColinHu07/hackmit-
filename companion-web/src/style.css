@@ -174,3 +174,5 @@ input,.quest-tools select{border:0;border-radius:18px;background:#edf1e5bd;box-s
 .quest-detail .native-buttons{gap:10px}.quest-detail #submit-clip{background:#47653d;color:#fffef7;min-width:110px}
 
 .evidence-prerequisite{padding:12px 14px;border-radius:14px;background:#e9efdf;margin:12px 0}.evidence-prerequisite p{margin:0 0 8px;color:#486443}.evidence-prerequisite button:disabled{opacity:.55}
+
+.toast.dialog-toast{position:relative;bottom:auto;left:auto;transform:none;width:auto;max-width:none;margin:12px 20px 0;flex-shrink:0;text-align:left;border-radius:14px;z-index:auto}

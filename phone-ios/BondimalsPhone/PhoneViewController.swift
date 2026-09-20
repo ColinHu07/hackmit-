@@ -20,12 +20,8 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private var cameraBusy = false
     private var lastHeadingTime = Date.distantPast
     private var lastFix: CLLocation?
-    private var latestClip: URL? {
-        let folder = clipsDirectory
-        return (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.creationDateKey]))?
-            .filter { $0.pathExtension.lowercased() == "mov" || $0.pathExtension.lowercased() == "mp4" }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }.first
-    }
+    private var clipStore: QuestClipStore { QuestClipStore(directory: clipsDirectory) }
+    private var latestClip: URL? { clipStore.latest }
     private var clipsDirectory: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("QuestClips", isDirectory: true)
     }
@@ -131,7 +127,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         case "ready":
             print(body["sceneReady"] as? Bool == true ? "Kith ready: bundled pet scene loaded." : "Kith UI loaded; pet scene unavailable.")
             loadingLabel.isHidden = true
-            emit(["type": "recording", "message": latestClip == nil ? "Record a short quest clip, review it, then submit it for verification." : "A quest clip is saved on this device. Tap Review clip."])
+            emit(["type": "recording", "message": latestClip == nil ? "Record a short quest clip, review it, then submit it for verification." : "A quest clip is saved on this device. Submit it for grading."])
         default: break
         }
     }
@@ -278,19 +274,22 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         defer { picker.dismiss(animated: true) { self.emit(["type": "active"]) }; cameraBusy = false }
         guard let source = info[.mediaURL] as? URL else { return }
         do {
-            try FileManager.default.createDirectory(at: clipsDirectory, withIntermediateDirectories: true)
-            let destination = clipsDirectory.appendingPathComponent("\(Int(Date().timeIntervalSince1970))_\(UUID().uuidString).\(source.pathExtension)")
-            try FileManager.default.copyItem(at: source, to: destination)
-            // Keep one clip, with explicit review/delete. No recording is uploaded automatically.
-            for old in try FileManager.default.contentsOfDirectory(at: clipsDirectory, includingPropertiesForKeys: nil) where old != destination {
-                try? FileManager.default.removeItem(at: old)
-            }
+            let saved = try clipStore.save(source)
+            guard FileManager.default.isReadableFile(atPath: saved.path) else { throw CocoaError(.fileReadUnknown) }
             emit(["type": "recording", "message": "Clip ready. Submit clip for grading."])
         } catch { emit(["type": "recording", "message": "The clip could not be saved. Please try again."]) }
     }
     private func prepareQuestClip(requestId: String) {
-        guard !preparingEvidence, !cameraBusy, let clip = latestClip else {
-            emit(["type": "evidence", "requestId": requestId, "message": "Record a quest clip first, then submit it."])
+        guard !preparingEvidence else {
+            emit(["type": "evidence", "requestId": requestId, "message": "Your clip is already being prepared. Please wait."])
+            return
+        }
+        guard !cameraBusy else {
+            emit(["type": "evidence", "requestId": requestId, "message": "Finish saving or canceling the recording before submitting."])
+            return
+        }
+        guard let clip = latestClip else {
+            emit(["type": "evidence", "requestId": requestId, "message": "No saved clip was found on this device. Please record it again."])
             return
         }
         preparingEvidence = true
