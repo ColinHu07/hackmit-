@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { followingCamera, screenMovement } from './WalkingView';
+import { followingCamera, screenMovement, walkingPlayer } from './WalkingView';
 import { meadowTexture, pawTexture } from './MeadowTexture';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
@@ -154,7 +154,10 @@ export class Playground {
     this.renderer.toneMappingExposure = kind === 'night' ? 0.72 : kind === 'rain' ? 0.92 : 1.12;
   }
 
-  setWalkingPose(pose: WalkingPose | null, initialHeading = false): void {
+  private predictWalkingMovement = false;
+
+  setWalkingPose(pose: WalkingPose | null, initialHeading = false, predictMovement = false): void {
+    this.predictWalkingMovement = predictMovement;
     this.walkingPose = pose ? { ...pose } : null;
     if (pose && initialHeading) {
       const pet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
@@ -602,11 +605,7 @@ export class Playground {
       if (!pet.root.visible) continue;
       let player = this.snapshot?.players.find((candidate) => candidate.id === pet.playerId);
       if (this.walkingPose && ((!this.snapshot && index === 0) || player?.id === this.localPlayerId)) {
-        const pose = this.walkingPose;
-        player = player ? { ...player, yaw: pose.yaw } : {
-          id: 'local-walk', name: '', slot: 0, ...pose, targetX: pose.x, targetZ: pose.z,
-          connected: true, action: null,
-        };
+        player = walkingPlayer(player, this.walkingPose, this.predictWalkingMovement);
       }
       this.animatePet(pet, player, delta, now / 1000, serverTime, reducedMotion);
     }

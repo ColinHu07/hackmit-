@@ -325,14 +325,15 @@ function updateControls(): void {
 }
 function setConnection(state: ConnectionState): void {
   connection = state;
-  if (state === 'offline' || state === 'reconnecting') stopWalking();
   const labels: Record<ConnectionState, string> = { idle: 'Pet preview', connecting: 'Connecting', connected: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
   el('connection-status').dataset.state = state;
   el('connection-label').textContent = labels[state];
   el<HTMLButtonElement>('server-settings').disabled = false;
   updateEntry();
   updateControls();
-  if (state === 'connected') startWalking();
+  // Local sensors and the preview keep working even when a server rejects a
+  // join or disconnects. Only visibility/permission/user actions pause walking.
+  startWalking();
 }
 function renderRoster(): void {
   if (!snapshot || !membership) return;
@@ -971,7 +972,7 @@ function startWalking(): void {
 }
 function publishWalking(moved = false, initialHeading = false): void {
   if (!walking) return;
-  playground?.setWalkingPose(walkingTracker.pose, initialHeading);
+  playground?.setWalkingPose(walkingTracker.pose, initialHeading, true);
   if (membership && connection === 'connected') {
     if (moved) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
     client.heading(walkingTracker.pose.yaw);

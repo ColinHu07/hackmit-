@@ -1,7 +1,32 @@
 import { expect, it } from 'vitest';
 import { OrthographicCamera, Vector3 } from 'three';
-import { followingCamera, screenMovement } from './WalkingView';
-import { headingToYaw } from './WalkingTracker';
+import { followingCamera, screenMovement, walkingPlayer } from './WalkingView';
+import { headingToYaw, WalkingTracker } from './WalkingTracker';
+import type { PlayPlayer } from '../../shared/play-protocol';
+
+it('renders detected steps in preview and against a frozen server snapshot', () => {
+  const tracker = new WalkingTracker();
+  tracker.setStepTracking(true);
+  const stale: PlayPlayer = { id: 'me', name: '', slot: 0, x: 0, z: 0, targetX: 0, targetZ: 0, yaw: Math.PI, connected: true, action: null };
+  tracker.steps(2);
+  for (const server of [undefined, stale]) {
+    const rendered = walkingPlayer(server, tracker.pose, true);
+    expect(rendered.z).toBeCloseTo(-0.7);
+    expect(rendered.targetZ).toBeCloseTo(-0.7);
+    tracker.heading(90, 5);
+    const turned = walkingPlayer(server, tracker.pose, true);
+    expect(turned.x).toBe(rendered.x);
+    expect(turned.z).toBe(rendered.z);
+    expect(turned.yaw).toBe(tracker.pose.yaw);
+  }
+  expect(stale.z).toBe(0);
+});
+
+it('keeps server movement intact when only the browser compass is enabled', () => {
+  const player: PlayPlayer = { id: 'me', name: '', slot: 0, x: 1, z: 2, targetX: 2, targetZ: 3, yaw: 0, connected: true, action: null };
+  expect(walkingPlayer(player, { x: 0, z: 0, yaw: Math.PI }, false))
+    .toEqual({ ...player, yaw: Math.PI });
+});
 
 it('keeps a moving pet centered and facing screen top through a full turn', () => {
   const camera = new OrthographicCamera(-6, 6, 6, -6, 0.1, 70);
