@@ -11,6 +11,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private let locationManager = CLLocationManager()
     private var locationPurposes = Set<String>()
     private var isTracking = false
+    private var preparingEvidence = false
     private var cameraBusy = false
     private var lastHeadingTime = Date.distantPast
     private var lastFix: CLLocation?
@@ -94,6 +95,9 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             if let purpose = body["purpose"] as? String { locationPurposes.remove(purpose) }
             if locationPurposes.isEmpty { stopSensors() }
         case "recordClip": recordClip()
+        case "prepareQuestClip":
+            guard let requestId = body["requestId"] as? String, requestId.count <= 100 else { return }
+            prepareQuestClip(requestId: requestId)
         case "reviewClip": reviewClip()
         case "deleteClip": deleteClip()
         case "loadError":
@@ -102,7 +106,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         case "ready":
             print(body["sceneReady"] as? Bool == true ? "Bondimals ready: bundled pet scene loaded." : "Bondimals UI loaded; pet scene unavailable.")
             loadingLabel.isHidden = true
-            emit(["type": "recording", "message": latestClip == nil ? "Record a short quest clip. AI verification comes later." : "A quest clip is saved on this iPhone. Tap Review clip."])
+            emit(["type": "recording", "message": latestClip == nil ? "Record a short quest clip, review it, then submit it for verification." : "A quest clip is saved on this iPhone. Tap Review clip."])
         default: break
         }
     }
@@ -207,8 +211,44 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             for old in try FileManager.default.contentsOfDirectory(at: clipsDirectory, includingPropertiesForKeys: nil) where old != destination {
                 try? FileManager.default.removeItem(at: old)
             }
-            emit(["type": "recording", "message": "Clip saved on this iPhone. Review it below. It has not been AI verified."])
+            emit(["type": "recording", "message": "Clip saved on this iPhone. Review it below. Tap Submit clip to check it with Meta."])
         } catch { emit(["type": "recording", "message": "The clip could not be saved. Please try again."]) }
+    }
+    private func prepareQuestClip(requestId: String) {
+        guard !preparingEvidence, !cameraBusy, let clip = latestClip else {
+            emit(["type": "evidence", "requestId": requestId, "message": "Record a quest clip first, then submit it."])
+            return
+        }
+        preparingEvidence = true
+        Task { @MainActor in
+            defer { preparingEvidence = false }
+            do {
+                let asset = AVURLAsset(url: clip)
+                let duration = try await asset.load(.duration).seconds
+                guard duration.isFinite, duration >= 1, duration <= 11 else {
+                    emit(["type": "evidence", "requestId": requestId, "message": "Record a clip between 1 and 10 seconds."])
+                    return
+                }
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 720, height: 720)
+                generator.requestedTimeToleranceBefore = .zero
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 0.1, preferredTimescale: 600)
+                var frames = [String]()
+                var byteCount = 0
+                for index in 0..<12 {
+                    let time = CMTime(seconds: duration * (Double(index) + 0.5) / 12, preferredTimescale: 600)
+                    let result = try await generator.image(at: time)
+                    guard let data = UIImage(cgImage: result.image).jpegData(compressionQuality: 0.65) else { throw CocoaError(.fileReadCorruptFile) }
+                    byteCount += data.count
+                    guard byteCount <= 4 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+                    frames.append("data:image/jpeg;base64," + data.base64EncodedString())
+                }
+                emit(["type": "evidence", "requestId": requestId, "frames": frames, "durationSeconds": duration])
+            } catch {
+                emit(["type": "evidence", "requestId": requestId, "message": "Could not prepare that clip. Try recording a shorter clip."])
+            }
+        }
     }
     private func reviewClip() {
         guard presentedViewController == nil else { return }

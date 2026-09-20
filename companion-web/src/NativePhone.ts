@@ -11,7 +11,8 @@ export function nativeCommand(command: string, extra: object = {}): void {
   window.webkit?.messageHandlers?.bondimals?.postMessage({ command, ...extra });
 }
 export interface NativeEvent {
-  type: 'active' | 'location' | 'heading' | 'paused' | 'unavailable' | 'status' | 'recording';
+  type: 'evidence' | 'active' | 'location' | 'heading' | 'paused' | 'unavailable' | 'status' | 'recording';
+  requestId?: string; frames?: string[]; durationSeconds?: number;
   latitude?: number; longitude?: number; accuracy?: number; timestamp?: number;
   degrees?: number; reference?: 'true' | 'magnetic'; message?: string;
 }
@@ -51,4 +52,20 @@ export class NativeLocation {
     this.unsubscribe?.(); this.unsubscribe = undefined;
     nativeCommand('stopLocation', { purpose: 'discovery' });
   }
+}
+
+export function prepareNativeClip(): Promise<{ frames: string[]; durationSeconds: number }> {
+  return new Promise((resolve, reject) => {
+    const requestId = `clip-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const timeout = setTimeout(() => { unsubscribe(); reject(new Error('Preparing the clip timed out. Please retry.')); }, 25_000);
+    const unsubscribe = onNativeEvent(event => {
+      if (event.type !== 'evidence' || event.requestId !== requestId) return;
+      clearTimeout(timeout); unsubscribe();
+      if (!Array.isArray(event.frames) || event.frames.length < 3 || event.frames.length > 12
+        || !event.frames.every(frame => typeof frame === 'string' && frame.startsWith('data:image/jpeg;base64,'))
+        || !Number.isFinite(event.durationSeconds)) reject(new Error(event.message ?? 'Could not prepare this clip.'));
+      else resolve({ frames: event.frames, durationSeconds: event.durationSeconds! });
+    });
+    nativeCommand('prepareQuestClip', { requestId });
+  });
 }

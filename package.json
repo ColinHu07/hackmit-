@@ -21,7 +21,8 @@
     "build:phone": "npm run build --workspace @bondimals/companion-web",
     "preview:phone": "npm run preview --workspace @bondimals/companion-web",
     "typecheck:phone": "npm run typecheck --workspace @bondimals/companion-web",
-    "play:server": "node bridge/play-server.mjs",
-    "test:phone": "node --test bridge/play-server.test.mjs bridge/nearby-discovery.test.mjs && npm run test --workspace @bondimals/companion-web"
+    "play:server": "node --import ./scripts/load-env.mjs bridge/play-server.mjs",
+    "test:phone": "node --test bridge/play-server.test.mjs bridge/nearby-discovery.test.mjs bridge/quest-verification.test.mjs && npm run test --workspace @bondimals/companion-web",
+    "check:meta": "node --import ./scripts/load-env.mjs scripts/check-meta.mjs"
   }
 }

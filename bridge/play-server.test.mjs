@@ -122,7 +122,7 @@ test('photo verification is gated by earned quest progress and stores only its d
   assert.deepEqual(await response.json(), { verified: true, reason: 'Grass is clearly visible.' });
   const verified = await state(a, snapshot => snapshot.quests[session.playerId].photoVerification.touchGrass === 'approved');
   assert.equal(verified.quests[session.playerId].photoVerification.touchGrass, 'approved');
-  assert.deepEqual(checks, [{ questId: 'touchGrass', photoDataUrl: body.photoDataUrl }]);
+  assert.deepEqual(checks, [{ questId: 'touchGrass', photoDataUrl: body.photoDataUrl, participantCount: 1 }]);
   assert.equal(JSON.stringify(verified).includes(body.photoDataUrl), false, 'snapshots never contain uploaded image data');
 });
 
@@ -138,9 +138,10 @@ test('two nearby players must both dap up to finish the individual handshake que
   const offered = await state(b, snapshot => snapshot.dap.pending.length === 1);
   assert.deepEqual(offered.dap.pending[0]?.from, first.playerId);
   b.send({ type: 'action', action: 'dap' });
-  const complete = await state(a, snapshot => snapshot.quests[first.playerId].dapHandshake && snapshot.quests[second.playerId].dapHandshake);
+  const complete = await state(a, snapshot => snapshot.quests[first.playerId].dapHandshakeReady && snapshot.quests[second.playerId].dapHandshakeReady);
   assert.equal(complete.dap.pending.length, 0);
-  assert.equal(complete.bond, 1);
+  assert.equal(complete.bond, 0);
+  assert.equal(complete.quests[first.playerId].dapHandshake, false, 'camera approval is still required');
   assert.equal(complete.players[0]?.action?.kind, 'dap');
   assert.equal(complete.players[1]?.action?.kind, 'dap');
 });
@@ -166,7 +167,11 @@ test('a completed squad can start and finish the Mossback raid with per-player r
   assert.equal(active.raid.maxHealth, 14);
   assert.equal(parsePlayMessage({ type: 'ready_raid' }).type, 'ready_raid');
 
-  // Three pets can each jump once per second; fourteen actions calm a three-pet Mossback.
+  // Waving beside teammates must calm Mossback too (regression).
+  a.send({ type: 'action', action: 'wave' });
+  await state(a, snapshot => snapshot.raid.health === 13);
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+  // Continue until the cooperative meter reaches zero.
   for (let round = 0; round < 4; round++) {
     for (const client of [a, b, c]) client.send({ type: 'action', action: 'jump' });
     await new Promise(resolve => setTimeout(resolve, 1_100));
@@ -305,4 +310,67 @@ test('compass heading changes shared facing without moving the pet', async t => 
   assert.equal(parsePlayMessage({ type: 'heading', yaw: 'north' }), null);
   assert.equal(parsePlayMessage({ type: 'heading', yaw: Infinity }), null);
   assert.equal(parsePlayMessage({ type: 'heading', yaw: 0, latitude: 42 }), null);
+});
+
+test('duo clip verification approves only original participants and is idempotent', async t => {
+  let calls = 0;
+  const { connect, origin } = await setup(t, { photoVerifier: { configured: true, async verify(input) {
+    calls++; assert.equal(input.participantCount, 2); return { verified: true, reason: 'A handshake is visible.' };
+  } } });
+  const a = await connect(); a.send({ type: 'create', name: 'A' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'join', roomCode: first.roomCode, name: 'B' }); const second = await welcome(b);
+  a.send({ type: 'move', x: 0, z: 0 }); b.send({ type: 'move', x: 0, z: 0 });
+  await state(a, s => s.players.every(p => Math.abs(p.x) < 0.1));
+  a.send({ type: 'action', action: 'dap' }); await state(b, s => s.dap.pending.length === 1);
+  b.send({ type: 'action', action: 'dap' }); await state(a, s => s.quests[first.playerId].dapHandshakeReady);
+  const c = await connect(); c.send({ type: 'join', roomCode: first.roomCode, name: 'C' }); const third = await welcome(c);
+  const body = { roomCode: first.roomCode, playerToken: first.playerToken, questId: 'dapHandshake', frames: Array(3).fill('data:image/png;base64,iVBORw0KGgo='), durationSeconds: 5 };
+  const post = value => fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  assert.equal((await post({ ...body, playerToken: third.playerToken })).status, 409);
+  assert.equal((await post(body)).status, 200);
+  const verified = await state(a, s => s.quests[first.playerId].photoVerification.dapHandshake === 'approved');
+  assert.equal(verified.quests[second.playerId].photoVerification.dapHandshake, 'approved');
+  assert.equal(verified.quests[third.playerId].photoVerification.dapHandshake, undefined);
+  assert.equal((await post(body)).status, 200); assert.equal(calls, 1);
+  assert.equal(JSON.stringify(verified).includes('base64'), false);
+});
+
+test('failed evidence stays retryable and configured origins are enforced on uploads', async t => {
+  const { connect, origin } = await setup(t, { allowedOrigins: ['https://allowed.example'], photoVerifier: { configured: true, async verify() { throw new Error('Provider timeout'); } } });
+  const denied = await fetch(origin + '/verify', { method: 'POST', body: '{}' });
+  assert.equal(denied.status, 403);
+});
+
+test('provider failure restores quest state for retry instead of leaving it pending', async t => {
+  let calls = 0;
+  const { connect, origin } = await setup(t, { photoVerifier: { configured: true, async verify() {
+    if (++calls === 1) throw new Error('Provider timeout');
+    return { verified: false, reason: 'No hand touches the grass.' };
+  } } });
+  const a = await connect(); a.send({ type: 'create', name: 'A' }); const session = await welcome(a);
+  a.send({ type: 'move', x: 0, z: 0 }); await state(a, s => s.quests[session.playerId].touchGrass);
+  const body = { roomCode: session.roomCode, playerToken: session.playerToken, questId: 'touchGrass', photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=' };
+  const post = () => fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await post()).status, 502);
+  await state(a, s => s.quests[session.playerId].photoVerification.touchGrass === 'required');
+  assert.equal((await post()).status, 200);
+  await state(a, s => s.quests[session.playerId].photoVerification.touchGrass === 'rejected');
+});
+
+test('squad evidence checks all participants and marks only their group approved', async t => {
+  let people;
+  const { connect, origin } = await setup(t, { photoVerifier: { configured: true, async verify(input) {
+    people = input.participantCount; return { verified: true, reason: 'Three people cheer together.' };
+  } } });
+  const a = await connect(); a.send({ type: 'create', name: 'A' }); const first = await welcome(a);
+  const peers = [a]; const sessions = [first];
+  for (const name of ['B', 'C']) { const peer = await connect(); peer.send({ type: 'join', roomCode: first.roomCode, name }); sessions.push(await welcome(peer)); peers.push(peer); }
+  for (const peer of peers) peer.send({ type: 'move', x: 0, z: 0 });
+  await state(a, s => s.players.every(p => Math.hypot(p.x, p.z) < 0.1));
+  for (const peer of peers) peer.send({ type: 'ready_squad_quest' });
+  await state(a, s => s.players.every(p => s.quests[p.id].squadCircle));
+  const response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roomCode: first.roomCode, playerToken: first.playerToken, questId: 'squadCircle', photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=' }) });
+  assert.equal(response.status, 200); assert.equal(people, 3);
+  const verified = await state(a, s => s.players.every(p => s.quests[p.id].photoVerification.squadCircle === 'approved'));
+  assert.equal(Object.keys(verified.quests).length, 3);
 });

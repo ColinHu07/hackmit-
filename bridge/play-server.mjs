@@ -3,7 +3,7 @@ import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto
 import { pathToFileURL } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { attachNearbyDiscovery } from './nearby-discovery.mjs';
-import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS } from './quest-verification.mjs';
+import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
 import {
   PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES,
   PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
@@ -21,7 +21,6 @@ export function createPlayServer(options = {}) {
   const rooms = new Map();
   const connections = new Set();
   const addresses = new Map();
-  const verificationAttempts = new Map();
   const photoVerifier = options.photoVerifier ?? createQuestPhotoVerifier(options.meta);
   let closing = false;
 
@@ -31,14 +30,15 @@ export function createPlayServer(options = {}) {
   }
   function cors(request, response) {
     const origin = request.headers.origin;
-    if (!origin || (origins.size && !origins.has(origin))) return !origin;
+    if (origins.size && !origins.has(origin)) return false;
+    if (!origin) return true;
     response.setHeader('access-control-allow-origin', origin);
     response.setHeader('vary', 'Origin');
     response.setHeader('access-control-allow-methods', 'POST, OPTIONS');
     response.setHeader('access-control-allow-headers', 'content-type');
     return true;
   }
-  async function readJson(request, limit = 5_500_000) {
+  async function readJson(request, limit = 5_700_000) {
     const declared = Number(request.headers['content-length'] ?? 0);
     if (!Number.isFinite(declared) || declared > limit) throw new Error('Photo upload is too large.');
     const chunks = [];
@@ -56,35 +56,50 @@ export function createPlayServer(options = {}) {
     let input;
     try { input = await readJson(request); }
     catch (cause) { return writeJson(response, 400, { error: cause instanceof Error ? cause.message : 'The photo request was unreadable.' }); }
-    const { roomCode, playerToken, questId, photoDataUrl } = input ?? {};
-    if (typeof roomCode !== 'string' || typeof playerToken !== 'string' || typeof questId !== 'string' || typeof photoDataUrl !== 'string'
+    const { roomCode, playerToken, questId, photoDataUrl, frames, durationSeconds } = input ?? {};
+    if (typeof roomCode !== 'string' || typeof playerToken !== 'string' || typeof questId !== 'string'
       || !/^[A-Z0-9]{6}$/.test(roomCode) || !/^[a-f0-9]{48}$/.test(playerToken) || !Object.hasOwn(PHOTO_VERIFICATION_QUESTS, questId)) {
       return writeJson(response, 400, { error: 'The photo request is invalid.' });
     }
     const room = rooms.get(roomCode);
     const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
     if (!room || !player) return writeJson(response, 401, { error: 'This quest session has expired.' });
-    if (!player.quests[questId]) return writeJson(response, 409, { error: 'Finish the in-game part of this quest before sending a photo.' });
-    const current = player.quests.photoVerification[questId];
-    if (current === 'approved') return writeJson(response, 200, { verified: true, reason: 'This quest photo was already approved.' });
-    if (current === 'pending') return writeJson(response, 409, { error: 'That photo is already being checked.' });
+    if (!(questId === 'dapHandshake' ? player.quests.dapHandshakeReady : player.quests[questId])) return writeJson(response, 409, { error: 'Finish the in-game part of this quest before sending a photo.' });
+    try { validateEvidence({ questId, photoDataUrl, frames, durationSeconds }); }
+    catch (cause) { return writeJson(response, 400, { error: cause.message }); }
+    const group = player.evidenceGroups[questId] ?? [player.id];
+    const participants = group.map(id => room.players.get(id));
+    if (participants.some(peer => !peer?.socket || !(questId === 'dapHandshake' ? peer.quests.dapHandshakeReady : peer.quests[questId]))) return writeJson(response, 409, { error: 'Keep the original quest participants connected while submitting evidence.' });
+    if (participants.every(peer => peer.quests.photoVerification[questId] === 'approved')) return writeJson(response, 200, { verified: true, reason: 'This quest evidence was already approved.' });
+    if (participants.some(peer => peer.quests.photoVerification[questId] === 'pending')) return writeJson(response, 409, { error: 'Your group already has evidence being checked.' });
     const now = Date.now();
-    const attemptKey = `${room.code}:${player.id}:${questId}`;
-    const attempts = verificationAttempts.get(attemptKey) ?? { tokens: 3, at: now };
-    verificationAttempts.set(attemptKey, attempts);
-    if (!consume(attempts, 3, 0.05, now)) return writeJson(response, 429, { error: 'You have sent several photos. Please wait a moment before trying again.' });
-    player.quests.photoVerification[questId] = 'pending';
+    const attempts = player.verificationAttempts[questId] ??= { tokens: 3, at: now };
+    if (!consume(attempts, 3, 0.05, now)) return writeJson(response, 429, { error: 'Please wait a moment before submitting more evidence.' });
+    const previous = participants.map(peer => peer.quests.photoVerification[questId] ?? 'required');
+    participants.forEach((peer, index) => { if (previous[index] !== 'approved') peer.quests.photoVerification[questId] = 'pending'; });
+    broadcast(room);
     try {
-      const result = await photoVerifier.verify({ questId, photoDataUrl });
-      player.quests.photoVerification[questId] = result.verified ? 'approved' : 'rejected';
-      room.notice = result.verified ? `${player.name}'s photo verified the ${PHOTO_VERIFICATION_QUESTS[questId].label} quest.` : `That photo did not clearly verify ${player.name}'s quest. Try another photo.`;
+      const result = await photoVerifier.verify({ questId, ...(photoDataUrl ? { photoDataUrl } : { frames, durationSeconds }), participantCount: participants.length });
+      // An old request cannot approve a new room membership or a different quest group.
+      if (rooms.get(room.code) !== room || participants.some(peer => room.players.get(peer.id) !== peer || !peer.socket)) {
+        participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index]; });
+        return writeJson(response, 409, { error: 'The group changed during verification. Reconnect and submit again.' });
+      }
+      participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index] === 'approved' || result.verified ? 'approved' : 'rejected'; });
+      if (result.verified && questId === 'dapHandshake') {
+        participants.forEach(peer => { peer.quests.dapHandshake = true; });
+        room.bond += 1;
+      }
+      room.notice = result.verified ? `Camera evidence approved for ${PHOTO_VERIFICATION_QUESTS[questId].label}.` : result.reason;
       broadcast(room);
       return writeJson(response, 200, result);
     } catch (cause) {
-      player.quests.photoVerification[questId] = current ?? 'required';
-      return writeJson(response, photoVerifier.configured ? 502 : 503, { error: cause instanceof Error ? cause.message : 'Photo verification is unavailable.' });
+      participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index]; });
+      broadcast(room);
+      return writeJson(response, photoVerifier.configured ? 502 : 503, { error: cause instanceof Error ? cause.message : 'Verification is unavailable.' });
     }
   }
+
   const server = createServer((request, response) => {
     const path = request.url?.split('?')[0];
     if (path === '/verify' && request.method === 'OPTIONS') {
@@ -184,6 +199,7 @@ export function createPlayServer(options = {}) {
     player.targetZ = player.z;
     player.action = null;
     clearDapsFor(room, player.id);
+    room.squadReady.clear(); room.raidReady.clear();
     if (intentional) {
       room.players.delete(player.id);
       room.squadReady.delete(player.id);
@@ -221,13 +237,14 @@ export function createPlayServer(options = {}) {
       id: randomUUID(), token: randomBytes(24).toString('hex'), name, slot,
       x, z, targetX: x, targetZ: z, yaw: Math.atan2(-x, -z),
       action: null, socket: null, disconnectedAt: null, lastActionAt: 0,
-      movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, photoVerification: {} },
+      evidenceGroups: {}, verificationAttempts: {}, movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, dapHandshakeReady: false, photoVerification: {} },
     };
     room.players.set(player.id, player);
     return player;
   }
   function addPlayer(ws, room, name) {
     const player = makePlayer(room, name);
+    room.squadReady.clear(); room.raidReady.clear();
     if (room.players.size === 2) room.notice = `${name} joined the pen! Duo quests are now live.`;
     else if (room.players.size >= 3) room.notice = `${name} joined the pen! Squad quest and raid party are ready.`;
     welcome(ws, room, player);
@@ -262,10 +279,15 @@ export function createPlayServer(options = {}) {
     if (players.length < 3) return false;
     if (!players.every(player => room.squadReady.has(player.id))) return false;
     if (!clustered(players)) return false;
-    for (const player of players) player.quests.squadCircle = true;
+    const newlyCompleted = players.filter(player => !player.quests.squadCircle);
+    for (const player of newlyCompleted) {
+      player.quests.squadCircle = true;
+      player.evidenceGroups.squadCircle = players.map(peer => peer.id);
+      player.quests.photoVerification.squadCircle = 'required';
+    }
     room.squadReady.clear();
     room.bond += 3;
-    room.notice = 'Squad circle complete! Every pet earned a shared moment.';
+    room.notice = 'Squad gathered! Record a group cheer to verify the real-world circle.';
     broadcast(room, now);
     return true;
   }
@@ -338,7 +360,7 @@ export function createPlayServer(options = {}) {
     room.lastActivity = now;
     if (message.type === 'ready_squad_quest') {
       const connected = friends(room);
-      if (player.quests.squadCircle) return fail(ws, 'squad_complete', 'You already completed this squad quest.');
+      if (connected.every(peer => peer.quests.squadCircle)) return fail(ws, 'squad_complete', 'This whole squad has already gathered.');
       if (connected.length < 3) return fail(ws, 'squad_locked', 'The squad quest unlocks when three pets are in the pen.');
       if (!clustered(connected)) return fail(ws, 'squad_too_far', 'Bring the whole squad close together before you ready up.');
       room.squadReady.add(player.id);
@@ -392,23 +414,31 @@ export function createPlayServer(options = {}) {
     const connectedPlayers = friends(room);
     reapDaps(room, now);
     if (message.action === 'dap') {
+      if (player.quests.dapHandshakeReady && !player.quests.dapHandshake) return fail(ws, 'dap_needs_camera', 'Record and submit your handshake clip to finish this quest.');
       if (player.quests.dapHandshake) return fail(ws, 'dap_complete', 'You already completed the Dap up quest in this pen.');
       const partner = neighboringPlayers(player, connectedPlayers)
-        .filter(candidate => !candidate.quests.dapHandshake)
-        .sort((a, b) => Math.hypot(player.x - a.x, player.z - a.z) - Math.hypot(player.x - b.x, player.z - b.z))[0];
+        .filter(candidate => !candidate.quests.dapHandshakeReady)
+        .sort((a, b) => {
+          const aOffered = room.dapRequests.get(a.id)?.to === player.id ? 1 : 0;
+          const bOffered = room.dapRequests.get(b.id)?.to === player.id ? 1 : 0;
+          return bOffered - aOffered || Math.hypot(player.x - a.x, player.z - a.z) - Math.hypot(player.x - b.x, player.z - b.z);
+        })[0];
       if (!partner) return fail(ws, 'dap_too_far', 'Bring a pet who still needs this quest close together to dap up.');
       const reciprocal = room.dapRequests.get(partner.id);
       if (reciprocal?.to === player.id && reciprocal.expiresAt > now) {
         room.dapRequests.delete(partner.id);
         room.dapRequests.delete(player.id);
-        player.quests.dapHandshake = true;
-        partner.quests.dapHandshake = true;
+        player.quests.dapHandshakeReady = true;
+        partner.quests.dapHandshakeReady = true;
+        for (const peer of [player, partner]) {
+          peer.evidenceGroups.dapHandshake = [player.id, partner.id];
+          peer.quests.photoVerification.dapHandshake = 'required';
+        }
         player.yaw = Math.atan2(partner.x - player.x, partner.z - player.z);
         partner.yaw = Math.atan2(player.x - partner.x, player.z - partner.z);
         setAction(player, 'dap', now);
         setAction(partner, 'dap', now);
-        room.bond += 1;
-        room.notice = `${player.name} and ${partner.name} dapped up! Both pets completed the duo quest.`;
+        room.notice = `${player.name} and ${partner.name} dapped up! Record your real handshake to verify the duo quest.`;
       } else {
         room.dapRequests.set(player.id, { to: partner.id, expiresAt: now + 8_000 });
         room.notice = `${player.name} offered a dap to ${partner.name}. They have a few seconds to dap back.`;
@@ -436,7 +466,8 @@ export function createPlayServer(options = {}) {
         room.quest.met = true;
         room.quest.waved = true;
         room.notice = `${player.name} waved hello!`;
-      } else if (!damageRaid(room, player, message.action, now)) room.notice = `${player.name}'s pet ${message.action === 'feed' ? 'is enjoying a snack' : message.action === 'jump' ? 'jumped for joy' : 'waved'}!`;
+      } else room.notice = `${player.name}'s pet ${message.action === 'feed' ? 'is enjoying a snack' : message.action === 'jump' ? 'jumped for joy' : 'waved'}!`;
+      damageRaid(room, player, message.action, now);
     }
     broadcast(room, now);
   }
@@ -514,7 +545,12 @@ export function createPlayServer(options = {}) {
       }
       for (const player of connected) {
         if (neighboringPlayers(player, connected).length) {
-          if (!player.quests.meetFriend) room.notice = `${player.name} met another pet! Duo quest complete.`;
+          if (!player.quests.meetFriend) {
+            const partner = neighboringPlayers(player, connected)[0];
+            player.evidenceGroups.meetFriend = [player.id, partner.id];
+            player.quests.photoVerification.meetFriend = 'required';
+            room.notice = `${player.name} met another pet. Capture your real hello to finish the quest.`;
+          }
           player.quests.meetFriend = true;
           room.quest.met = true;
         }
@@ -550,7 +586,6 @@ export function createPlayServer(options = {}) {
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       rooms.clear();
       addresses.clear();
-      verificationAttempts.clear();
     },
   };
 }
