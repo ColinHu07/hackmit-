@@ -71,6 +71,7 @@ body{background:radial-gradient(ellipse at 90% 0,#e8eddc70,transparent 55%),var(
 .mood-heading svg{width:15px;height:15px;color:#81966b}
 .mood-heading>span{font-size:10px;color:#67785e;font-variant-numeric:tabular-nums}
 .mood-card .mood-track{display:block;height:9px;margin-top:12px;overflow:hidden;border-radius:999px;background:#64804a14;box-shadow:inset 0 1px 3px #485c3108}
+.mood-face-scale{display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;padding:0 2px}.mood-face-scale span{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;font-size:19px;line-height:1;filter:grayscale(.7);opacity:.42;transform:scale(.86);transition:opacity 250ms,filter 250ms,transform 250ms,background 250ms}.mood-face-scale span.active{filter:none;opacity:1;transform:scale(1.18);background:#fffef7a8;box-shadow:0 4px 12px #526d4118}.mood-card[data-mood-state=low] .mood-fill{background:linear-gradient(90deg,#d9948f,#c67a72)}.mood-card[data-mood-state=uneasy] .mood-fill{background:linear-gradient(90deg,#dec28a,#d09c69)}
 .mood-fill{display:block;width:var(--happiness,70%);height:100%;border-radius:inherit;background:linear-gradient(90deg,#bfd399,#8aac7d 65%,#719778);box-shadow:0 0 12px #8fb17930;transition:width 900ms var(--ease-soft)}
 .mood-card p{color:#728168;font-size:10px;line-height:1.65;margin:10px 0 0;max-width:38em}
 .play-controls{padding:0 28px 8px}.moment-line{margin-bottom:12px}.moment-line>span:first-child{color:#6d7d63}
