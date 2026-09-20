@@ -92,7 +92,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <p class="action-notice" id="action-notice" role="status" aria-live="polite">Your little adventure starts here.</p>
       </div>
       <div id="native-tools" class="native-tools" hidden>
-        <div class="native-walking-heading"><strong>Walk with your pet</strong><span id="compass-reading">N ↑ · compass off</span></div>
+        <div class="native-walking-heading"><strong>Walk with your pet</strong><span id="compass-reading">Compass off</span></div>
         <p id="walking-status" role="status">Your pet follows your steps and the direction you face automatically.</p>
       </div>
       <section id="quest-tools" class="native-tools quest-tools" aria-label="Quest clips" hidden>
@@ -645,7 +645,7 @@ function stopWalking(): void {
   nativeCommand('stopLocation', { purpose: 'walking' });
   playground?.setWalkingPose(null);
   el('walking-status').textContent = 'Walking pauses while you’re away and resumes when you return.';
-  el('compass-reading').textContent = 'N ↑ · compass off';
+  el('compass-reading').textContent = 'Compass off';
   updateControls();
 }
 function startWalking(): void {
@@ -687,7 +687,7 @@ if (isNativePhone()) {
     if (event.type === 'heading') {
       const initialHeading = !walkingTracker.hasHeading;
       if (walkingTracker.heading(event.degrees ?? -1, event.accuracy ?? -1)) {
-        el('compass-reading').textContent = `N ↑ · ${Math.round(event.degrees!)}° ${event.reference === 'true' ? 'true' : 'magnetic'}`;
+        el('compass-reading').textContent = `Facing ${Math.round(event.degrees!)}° ${event.reference === 'true' ? 'true' : 'magnetic'}`;
         publishWalking(false, initialHeading);
       } else el('compass-reading').textContent = 'Compass uncertain · move away from metal';
     }

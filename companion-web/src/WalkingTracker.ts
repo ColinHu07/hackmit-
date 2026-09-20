@@ -35,7 +35,7 @@ export class WalkingTracker {
     if (fix.accuracy > 10) { this.anchor = null; return waiting(`GPS ±${Math.ceil(fix.accuracy)} m. Move somewhere with a clearer sky to walk with your pet.`); }
     const previous = this.anchor;
     if (!previous || fix.timestamp - previous.timestamp > 20_000) {
-      this.anchor = fix; return waiting('Ready to walk. North is toward N in your world.');
+      this.anchor = fix; return waiting('Ready to walk. Your starting direction is toward the top of the screen.');
     }
     const { east, north } = localMeters(previous, fix);
     const distance = Math.hypot(east, north);

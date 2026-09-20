@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { startingCamera } from './WalkingView';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
@@ -80,7 +81,7 @@ export class Playground {
     this.renderer.toneMappingExposure = 1.12;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.camera.position.set(8, 10, 12);
+    this.camera.position.set(0, 13, 10);
     this.camera.lookAt(0, 0, 0);
 
     this.shadowTexture = this.makeShadowTexture();
@@ -146,8 +147,9 @@ export class Playground {
     if (pose && initialHeading) {
       const pet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
       if (pet) { pet.yaw = pose.yaw; pet.body.rotation.y = pose.yaw; }
+      this.camera.position.set(...startingCamera(pose.yaw));
     }
-    this.camera.position.set(pose ? 0 : 8, pose ? 13 : 10, pose ? 10 : 12);
+    if (!pose) this.camera.position.set(0, 13, 10);
     this.camera.lookAt(0, 0, 0);
   }
 
@@ -187,7 +189,7 @@ export class Playground {
       pet.root.visible = isPreview || Boolean(player?.connected);
       if (isPreview) {
         pet.playerId = null;
-        if (!this.walkingPose) { pet.root.position.set(0, 0.035, 0); pet.yaw = 0.35; }
+        if (!this.walkingPose) { pet.root.position.set(0, 0.035, 0); pet.yaw = Math.PI; }
       } else if (player && pet.playerId !== player.id) {
         pet.playerId = player.id;
         pet.root.position.set(player.x, 0.035, player.z);
@@ -235,7 +237,7 @@ export class Playground {
       if (index === 0) {
         pet.playerId = null;
         pet.root.visible = true;
-        if (!this.walkingPose) { pet.root.position.set(0, 0.035, 0); pet.yaw = 0.35; }
+        if (!this.walkingPose) { pet.root.position.set(0, 0.035, 0); pet.yaw = Math.PI; }
       } else {
         pet.playerId ??= unassigned.next().value?.id ?? null;
         const peer = this.nearby.find((candidate) => candidate.id === pet.playerId);
@@ -494,7 +496,7 @@ export class Playground {
     treat.add(leaf);
     root.add(treat);
     this.scene.add(root);
-    return { root, body, ring, shadow, hearts, treat, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: 0.35 };
+    return { root, body, ring, shadow, hearts, treat, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI };
   }
 
   private resize = (): void => {
