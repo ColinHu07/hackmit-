@@ -45,3 +45,31 @@
 .movement-controls button { min-width: 48px; min-height: 48px; padding: 10px 16px; border: 1px solid #cbd8c6; border-radius: 12px; background: #f5f8ee; color: #314d38; font: inherit; cursor: pointer; touch-action: manipulation; }
 .movement-controls button[data-move] { font-size: 22px; }
 .movement-controls button:disabled { opacity: .45; cursor: default; }
+
+/* Tablets use the same game-first, single-column flow as the phone. */
+@media (min-width: 721px) and (max-width: 1366px) {
+  #app { max-width: 980px; padding: 0 24px; }
+  .site-header { height: 78px; }
+  .edition { display: none; }
+  .layout, .in-room .layout, .in-nearby .layout {
+    display: grid; grid-template-columns: minmax(0, 1fr);
+    align-items: stretch; gap: 22px; padding: 8px 0 28px;
+  }
+  .playground-panel, .in-room .playground-panel, .in-nearby .playground-panel {
+    grid-row: 1; min-height: 0; border-radius: 0; margin: 0 -24px;
+  }
+  .side-panel, .in-room .side-panel, .in-nearby .side-panel {
+    grid-row: 2; width: 100%; max-width: none; padding: 0;
+  }
+  .in-room .side-panel h1, .in-room #room-panel > .eyebrow,
+  .in-nearby #nearby-panel h1 { display: none; }
+  .scene, .in-room .scene, .in-nearby .scene {
+    flex: none; height: clamp(360px, 52svh, 600px); min-height: 0;
+  }
+  .in-room .meadow-footer { display: none; }
+  .roster { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .player-row > div { min-width: 0; }
+  .player-row strong { overflow-wrap: anywhere; }
+  .player-state { display: none; }
+  .side-panel .room-description { overflow-wrap: anywhere; }
+}
