@@ -146,6 +146,7 @@ test('two phones share authoritative movement, quests, and one cooperative bond 
   const first = await welcome(a);
   assert.match(first.roomCode, /^[A-HJ-NP-Z2-9]{6}$/);
   assert.equal(first.snapshot.players.length, 1, 'the server never fabricates a companion');
+  assert.deepEqual(first.snapshot.players[0].survival.inventory, { berry: 3, kibble: 2, treat: 1 });
   const b = await connect();
   b.send({ type: 'join', roomCode: first.roomCode.toLowerCase(), name: 'Blair' });
   const second = await welcome(b);
