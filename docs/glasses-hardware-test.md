@@ -1,4 +1,6 @@
-# Glasses interaction and anchoring test — Build 004
+# Legacy glasses interaction and anchoring test — Build 004
+
+The current shared game is described in [Display game and glasses camera](display-play-camera.md). These calibration instructions apply only to `legacy.html`; the default app now uses walking/head-facing controls.
 
 Use **https://colinhu07.github.io/bondimals-display/** in the saved Kith web app. Restart the app from the glasses' web-app menu to load the update. The phone's saved URL screen is a settings page, not a launch button.
 

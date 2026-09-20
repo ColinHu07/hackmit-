@@ -14,7 +14,7 @@ export function parsePlayMessage(input) {
   const allowed = {
     lobby: ['type', 'name', 'playerToken'],
     create: ['type', 'name'], join: ['type', 'roomCode', 'name', 'playerToken'],
-    heading: ['type', 'yaw'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'], ready_squad_quest: ['type'], ready_raid: ['type'],
+    heading: ['type', 'yaw', 'lock'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'], ready_squad_quest: ['type'], ready_raid: ['type'],
   };
   if (typeof input.type !== 'string' || !Object.hasOwn(allowed, input.type) || Object.keys(input).some(key => !allowed[input.type].includes(key))) return null;
   if (input.type === 'leave') return { type: 'leave' };
@@ -23,7 +23,10 @@ export function parsePlayMessage(input) {
   if (input.type === 'ready_raid') return { type: 'ready_raid' };
   if (input.type === 'heading') {
     if (typeof input.yaw !== 'number' || !Number.isFinite(input.yaw)) return null;
-    return { type: 'heading', yaw: Math.atan2(Math.sin(input.yaw), Math.cos(input.yaw)) };
+    if (input.lock !== undefined && typeof input.lock !== 'boolean') return null;
+    return { type: 'heading', yaw: Math.atan2(Math.sin(input.yaw), Math.cos(input.yaw)),
+      ...(input.lock === undefined ? {} : { lock: input.lock }),
+    };
   }
   if (input.type === 'move') {
     if (typeof input.x !== 'number' || typeof input.z !== 'number' || !Number.isFinite(input.x) || !Number.isFinite(input.z)) return null;

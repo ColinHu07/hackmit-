@@ -93,6 +93,7 @@ export class Playground {
   private renderedTilt = { pitch: 0, roll: 0 };
   private enabled = false;
   private happiness = 70;
+  private displayGrid: THREE.GridHelper | null = null;
   private disposed = false;
   private visible = true;
   private contextLost = false;
@@ -104,20 +105,28 @@ export class Playground {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly onMove: (x: number, z: number) => void,
+    private readonly options: { display?: boolean } = {},
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'low-power' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.7));
+    this.renderer.setPixelRatio(options.display ? 1 : Math.min(window.devicePixelRatio || 1, 1.7));
     this.renderer.setClearColor(0xecf0e6, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !options.display;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.camera.position.set(0, 13, 10);
     this.camera.lookAt(0, 0, 0);
 
     this.shadowTexture = this.makeShadowTexture();
-    this.buildIsland();
+    if (!options.display) this.buildIsland();
+    else {
+      this.displayGrid = new THREE.GridHelper(80, 40, 0x9dbd88, 0x9dbd88);
+      const gridMaterial = this.displayGrid.material as THREE.LineBasicMaterial;
+      gridMaterial.transparent = true; gridMaterial.opacity = 0.22;
+      this.geometries.add(this.displayGrid.geometry); this.materials.add(gridMaterial);
+      this.scene.add(this.displayGrid);
+    }
     const paw = pawTexture(); this.textures.add(paw);
     const footprintGeometry = new THREE.PlaneGeometry(0.32, 0.38);
     for (let i = 0; i < 32; i++) {
@@ -141,7 +150,7 @@ export class Playground {
     this.scene.add(new THREE.HemisphereLight(0xfffbec, 0x869477, 2.6));
     const sun = this.sun;
     sun.position.set(-3, 9, 5);
-    sun.castShadow = true;
+    sun.castShadow = !options.display;
     sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.left = -6;
     sun.shadow.camera.right = 6;
@@ -173,6 +182,11 @@ export class Playground {
   }
 
   setWeather(kind: WeatherKind): void {
+    if (this.options.display) {
+      this.weatherParticles.visible = false;
+      for (const footprint of this.footprints) footprint.mesh.material.color.set(0xc5edac);
+      return;
+    }
     this.weatherKind = kind;
     this.flowers.visible = kind !== 'snow';
     this.weatherParticles.visible = kind === 'rain' || kind === 'snow';
@@ -543,7 +557,7 @@ export class Playground {
     const width = Math.max(1, this.canvas.clientWidth);
     const height = Math.max(1, this.canvas.clientHeight);
     const aspect = width / height;
-    const halfHeight = Math.max(3.5, 4.4 / aspect) * (this.zoomedOut ? 1.7 : 1);
+    const halfHeight = (this.options.display ? Math.max(2.6, 3 / aspect) : Math.max(3.5, 4.4 / aspect)) * (this.zoomedOut ? 1.7 : 1);
     this.camera.left = -halfHeight * aspect;
     this.camera.right = halfHeight * aspect;
     this.camera.top = halfHeight;
@@ -640,6 +654,7 @@ export class Playground {
     const followedPet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
     if (followedPet?.root.visible) {
       const { x, z } = followedPet.root.position;
+      this.displayGrid?.position.set(Math.round(x / 20) * 20, 0, Math.round(z / 20) * 20);
       // Follow the smoothed walking heading. A play animation can turn the body
       // toward a friend without abruptly swinging the whole meadow around.
       const blend = reducedMotion ? 1 : 1 - Math.exp(-8 * delta);

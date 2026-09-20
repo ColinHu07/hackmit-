@@ -414,6 +414,48 @@ test('compass heading changes shared facing without moving the pet', async t => 
   assert.equal(parsePlayMessage({ type: 'heading', yaw: 0, latitude: 42 }), null);
 });
 
+test('glasses head heading stays visible to peers while walking and unlock restores movement facing', async t => {
+  const { connect } = await setup(t);
+  const glasses = await connect(); glasses.send({ type: 'create', name: 'Glasses' });
+  const first = await welcome(glasses);
+  const friend = await connect(); friend.send({ type: 'join', roomCode: first.roomCode, name: 'Phone' }); await welcome(friend);
+  const mine = snapshot => snapshot.players.find(player => player.id === first.playerId);
+  glasses.send({ type: 'move', x: 9, z: 0 });
+  const walking = await state(friend, snapshot => mine(snapshot).x > -1.1);
+  assert.ok(Math.abs(mine(walking).yaw - Math.PI / 2) < 0.001);
+  glasses.send({ type: 'heading', yaw: -Math.PI / 2, lock: true });
+  const turned = await state(friend, snapshot => Math.abs(mine(snapshot).yaw + Math.PI / 2) < 0.001);
+  const later = await state(friend, snapshot => mine(snapshot).x > mine(turned).x + 0.15);
+  assert.ok(Math.abs(mine(later).yaw + Math.PI / 2) < 0.001, 'movement ticks preserve head direction');
+  assert.equal(mine(later).targetX, 9);
+  glasses.send({ type: 'heading', yaw: 0, lock: false });
+  const unlocked = await state(friend, snapshot => snapshot.serverTime > later.serverTime
+    && Math.abs(mine(snapshot).yaw - Math.PI / 2) < 0.001);
+  assert.ok(mine(unlocked).x > mine(later).x);
+  glasses.send({ type: 'heading', yaw: -1 });
+  const ordinary = await state(friend, snapshot => snapshot.serverTime > unlocked.serverTime);
+  assert.ok(Math.abs(mine(ordinary).yaw - Math.PI / 2) < 0.001, 'ordinary phone messages preserve walking behavior');
+  assert.equal('headingLocked' in mine(ordinary), false, 'the lock is internal server state');
+  assert.deepEqual(parsePlayMessage({ type: 'heading', yaw: 0 }), { type: 'heading', yaw: 0 });
+  assert.deepEqual(parsePlayMessage({ type: 'heading', yaw: 0, lock: false }), { type: 'heading', yaw: 0, lock: false });
+  for (const lock of [1, 'true', null, {}]) assert.equal(parsePlayMessage({ type: 'heading', yaw: 0, lock }), null);
+});
+
+test('a reconnecting phone does not inherit a disconnected glasses heading lock', async t => {
+  const { connect } = await setup(t);
+  const glasses = await connect(); glasses.send({ type: 'create', name: 'Glasses' }); const first = await welcome(glasses);
+  const friend = await connect(); friend.send({ type: 'join', roomCode: first.roomCode, name: 'Friend' }); await welcome(friend);
+  glasses.send({ type: 'heading', yaw: -Math.PI / 2, lock: true });
+  await state(friend, snapshot => Math.abs(snapshot.players[0].yaw + Math.PI / 2) < 0.001);
+  glasses.ws.close();
+  await state(friend, snapshot => !snapshot.players[0].connected);
+  const phone = await connect();
+  phone.send({ type: 'join', roomCode: first.roomCode, playerToken: first.playerToken, name: 'Phone' }); await welcome(phone);
+  phone.send({ type: 'move', x: 9, z: 0 });
+  const walking = await state(friend, snapshot => snapshot.players[0].targetX === 9 && snapshot.players[0].x > -1.2);
+  assert.ok(Math.abs(walking.players[0].yaw - Math.PI / 2) < 0.001);
+});
+
 test('duo clip verification needs only co-presence and approves the submission pair once', async t => {
   let calls = 0;
   const { connect, origin } = await setup(t, { photoVerifier: { configured: true, async verify(input) {

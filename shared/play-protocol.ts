@@ -93,7 +93,7 @@ export type PlayClientMessage =
   | { type: 'lobby'; name: string; playerToken?: string }
   | { type: 'create'; name: string }
   | { type: 'join'; roomCode: string; name: string; playerToken?: string }
-  | { type: 'heading'; yaw: number }
+  | { type: 'heading'; yaw: number; lock?: boolean }
   | { type: 'move'; x: number; z: number }
   | { type: 'action'; action: PetActionKind }
   | { type: 'ready_squad_quest' }

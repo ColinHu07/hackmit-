@@ -1,0 +1,325 @@
+import { browserVerticalG, StepDetector } from '../../../companion-web/src/StepDetector';
+import { WalkingTracker, type WalkingPose } from '../../../companion-web/src/WalkingTracker';
+
+export type GlassesMotionStatus = 'off' | 'requesting' | 'waiting' | 'live' | 'stale' | 'paused' | 'denied' | 'unavailable' | 'simulated';
+export type GlassesMotionSource = 'sensors' | 'simulator' | null;
+export type GlassesPoseChange = 'heading' | 'step' | 'recenter';
+export interface GlassesMotionState {
+  status: GlassesMotionStatus;
+  source: GlassesMotionSource;
+  headingReady: boolean;
+  motionReady: boolean;
+  steps: number;
+  message: string;
+}
+type PermissionAPI = { prototype?: Event; requestPermission?: () => Promise<string> };
+export interface GlassesSensorHost {
+  isSecureContext: boolean;
+  DeviceOrientationEvent?: PermissionAPI;
+  DeviceMotionEvent?: PermissionAPI;
+  addEventListener(type: string, listener: EventListener): void;
+  removeEventListener(type: string, listener: EventListener): void;
+}
+export interface GlassesVisibilityHost {
+  hidden: boolean;
+  addEventListener(type: string, listener: EventListener): void;
+  removeEventListener(type: string, listener: EventListener): void;
+}
+export interface GlassesMotionOptions {
+  onPose?: (pose: WalkingPose, reason: GlassesPoseChange) => void;
+  onStatus?: (state: GlassesMotionState) => void;
+  host?: GlassesSensorHost;
+  visibility?: GlassesVisibilityHost;
+  now?: () => number;
+  /** Sign of alpha's change during a clockwise/right head turn. Verify while worn. */
+  yawSign?: 1 | -1;
+}
+
+const SENSOR_FRESH_MS = 1200;
+const START_TIMEOUT_MS = 5000;
+const wrapDegrees = (degrees: number) => ((degrees % 360) + 360) % 360;
+const signedDegrees = (degrees: number) => wrapDegrees(degrees + 180) - 180;
+const messages: Record<GlassesMotionStatus, string> = {
+  off: 'Head tracking and walking are off.',
+  requesting: 'Allow head tracking and walking sensors.',
+  waiting: 'Face forward. Waiting for orientation and motion data…',
+  live: 'Head turns steer your pet. Rhythmic steps move it forward.',
+  stale: 'Sensor data stopped. Resume tracking to continue.',
+  paused: 'Tracking paused while the app is hidden. Resume to continue.',
+  denied: 'Motion permission was not granted. You can use the simulator.',
+  unavailable: 'Orientation and motion sensors are unavailable. You can use the simulator.',
+  simulated: 'Desktop simulator · no physical glasses tracking.',
+};
+
+/**
+ * Foreground, relative-IMU gameplay; this is not positional tracking or a compass.
+ * Call start() directly from an explicit button/Enter activation. It requests the
+ * documented DeviceOrientationEvent and DeviceMotionEvent APIs together before
+ * yielding the user activation. See docs/meta-capabilities.md for hardware limits.
+ *
+ * The first alpha is forward at the current avatar yaw. Standard alpha increases
+ * counterclockwise, so default yawSign=-1; mounting/sign must be checked on-device.
+ * Shared play-protocol/WalkingTracker convention: yaw is radians, forward is
+ * (sin(yaw), cos(yaw)) in X/Z, yaw=PI faces -Z, and a right turn decreases yaw.
+ * Orientation only changes yaw. Only confirmed acceleration rhythms translate.
+ * Distance reuses the phone's deliberately exaggerated approximate step length.
+ * A hidden page or stale sensor stream stops tracking until an explicit restart.
+ */
+export class GlassesMotion {
+  private readonly host: GlassesSensorHost;
+  private readonly visibility: GlassesVisibilityHost;
+  private readonly now: () => number;
+  private readonly walking = new WalkingTracker();
+  private readonly detector = new StepDetector();
+  private currentStatus: GlassesMotionStatus = 'off';
+  private source: GlassesMotionSource = null;
+  private yawSign: 1 | -1;
+  private baselineAlpha: number | null = null;
+  private baselineYaw = Math.PI;
+  private lastAlpha: number | null = null;
+  private lastHeadingAt = -Infinity;
+  private lastMotionAt = -Infinity;
+  private startedAt = 0;
+  private stepCount = 0;
+  private generation = 0;
+  private timer?: ReturnType<typeof setInterval>;
+  private sensorsAttached = false;
+  private visibilityAttached = false;
+
+  constructor(private readonly options: GlassesMotionOptions = {}) {
+    this.host = options.host ?? window;
+    this.visibility = options.visibility ?? document;
+    this.now = options.now ?? (() => performance.now());
+    this.yawSign = options.yawSign ?? -1;
+  }
+
+  get pose(): WalkingPose { return { ...this.walking.pose }; }
+  get status(): GlassesMotionStatus { this.checkFreshness(); return this.currentStatus; }
+  get state(): GlassesMotionState { this.checkFreshness(); return this.snapshot(); }
+
+  /** Synchronize once on join/reconnect or an authoritative teleport, not every frame. */
+  syncPose(pose: WalkingPose): void {
+    if (![pose.x, pose.z, pose.yaw].every(Number.isFinite)) return;
+    this.walking.moveTo(pose.x, pose.z);
+    this.setYaw(pose.yaw);
+    this.baselineYaw = this.walking.pose.yaw;
+    this.baselineAlpha = this.lastAlpha;
+    this.detector.reset();
+  }
+
+  setWorldLimit(limit: number): void { this.walking.setWorldLimit(limit); }
+
+  /** Change a verified mounting convention without snapping the avatar's pose. */
+  setYawSign(sign: 1 | -1): void {
+    if (sign !== 1 && sign !== -1) return;
+    this.yawSign = sign;
+    this.baselineAlpha = this.lastAlpha;
+    this.baselineYaw = this.walking.pose.yaw;
+    this.detector.reset();
+  }
+
+  /** This physical facing becomes forward (-Z), retaining the character's location. */
+  recenter(yaw = Math.PI): boolean {
+    this.checkFreshness();
+    if (!Number.isFinite(yaw) || this.lastAlpha === null || !this.acceptingSamples()) return false;
+    this.baselineAlpha = this.lastAlpha;
+    this.setYaw(yaw);
+    this.baselineYaw = this.walking.pose.yaw;
+    this.detector.reset();
+    this.options.onPose?.(this.pose, 'recenter');
+    return true;
+  }
+
+  async start(): Promise<boolean> {
+    this.stop();
+    this.source = 'sensors';
+    if (this.visibility.hidden) { this.setStatus('paused'); return false; }
+    const orientation = this.host.DeviceOrientationEvent;
+    const motion = this.host.DeviceMotionEvent;
+    if (!this.host.isSecureContext || !orientation || !motion) { this.setStatus('unavailable'); return false; }
+    const generation = this.generation;
+    this.setStatus('requesting');
+    try {
+      // Invoke both requests synchronously, before awaiting either permission.
+      const permissions = [orientation, motion].map(api => api.requestPermission?.() ?? Promise.resolve('granted'));
+      const results = await Promise.all(permissions);
+      if (generation !== this.generation) return false;
+      if (results.some(result => result !== 'granted')) { this.setStatus('denied'); return false; }
+      if (this.visibility.hidden) { this.setStatus('paused'); return false; }
+      this.resetReadings();
+      this.startedAt = this.now();
+      this.host.addEventListener('deviceorientation', this.onOrientation);
+      this.host.addEventListener('devicemotion', this.onMotion);
+      this.sensorsAttached = true;
+      this.attachVisibility();
+      this.timer = setInterval(() => this.checkFreshness(), 250);
+      this.setStatus('waiting');
+      return true;
+    } catch {
+      if (generation === this.generation) this.setStatus('denied');
+      return false;
+    }
+  }
+
+  stop(): void {
+    this.generation++;
+    this.detach();
+    this.resetReadings();
+    this.source = null;
+    this.setStatus('off');
+  }
+
+  /** Pause lifecycle work, including an outstanding permission prompt, until start(). */
+  suspend(): void {
+    this.generation++;
+    if (this.currentStatus !== 'off') this.pause('paused');
+  }
+
+  /** Opt-in desktop mode never installs sensor listeners or requests permission. */
+  startSimulation(): void {
+    this.stop();
+    this.source = 'simulator';
+    this.resetReadings();
+    this.baselineAlpha = this.lastAlpha = 0;
+    this.lastHeadingAt = this.now();
+    this.attachVisibility();
+    this.setStatus(this.visibility.hidden ? 'paused' : 'simulated');
+  }
+
+  /** Absolute clockwise degrees within the simulator's initial reference frame. */
+  simulateHeading(clockwiseDegrees: number): boolean {
+    if (this.status !== 'simulated' || !Number.isFinite(clockwiseDegrees)) return false;
+    this.acceptAlpha(clockwiseDegrees / this.yawSign, this.now());
+    return true;
+  }
+
+  simulateSteps(count = 1): boolean {
+    if (this.status !== 'simulated') return false;
+    return this.advance(count);
+  }
+
+  private onOrientation: EventListener = event => {
+    this.checkFreshness();
+    if (this.source !== 'sensors' || !this.acceptingSamples()) return;
+    const alpha = (event as DeviceOrientationEvent).alpha;
+    if (typeof alpha !== 'number' || !Number.isFinite(alpha)) return;
+    this.acceptAlpha(alpha, this.now());
+    this.updateReadiness();
+  };
+
+  private onMotion: EventListener = event => {
+    this.checkFreshness();
+    if (this.source !== 'sensors' || !this.acceptingSamples()) return;
+    const motion = event as DeviceMotionEvent;
+    const vertical = browserVerticalG(motion.acceleration, motion.accelerationIncludingGravity);
+    if (vertical === null) return;
+    const now = this.now();
+    if (!Number.isFinite(now) || now < this.lastMotionAt) return;
+    this.lastMotionAt = now;
+    this.updateReadiness();
+    if (this.currentStatus !== 'live') { this.detector.reset(); return; }
+    const steps = this.detector.sample(vertical, now);
+    if (steps) this.advance(steps);
+  };
+
+  private onVisibility: EventListener = () => { this.checkFreshness(); };
+
+  private acceptAlpha(alpha: number, now: number): void {
+    if (!Number.isFinite(now) || now < this.lastHeadingAt) return;
+    this.lastAlpha = wrapDegrees(alpha);
+    this.lastHeadingAt = now;
+    if (this.baselineAlpha === null) this.baselineAlpha = this.lastAlpha;
+    const clockwise = this.yawSign * signedDegrees(this.lastAlpha - this.baselineAlpha);
+    const previous = this.walking.pose.yaw;
+    this.setYaw(this.baselineYaw - clockwise * Math.PI / 180);
+    if (Math.abs(signedDegrees((this.walking.pose.yaw - previous) * 180 / Math.PI)) > 0.01) {
+      this.options.onPose?.(this.pose, 'heading');
+    }
+  }
+
+  private advance(count: number): boolean {
+    if (!this.walking.steps(count)) return false;
+    this.stepCount += count;
+    this.options.onPose?.(this.pose, 'step');
+    this.options.onStatus?.(this.snapshot());
+    return true;
+  }
+
+  private setYaw(yaw: number): void {
+    this.walking.heading(wrapDegrees((Math.PI - yaw) * 180 / Math.PI), 0);
+  }
+
+  private acceptingSamples(): boolean {
+    return !this.visibility.hidden && ['waiting', 'live', 'simulated'].includes(this.currentStatus);
+  }
+
+  private updateReadiness(): void {
+    if (Number.isFinite(this.lastHeadingAt) && Number.isFinite(this.lastMotionAt)) this.setStatus('live');
+  }
+
+  private checkFreshness(): void {
+    if (!['waiting', 'live', 'simulated'].includes(this.currentStatus)) return;
+    if (this.visibility.hidden) { this.pause('paused'); return; }
+    if (this.source === 'simulator') return;
+    const now = this.now();
+    if (this.currentStatus === 'live' && (now - this.lastHeadingAt > SENSOR_FRESH_MS || now - this.lastMotionAt > SENSOR_FRESH_MS)) {
+      this.pause('stale');
+    } else if (this.currentStatus === 'waiting' && now - this.startedAt > START_TIMEOUT_MS) {
+      this.pause('unavailable');
+    } else if (this.currentStatus === 'waiting' && [this.lastHeadingAt, this.lastMotionAt].some(at => Number.isFinite(at) && now - at > SENSOR_FRESH_MS)) {
+      this.pause('stale');
+    }
+  }
+
+  private pause(status: 'stale' | 'paused' | 'unavailable'): void {
+    this.detach();
+    this.detector.reset();
+    this.walking.setStepTracking(false);
+    this.setStatus(status);
+  }
+
+  private resetReadings(): void {
+    this.detector.reset();
+    this.walking.setStepTracking(true);
+    this.baselineAlpha = this.lastAlpha = null;
+    this.baselineYaw = this.walking.pose.yaw;
+    this.lastHeadingAt = this.lastMotionAt = -Infinity;
+    this.stepCount = 0;
+  }
+
+  private attachVisibility(): void {
+    this.visibility.addEventListener('visibilitychange', this.onVisibility);
+    this.visibilityAttached = true;
+  }
+
+  private detach(): void {
+    if (this.sensorsAttached) {
+      this.host.removeEventListener('deviceorientation', this.onOrientation);
+      this.host.removeEventListener('devicemotion', this.onMotion);
+      this.sensorsAttached = false;
+    }
+    if (this.visibilityAttached) {
+      this.visibility.removeEventListener('visibilitychange', this.onVisibility);
+      this.visibilityAttached = false;
+    }
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
+  private setStatus(status: GlassesMotionStatus): void {
+    if (this.currentStatus === status) return;
+    this.currentStatus = status;
+    this.options.onStatus?.(this.snapshot());
+  }
+
+  private snapshot(): GlassesMotionState {
+    return {
+      status: this.currentStatus,
+      source: this.source,
+      headingReady: this.acceptingSamples() && Number.isFinite(this.lastHeadingAt),
+      motionReady: this.acceptingSamples() && Number.isFinite(this.lastMotionAt),
+      steps: this.stepCount,
+      message: messages[this.currentStatus],
+    };
+  }
+}

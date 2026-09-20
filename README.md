@@ -1,5 +1,20 @@
 # Kith
 
+## Play on Meta Ray-Ban Display
+
+The glasses app now joins the **same multiplayer game** as the phone and iPad. It uses the supplied beaver, live happiness and berries, shared actions and quests. The black 600×600 interface supports the Neural Band's arrows and Enter/pinch. **Walk** enables estimated step movement and relative head-facing; **More** contains recentering, direction reversal, manual stepping and camera pairing.
+
+```sh
+npm run build:all
+npm run web:start
+```
+
+Serve this game origin over HTTPS. Phones use `/`; glasses use `/glasses/index.html`; `/glasses/setup.html` provides an Add to glasses link. For development, run the game server and `npm run dev`, then open `http://127.0.0.1:5173/?simulator`. In that explicitly labeled simulator, select Walk, use W for a step and A/D to turn. The older direction-anchor prototype is preserved at `/glasses/legacy.html` (`/legacy.html` in development).
+
+Photos and six-second quest clips come from the **glasses camera**, through the updated `glasses-ios` **Kith Camera** app on the paired iPhone. Pair its eight-character code, keep that app open, then capture/review/submit from the glasses. Camera evidence is transient and separate from game credentials. See the [display game and camera guide](docs/display-play-camera.md) for installation, protocol and firmware checks.
+
+Browser and server tests validate the implemented game and transport. **Physical head-sensor tuning, wristband behavior, and simultaneous camera + Display Web App operation still need a test on the glasses.** Motion gives a game movement estimate, not a measured physical position or world anchor.
+
 ## Play with friends in a browser
 
 **For the team's running server:** use `npm run web:share -- --provider serveo --server ws://10.189.108.228:8788/play`. This shares the browser app and forwards all gameplay to that server. Keep this Mac on the same reachable network. Without `--server`, the command creates a separate test server.
@@ -25,9 +40,9 @@ The browser game includes tap-to-move controls, shared pet actions, quests, and 
 
 ## Phone-first shared playground
 
-The phone companion discovers opted-in nearby pets (an approximate 10-meter GPS filter), lets two players agree to meet, and opens a shared 3D meadow automatically. Nearby meetups stay private for two; room-code pens can host up to four pets for individual solo/duo/squad quests and the cooperative Mossback raid. Run `HOST=0.0.0.0 npm run play:server` and `npm run dev:phone` in separate terminals. In the browser version, physical-phone location requires HTTPS and WSS, with both `/play` and `/nearby` forwarded to the server. See the [phone guide](companion-web/README.md) and [server deployment guide](docs/phone-server.md), including a clearly labeled local location demo. A server URL can be entered in app settings or configured at build time. Real-world AR alignment and joining from glasses remain later work.
+The phone companion discovers opted-in nearby pets (an approximate 10-meter GPS filter), lets two players agree to meet, and opens a shared 3D meadow automatically. Nearby meetups stay private for two; room-code pens can host up to four pets for individual solo/duo/squad quests and the cooperative Mossback raid. Run `HOST=0.0.0.0 npm run play:server` and `npm run dev:phone` in separate terminals. In the browser version, physical-phone location requires HTTPS and WSS, with both `/play` and `/nearby` forwarded to the server. See the [phone guide](companion-web/README.md) and [server deployment guide](docs/phone-server.md), including a clearly labeled local location demo. A server URL can be entered in app settings or configured at build time. Glasses now join this same server; real-world AR alignment remains outside this game.
 
-## Glasses prototype
+## Legacy direction-anchor prototype
 
 A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 character**, adds **Pet / Feed / Play** reactions, and supports a calibrated **direction anchor** through the glasses' documented orientation events.
 
@@ -35,11 +50,11 @@ A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 
 - [Desktop simulator](https://colinhu07.github.io/bondimals-display/?simulator)
 - [Full source repository](https://github.com/ColinHu07/hackmit-)
 
-The original Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, an optional desktop camera preview, and a persistent multiplayer server are implemented. The server tracks pet survival points and a transactional food inventory; see the [pet survival guide](docs/pet-survival.md). Follow the [camera setup guide](docs/hand-camera-bridge.md). Physical camera/display concurrency still needs a device test. Supabase and visual object anchors remain future work.
+The legacy Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, an optional desktop camera preview, and a persistent multiplayer server are implemented. The server tracks pet survival points and a transactional food inventory; see the [pet survival guide](docs/pet-survival.md). Follow the [camera setup guide](docs/hand-camera-bridge.md). Physical camera/display concurrency still needs a device test. Supabase and visual object anchors remain future work.
 
 ## Run the glasses prototype locally
 
-Node.js 22+ and a WebGL 2 browser are required. No secrets, backend, or account are needed.
+Node.js 22+ and a WebGL 2 browser are required. The legacy direction-anchor simulator needs no backend. The default glasses multiplayer game needs the shared game server.
 
 ```sh
 git clone https://github.com/ColinHu07/hackmit-.git
@@ -48,7 +63,7 @@ npm ci
 npm run dev
 ```
 
-Open the printed Vite URL with **`?simulator`** (usually `http://127.0.0.1:5173/?simulator`). `/simulator` also works on the development server. Query routing works on GitHub Pages without SPA rewrites.
+For the legacy prototype, open **`/legacy.html?simulator`** on the printed Vite URL (usually `http://127.0.0.1:5173/?simulator`). `/simulator` also works on the development server. Query routing works on GitHub Pages without SPA rewrites.
 
 - **Simulator:** hold and stroke across Nova’s head to pet her, or click Pet, Feed, Play, or the character. Hover near her head to invite a lean. Click empty ground beside her to run there, **L** / **Run around** starts a short grounded scurry, and **J** / **Jump** jumps. Enter pets, F feeds, P plays. Arrows/WASD simulate head motion. **Distance to Nova** previews approaching/receding: 1 m makes her twice the size shown at 2 m, and 4 m halves it. This slider simulates distance; it does not measure your real movement. Space / **Move Nova here** sends Nova running to the direction you are looking; R faces her current direction, 0 resets the anchor. Native control keyboard behavior is preserved.
 - **Glasses (`/`):** calibrated orientation input, bright focusable buttons, and a black 600×600 surface. Swipe to choose; pinch/Enter to activate. See [hardware instructions](docs/glasses-hardware-test.md).

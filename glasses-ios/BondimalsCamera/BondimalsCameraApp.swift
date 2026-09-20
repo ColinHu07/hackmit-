@@ -16,7 +16,7 @@ struct BondimalsCameraApp: App {
                 Form {
                     Section("Live glasses view") {
                         PhoneCameraPreview(frame: bridge.phoneFrame, running: bridge.running)
-                        Text("See the glasses camera and tracked hands here. No relay or pairing link is needed for this preview. Nothing is recorded.")
+                        Text("The live glasses preview stays on this phone unless you enable optional desktop preview. Quest captures are shared only when you request them from your paired game.")
                         Text(bridge.status).accessibilityIdentifier("bridge-status")
                         Text(bridge.handStatus).font(.caption.monospaced())
                         Text(bridge.sessionStatus).font(.caption.monospaced())
@@ -42,6 +42,7 @@ struct BondimalsCameraApp: App {
                             Text(bridge.webStatus).font(.caption)
                         }
                     }
+                    QuestCapturePanel(quests: bridge.quests)
                     Section {
                         Button("Start glasses camera") { bridge.start() }.disabled(bridge.running)
                         Button("Stop", role: .destructive) { bridge.stop() }.disabled(!bridge.running)
@@ -57,6 +58,7 @@ struct BondimalsCameraApp: App {
              .onChange(of: phase) { _, phase in
                  // Do not interrupt registration permission prompts while no camera is running.
                  if phase == .background { bridge.stopIfStreamingInBackground() }
+                 else if phase == .active { bridge.quests.setForeground(true) }
              }
         }
     }

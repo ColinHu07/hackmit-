@@ -8,13 +8,14 @@ import { attachNearbyDiscovery } from './nearby-discovery.mjs';
 import { createStaticWebHandler } from './static-web.mjs';
 import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
 import { createPetStore } from './pet-store.mjs';
+import { createGlassesCameraBridge } from './glasses-camera.mjs';
 import { QUEST_REWARD } from '../shared/quest-rewards.mjs';
 import {
   PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES, PLAY_WORLD_LIMIT,
   PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
 } from '../shared/play-protocol.mjs';
 
-/** Ephemeral, server-authoritative four-person playground; no account or camera data. */
+/** Server-authoritative playground with separately authenticated, transient camera previews. */
 export function createPlayServer(options = {}) {
   const tickMs = options.tickMs ?? PLAY_TICK_MS;
   const rejoinGraceMs = options.rejoinGraceMs ?? 30_000;
@@ -42,8 +43,8 @@ export function createPlayServer(options = {}) {
     if (!origin) return true;
     response.setHeader('access-control-allow-origin', origin);
     response.setHeader('vary', 'Origin');
-    response.setHeader('access-control-allow-methods', 'POST, OPTIONS');
-    response.setHeader('access-control-allow-headers', 'content-type');
+    response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    response.setHeader('access-control-allow-headers', 'content-type, authorization');
     return true;
   }
   async function readJson(request, limit = 5_700_000) {
@@ -120,7 +121,19 @@ export function createPlayServer(options = {}) {
     }
   }
 
+  const glassesCamera = createGlassesCameraBridge({
+    ...options.glassesCamera, now: options.glassesCamera?.now ?? options.now ?? Date.now,
+    writeJson, readJson,
+    // Native DAT requests have no browser Origin; browser calls retain the allowlist.
+    cors: (request, response) => !request.headers.origin || cors(request, response),
+    resolveOwner(roomCode, playerToken) {
+      const room = rooms.get(roomCode);
+      const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
+      return player?.socket?.readyState === WebSocket.OPEN ? player : null;
+    },
+  });
   const server = createServer((request, response) => {
+    if (glassesCamera.handle(request, response)) return;
     const path = request.url?.split('?')[0];
     if (path === '/api/pet' && request.method === 'GET') {
       const url = new URL(request.url, 'http://localhost');
@@ -232,6 +245,8 @@ export function createPlayServer(options = {}) {
     for (const player of room.players.values()) send(player.socket, message);
   }
   function closePlayer(player) {
+    glassesCamera.revoke(player);
+    player.headingLocked = false;
     const ws = player.socket;
     player.socket = null;
     if (ws) ws.session = null;
@@ -286,7 +301,7 @@ export function createPlayServer(options = {}) {
     const [x, z] = starts[slot];
     const player = {
       id: randomUUID(), token: savedToken ?? randomBytes(24).toString('hex'), name, slot,
-      x, z, targetX: x, targetZ: z, yaw: Math.atan2(-x, -z),
+      x, z, targetX: x, targetZ: z, yaw: Math.atan2(-x, -z), headingLocked: false,
       action: null, socket: null, disconnectedAt: null, lastActionAt: 0,
       evidenceGroups: {}, verificationAttempts: {}, movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, dapHandshakeReady: false, photoVerification: {} },
     };
@@ -475,7 +490,10 @@ export function createPlayServer(options = {}) {
       return;
     }
     if (message.type === 'heading') {
-      if (!player.action && Math.hypot(player.targetX - player.x, player.targetZ - player.z) < 0.05) player.yaw = message.yaw;
+      if (message.lock !== undefined) {
+        player.headingLocked = message.lock;
+        player.yaw = message.yaw;
+      } else if (!player.action && Math.hypot(player.targetX - player.x, player.targetZ - player.z) < 0.05) player.yaw = message.yaw;
       return;
     }
     if (message.type === 'move') {
@@ -615,7 +633,7 @@ export function createPlayServer(options = {}) {
         const dx = player.targetX - player.x, dz = player.targetZ - player.z;
         const remaining = Math.hypot(dx, dz);
         if (remaining > 0.001) {
-          player.yaw = Math.atan2(dx, dz);
+          if (!player.headingLocked) player.yaw = Math.atan2(dx, dz);
           const fraction = Math.min(distance / remaining, 1);
           player.x += dx * fraction;
           player.z += dz * fraction;
@@ -662,6 +680,7 @@ export function createPlayServer(options = {}) {
     async close() {
       if (closing) return;
       closing = true;
+      glassesCamera.close();
       clearInterval(tick);
       clearInterval(heartbeat);
       await nearbyService.close();

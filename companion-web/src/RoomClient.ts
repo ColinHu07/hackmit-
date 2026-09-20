@@ -156,7 +156,10 @@ export class RoomClient {
     this.lastMove = performance.now();
     this.send({ type: 'move', x, z });
   }
-  heading(yaw: number): void { if (!this.legacyServer && Number.isFinite(yaw)) this.send({ type: 'heading', yaw }); }
+  /** Explicit lock keeps head-facing direction while walking; omission preserves phone behavior. */
+  heading(yaw: number, lock?: boolean): void {
+    if (!this.legacyServer && Number.isFinite(yaw)) this.send({ type: 'heading', yaw, ...(lock === undefined ? {} : { lock }) });
+  }
   action(action: PetActionKind): void { if (action !== 'dap' || !this.legacyServer) this.send({ type: 'action', action }); }
   confirmDap(): void { this.send({ type: 'confirm_dap' }); }
   readySquadQuest(): void { if (!this.legacyServer) this.send({ type: 'ready_squad_quest' }); }

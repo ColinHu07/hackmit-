@@ -5,6 +5,7 @@ import MWDATCamera
 
 @MainActor
 final class CameraBridge: ObservableObject {
+    let quests = QuestCaptureBridge()
     @Published var pairingLink = ""
     @Published var status = "Register with Meta AI, then start the glasses camera."
     @Published var handStatus = "Source: glasses camera only"
@@ -56,6 +57,10 @@ final class CameraBridge: ObservableObject {
         relay.onPreviewDemand = { [weak self] enabled in
             guard let self else { return }
             self.processor?.setPreviewEnabled(enabled && self.allowWebPreview)
+        }
+        quests.requestPhoto = { [weak self] in
+            guard let self, self.running, let camera = self.camera, camera.stream.state == .streaming else { return false }
+            return camera.stream.capturePhoto(format: .jpeg)
         }
     }
     deinit { deviceMonitor?.cancel() }
@@ -129,6 +134,7 @@ final class CameraBridge: ObservableObject {
                     Task { @MainActor in
                         guard let self, generation == self.generation, self.running else { return }
                         self.phoneFrame = frame
+                        self.quests.receive(frame)
                         if self.firstFrameTask != nil {
                             self.firstFrameTask?.cancel(); self.firstFrameTask = nil
                             self.status = "Glasses camera live. Move your hand into view to see the tracking overlay."
@@ -179,6 +185,7 @@ final class CameraBridge: ObservableObject {
                 print("Kith: \(self.sessionStatus)")
                 if state == .paused {
                     self.phoneFrame = nil
+                    self.quests.setCameraRunning(false)
                     self.status = "Glasses session paused. Wear the glasses and resume on the glasses."
                 }
                 if state == .stopped, self.camera != nil {
@@ -242,13 +249,19 @@ final class CameraBridge: ObservableObject {
             }
             processor.process(buffer)
         })
+        streamTokens.append(attached.stream.photoDataPublisher.listen { [weak self] photo in
+            Task { @MainActor in
+                guard let self, generation == self.generation, self.running else { return }
+                self.quests.receivePhoto(photo.data)
+            }
+        })
         streamTokens.append(attached.stream.statePublisher.listen { [weak self] state in
             Task { @MainActor in
                 guard let self, generation == self.generation else { return }
                 self.sessionStatus = "Session: \(session.state.description) · Camera: \(state)"
                 print("Kith: \(self.sessionStatus)")
-                if state == .streaming { self.hasStreamed = true; self.status = "Camera streaming. Waiting for the first image…" }
-                else if state == .paused { self.phoneFrame = nil; self.status = "Glasses camera paused. Waiting for fresh frames." }
+                if state == .streaming { self.hasStreamed = true; UIApplication.shared.isIdleTimerDisabled = true; self.quests.setCameraRunning(true); self.status = "Camera streaming. Waiting for the first image…" }
+                else if state == .paused { self.phoneFrame = nil; UIApplication.shared.isIdleTimerDisabled = false; self.quests.setCameraRunning(false); self.status = "Glasses camera paused. Waiting for fresh frames." }
                 else if state == .stopped && self.hasStreamed { self.stop("Glasses camera stopped. Start again to reconnect.") }
                 else if state == .starting { self.status = "Glasses connected. Starting video stream…" }
                 else if state == .waitingForDevice { self.status = "Camera waiting for glasses. Keep them on and connected." }
@@ -266,9 +279,11 @@ final class CameraBridge: ObservableObject {
         }
     }
     func stopIfStreamingInBackground() {
+        quests.setForeground(false)
         if camera != nil { stop("Camera paused while the phone app is in the background. Reopen and Start.") }
     }
     func stop(_ message: String = "Stopped. Camera and relay released.") {
+        UIApplication.shared.isIdleTimerDisabled = false
         generation += 1
         startTask?.cancel(); startTask = nil
         webTask?.cancel(); webTask = nil
@@ -281,6 +296,7 @@ final class CameraBridge: ObservableObject {
         session?.stop(); session = nil
         processor = nil
         phoneFrame = nil
+        quests.cameraSessionReleased()
         webConnected = false
         hasStreamed = false
         relay.stop()

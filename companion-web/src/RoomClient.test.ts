@@ -75,6 +75,17 @@ afterEach(() => {
 });
 
 describe('RoomClient session lifecycle', () => {
+  it('sends explicit head-heading locks while preserving ordinary phone heading messages', () => {
+    const { client, first } = setup();
+    first.open(); first.receive(welcome); first.send.mockClear();
+    client.heading(0.5); client.heading(1, true); client.heading(1.5, false);
+    client.heading(Number.NaN, true);
+    expect(first.commands()).toEqual([
+      { type: 'heading', yaw: 0.5 },
+      { type: 'heading', yaw: 1, lock: true },
+      { type: 'heading', yaw: 1.5, lock: false },
+    ]);
+  });
   it('automatically joins without a room code and resumes its own lobby pet', () => {
     const { client, callbacks } = setup();
     client.start('ws://play.example/play', { type: 'lobby', name: 'Alex' });
