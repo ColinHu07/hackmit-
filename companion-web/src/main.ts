@@ -1324,7 +1324,7 @@ try {
 
 function receiveGameLocation(fix: LocationFix): void {
   if (!walking || !mobileMovement) return;
-  if (fix.accuracy > 25) { el('walking-status').textContent = 'Waiting for a clearer GPS signal. Your pet stays put.'; return; }
+  if (fix.accuracy > 25) { el('walking-status').textContent = stepSensorAvailable ? 'GPS is weak · walking with your steps.' : 'Waiting for a clearer GPS signal.'; return; }
   if (membership && connection === 'connected') client.location(fix);
   el('walking-status').textContent = `Following your location · GPS ±${Math.ceil(fix.accuracy)} m`;
 }
@@ -1351,7 +1351,7 @@ function startWalking(): void {
   walkingTracker.reset(local?.targetX ?? walkingTracker.pose.x, local?.targetZ ?? walkingTracker.pose.z);
   stepDetector.reset(); walkingSteps = 0;
   deviceView.reset((Math.PI - walkingTracker.pose.yaw) * 180 / Math.PI);
-  stepSensorAvailable = browserWalkingEnabled && !mobileMovement;
+  stepSensorAvailable = browserWalkingEnabled;
   walkingTracker.setStepTracking(stepSensorAvailable);
   el('walking-status').textContent = 'Aligning your pet with your device…';
   el('compass-reading').textContent = 'Reading your starting direction…';
@@ -1372,6 +1372,7 @@ function receiveWalkingMotion(verticalG: number, timestamp: number): void {
   if (!walking || !stepSensorAvailable || document.hidden) return;
   const steps = stepDetector.sample(verticalG, timestamp);
   if (!walkingTracker.steps(steps)) return;
+  if (mobileMovement && membership && connection === 'connected') client.steps(steps, walkingTracker.pose.yaw);
   walkingSteps += steps;
   el(isNativePhone() ? 'walking-status' : 'browser-walking-status').textContent = `Walking with you · ${walkingSteps} steps detected`;
   publishWalking(true);
@@ -1405,9 +1406,9 @@ if (isNativePhone()) {
     if (!walking) return;
     if (event.type === 'unavailable' && event.message) el('walking-status').textContent = event.message;
     if (event.type === 'motionStatus') {
-      stepSensorAvailable = !mobileMovement && event.available === true;
+      stepSensorAvailable = event.available === true;
       stepDetector.reset(); walkingTracker.setStepTracking(stepSensorAvailable);
-      if (!mobileMovement) el('walking-status').textContent = event.message ?? '';
+      el('walking-status').textContent = stepSensorAvailable ? 'Walking ready · steps follow you between GPS updates.' : 'Using GPS for walking.';
     }
     if (event.type === 'motion') receiveWalkingMotion(event.verticalG ?? NaN, event.timestamp ?? NaN);
     if (event.type === 'status' && !stepSensorAvailable && !mobileMovement) el('walking-status').textContent = event.message ?? '';

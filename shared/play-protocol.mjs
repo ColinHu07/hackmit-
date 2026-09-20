@@ -15,6 +15,7 @@ export function parsePlayMessage(input) {
   const allowed = {
     lobby: ['type', 'name', 'playerToken'],
     create: ['type', 'name'], join: ['type', 'roomCode', 'name', 'playerToken'],
+    steps: ['type', 'count', 'yaw'],
     location: ['type', 'latitude', 'longitude', 'accuracy', 'timestamp'],
     heading: ['type', 'yaw', 'lock'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'], ready_squad_quest: ['type'], ready_raid: ['type'],
   };
@@ -29,6 +30,10 @@ export function parsePlayMessage(input) {
     return { type: 'heading', yaw: Math.atan2(Math.sin(input.yaw), Math.cos(input.yaw)),
       ...(input.lock === undefined ? {} : { lock: input.lock }),
     };
+  }
+  if (input.type === 'steps') {
+    if (!Number.isInteger(input.count) || input.count < 1 || input.count > 2 || typeof input.yaw !== 'number' || !Number.isFinite(input.yaw)) return null;
+    return { type: 'steps', count: input.count, yaw: Math.atan2(Math.sin(input.yaw), Math.cos(input.yaw)) };
   }
   if (input.type === 'location') {
     if (![input.latitude, input.longitude, input.accuracy, input.timestamp].every(value => typeof value === 'number' && Number.isFinite(value)) || Math.abs(input.latitude) > 90 || Math.abs(input.longitude) > 180 || input.accuracy < 0) return null;

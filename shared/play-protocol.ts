@@ -94,6 +94,7 @@ export type PlayClientMessage =
   | { type: 'create'; name: string }
   | { type: 'join'; roomCode: string; name: string; playerToken?: string }
   | { type: 'heading'; yaw: number; lock?: boolean }
+  | { type: 'steps'; count: number; yaw: number }
   | { type: 'location'; latitude: number; longitude: number; accuracy: number; timestamp: number }
   | { type: 'move'; x: number; z: number }
   | { type: 'action'; action: PetActionKind }

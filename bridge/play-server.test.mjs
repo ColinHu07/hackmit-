@@ -617,3 +617,33 @@ test('GPS uses one shared origin, ignores bad fixes, and never appears in snapsh
   a.send({ type: 'action', action: 'play' });
   await state(b, s => s.players.every(p => p.action?.kind === 'play'));
 });
+
+test('sensor steps move both views without GPS and turning cannot reset the destination', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'lobby', name: 'Walking iPad' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'lobby', name: 'Watching phone' }); await welcome(b);
+  const original = first.snapshot.players.find(p => p.id === first.playerId);
+  a.send({ type: 'steps', count: 2, yaw: Math.PI });
+  const targetZ = original.targetZ - .28;
+  const moved = await state(b, s => Math.abs(s.players.find(p => p.id === first.playerId).targetZ - targetZ) < .0001);
+  assert.equal(moved.players.find(p => p.id === first.playerId).targetX, original.targetX);
+  a.send({ type: 'heading', yaw: Math.PI / 2 });
+  const stable = await state(a, s => Math.abs(s.players.find(p => p.id === first.playerId).z - targetZ) < .001);
+  assert.ok(Math.abs(stable.players.find(p => p.id === first.playerId).targetZ - targetZ) < .0001);
+});
+
+test('stationary GPS uncertainty does not undo detected footsteps', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'lobby', name: 'Indoor steps' }); const first = await welcome(a);
+  const now = Date.now();
+  const fix = { type: 'location', latitude: 42, longitude: -71, accuracy: 8, timestamp: now - 19_000 };
+  a.send(fix);
+  await state(a, s => s.players[0].targetX === 0 && s.players[0].targetZ === 0);
+  a.send({ type: 'steps', count: 2, yaw: Math.PI });
+  await state(a, s => Math.abs(s.players[0].targetZ + .28) < .0001);
+  a.clear(); a.send({ ...fix, timestamp: now + 2000 });
+  const retained = await state(a, s => s.players[0].id === first.playerId);
+  assert.ok(Math.abs(retained.players[0].targetZ + .28) < .0001);
+  assert.equal(parsePlayMessage({ type: 'steps', count: 99, yaw: 0 }), null);
+  assert.equal(parsePlayMessage({ type: 'steps', count: 1, yaw: NaN }), null);
+});

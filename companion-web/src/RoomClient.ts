@@ -163,6 +163,7 @@ export class RoomClient {
     this.retry = setTimeout(() => this.connect(), Math.min(5000, 500 * 2 ** (this.attempts - 1)));
   }
 
+  steps(count: number, yaw: number): void { if (!this.legacyServer) this.send({ type: 'steps', count, yaw }); }
   location(fix: { latitude: number; longitude: number; accuracy: number; timestamp: number }): void {
     if (!this.legacyServer) this.send({ type: 'location', ...fix });
   }

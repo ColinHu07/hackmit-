@@ -632,6 +632,17 @@ export function createPlayServer(options = {}) {
       } else if (!player.action && Math.hypot(player.targetX - player.x, player.targetZ - player.z) < 0.05) player.yaw = message.yaw;
       return;
     }
+    if (message.type === 'steps') {
+      if (player.action?.kind === 'play' && now < player.action.startedAt + player.action.duration) return;
+      if (player.lastStepAt && now - player.lastStepAt < 250) return;
+      player.lastStepAt = now;
+      const distance = message.count * 0.7 * 0.2;
+      const clamp = value => Math.max(-PLAY_WORLD_LIMIT, Math.min(PLAY_WORLD_LIMIT, value));
+      player.targetX = clamp(player.targetX + Math.sin(message.yaw) * distance);
+      player.targetZ = clamp(player.targetZ + Math.cos(message.yaw) * distance);
+      player.yaw = message.yaw;
+      return;
+    }
     if (message.type === 'location') {
       if (!validPlayLocation(message, now) || (player.lastLocation && message.timestamp <= player.lastLocation.timestamp)) return;
       if (player.action?.kind === 'play' && now < player.action.startedAt + player.action.duration) return;
@@ -644,6 +655,11 @@ export function createPlayServer(options = {}) {
       room.locationOrigin ??= { latitude: message.latitude, longitude: message.longitude };
       const position = locationPosition(room.locationOrigin, message);
       if (Math.abs(position.x) > PLAY_WORLD_LIMIT || Math.abs(position.z) > PLAY_WORLD_LIMIT) return;
+      const uncertainty = Math.max(5, message.accuracy) * 0.2;
+      if (player.lastStepAt
+        && Math.hypot(position.x - player.targetX, position.z - player.targetZ) <= uncertainty) {
+        player.lastLocation = message; return;
+      }
       player.lastLocation = message;
       player.targetX = position.x; player.targetZ = position.z;
       return;
