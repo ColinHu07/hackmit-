@@ -7,6 +7,7 @@ import { createPlayServer } from './play-server.mjs';
 
 const IMAGE = 'data:image/png;base64,iVBORw0KGgo=';
 const READY = { cameraReady: true, cameraState: 'ready' };
+const READY_STATUS = { ...READY, captureAvailable: true };
 async function setup(t, options = {}) {
   let clock = Date.now();
   const app = createPlayServer({ ...options, glassesCamera: { ...options.glassesCamera, now: () => clock } });
@@ -19,9 +20,10 @@ async function setup(t, options = {}) {
       ...(options.allowedOrigins?.length ? { origin: options.allowedOrigins[0] } : {}),
     });
     await once(socket, 'open');
-    const received = new Promise(resolve => socket.on('message', raw => {
+    const received = new Promise((resolve, reject) => socket.on('message', raw => {
       const message = JSON.parse(raw);
       if (message.type === 'welcome') resolve(message);
+      else if (message.type === 'error') reject(new Error(message.message || message.code));
     }));
     socket.send(JSON.stringify(entry));
     const { roomCode, playerToken, playerId } = await received;
@@ -83,17 +85,16 @@ test('code expiry and owner disconnect revoke unclaimed pairing codes', async t 
   assert.equal((await call('status', auth)).status, 401);
 });
 
-test('same authenticated player reconnect retains the camera binding but erases evidence and denies offline capture/results', async t => {
+test('same authenticated player reconnect recovers private ready evidence while offline access and new captures stay denied', async t => {
   const { join, call, pair } = await setup(t);
   const first = await join(), other = await join();
   const token = await pair(first.auth);
   const { requestId } = (await call('capture', { ...first.auth, kind: 'photo', questId: 'touchGrass' })).body;
   await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token);
   first.socket.close(); await once(first.socket, 'close');
-  const canceled = await call('command', null, token);
-  assert.equal(canceled.status, 200, 'the paired phone can receive cancellation while the game reconnects');
-  assert.equal(canceled.body.command.kind, 'cancel');
-  assert.equal(canceled.body.command.requestId, requestId);
+  const retained = await call('command', null, token);
+  assert.equal(retained.status, 200, 'the paired phone remains linked while the game reconnects');
+  assert.equal(retained.body.command, null);
   assert.equal((await call('capture', { ...first.auth, kind: 'photo', questId: 'touchGrass' })).status, 401);
   assert.equal((await call('status', first.auth)).status, 401);
   assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 409);
@@ -103,10 +104,12 @@ test('same authenticated player reconnect retains the camera binding but erases 
   assert.equal(resumed.playerId, first.playerId);
   const resumedStatus = (await call('status', resumed.auth)).body;
   assert.equal(resumedStatus.paired, true); assert.equal(resumedStatus.connected, true);
-  assert.equal(resumedStatus.requestId, null); assert.equal(resumedStatus.status, 'idle');
+  assert.equal(resumedStatus.requestId, requestId); assert.equal(resumedStatus.status, 'ready');
+  assert.equal(resumedStatus.photoDataUrl, IMAGE); assert.equal(resumedStatus.questId, 'touchGrass');
+  assert.equal(resumedStatus.kind, 'photo'); assert.equal(typeof resumedStatus.captureAt, 'number');
   assert.equal(resumedStatus.cameraReady, false, 'reconnect requires a fresh camera health report');
   assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 409,
-    'an old preview cannot reappear after reconnect');
+    'a completed request cannot replace the retained review after reconnect');
   assert.equal((await call('heartbeat', READY, token)).status, 200);
   const next = await call('capture', { ...resumed.auth, kind: 'photo', questId: 'touchGrass' });
   assert.equal(next.status, 200);
@@ -114,7 +117,7 @@ test('same authenticated player reconnect retains the camera binding but erases 
   assert.equal((await call('result', { requestId: next.body.requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 200);
 });
 
-test('a result upload spanning disconnect and reconnect cannot restore canceled evidence', async t => {
+test('a result upload spanning display suspension and same-player reconnect completes the authorized request', async t => {
   const { app, origin, join, call, pair } = await setup(t);
   const first = await join();
   const token = await pair(first.auth);
@@ -137,12 +140,12 @@ test('a result upload spanning disconnect and reconnect cannot restore canceled 
   first.socket.close(); await once(first.socket, 'close');
   const resumed = await join({ type: 'join', ...first.auth, name: 'Reconnected' });
   upload.end(body.slice(20));
-  assert.equal((await finished).status, 409);
+  assert.equal((await finished).status, 200);
   const status = await call('status', resumed.auth);
   assert.equal(status.body.paired, true);
-  assert.equal(status.body.status, 'idle');
-  assert.equal(status.body.photoDataUrl, undefined);
-  assert.equal(status.body.requestId, null);
+  assert.equal(status.body.status, 'ready');
+  assert.equal(status.body.photoDataUrl, IMAGE);
+  assert.equal(status.body.requestId, requestId);
 });
 
 test('offline polling never extends the bounded camera reconnect grace', async t => {
@@ -203,7 +206,7 @@ test('capture waits for a recent camera poll and never routes another player’s
   const command = { id: request.body.requestId, kind: 'photo', questId: 'touchGrass' };
   assert.deepEqual((await call('command', null, token)).body.command, command);
   assert.deepEqual((await call('command', null, token)).body.command, command, 'polling does not lose uncompleted work');
-  assert.deepEqual((await call('status', b.auth)).body, { paired: false, connected: false, requestId: null, status: 'idle', cameraReady: false, cameraState: 'idle' });
+  assert.deepEqual((await call('status', b.auth)).body, { paired: false, connected: false, requestId: null, status: 'idle', cameraReady: false, captureAvailable: false, cameraState: 'idle' });
   assert.equal((await call('capture', { ...b.auth, kind: 'photo', questId: 'touchGrass' })).status, 409);
   await call('discard', a.auth);
   advance(6_000);
@@ -221,10 +224,13 @@ test('photo completion exposes private review data only, and discard clears it',
   assert.equal((await call('result', result, token)).status, 200);
   assert.equal(verifications, 0, 'capture must not submit evidence for AI verification');
   assert.deepEqual((await call('command', null, token)).body, { command: null });
-  assert.deepEqual((await call('status', auth)).body, { paired: true, connected: true, requestId, status: 'ready', photoDataUrl: IMAGE, ...READY });
+  const ready = (await call('status', auth)).body;
+  assert.deepEqual(ready, { paired: true, connected: true, requestId, status: 'ready', photoDataUrl: IMAGE,
+    questId: 'touchGrass', kind: 'photo', captureAt: ready.captureAt, ...READY_STATUS });
+  assert.equal(typeof ready.captureAt, 'number');
   assert.equal((await call('result', result, token)).status, 409, 'duplicate results cannot replace reviewed evidence');
   await call('discard', auth);
-  assert.deepEqual((await call('status', auth)).body, { paired: true, connected: true, requestId: null, status: 'idle', ...READY });
+  assert.deepEqual((await call('status', auth)).body, { paired: true, connected: true, requestId: null, status: 'idle', ...READY_STATUS });
   const released = (await call('command', null, token)).body.command;
   assert.equal(released.kind, 'cancel'); assert.equal(released.requestId, requestId);
   assert.notEqual(released.id, requestId, 'discard also clears the completed preview on the native phone');
@@ -270,7 +276,7 @@ test('capture timeout cancels work, preview expiry clears images, and idle sessi
   const { auth } = await join();
   const token = await pair(auth);
   const initial = await call('capture', { ...auth, kind: 'photo', questId: 'touchGrass' });
-  advance(30_000);
+  advance(60_000);
   assert.equal((await call('status', auth)).body.status, 'error');
   assert.equal((await call('command', null, token)).body.command.kind, 'cancel');
   assert.equal((await call('result', { requestId: initial.body.requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 409);
@@ -473,6 +479,7 @@ test('cancel, camera errors, disconnect, and re-pair erase live frames and rejec
   assert.equal((await call('progress', { ...preview, sequence: 2 }, token)).status, 409);
   player = await join({ type: 'join', ...player.auth, name: 'Reconnected preview' });
   assert.equal((await call('status', player.auth)).body.previewDataUrl, undefined);
+  await call('discard', player.auth);
   preview = await start();
   const oldToken = token; token = await pair(player.auth);
   assert.equal((await call('status', player.auth)).body.previewDataUrl, undefined);
@@ -533,4 +540,149 @@ test('live frames and completed evidence share the total media memory budget', a
   assert.equal((await call('result', result, bToken)).status, 503);
   await call('discard', a.auth);
   assert.equal((await call('result', result, bToken)).status, 200);
+});
+
+test('on-demand capture requires an explicit fresh native capability and rejects unavailable camera states', async t => {
+  const { join, call, pair, advance } = await setup(t);
+  const { auth } = await join();
+  const token = await pair(auth, false);
+  const capture = { ...auth, kind: 'clip', questId: 'dapHandshake' };
+  const idle = { cameraReady: false, cameraState: 'idle' };
+  await call('heartbeat', idle, token);
+  assert.equal((await call('status', auth)).body.captureAvailable, false, 'old idle native apps cannot claim on-demand support');
+  assert.equal((await call('capture', capture)).status, 409);
+  assert.equal((await call('heartbeat', { ...idle, onDemandCapture: 'yes' }, token)).status, 400);
+  await call('heartbeat', { ...idle, onDemandCapture: true }, token);
+  const available = (await call('status', auth)).body;
+  assert.equal(available.cameraReady, false); assert.equal(available.captureAvailable, true);
+  const requested = await call('capture', capture);
+  assert.equal(requested.status, 200);
+  assert.equal((await call('command', null, token)).body.command.id, requested.body.requestId);
+  await call('discard', auth);
+  for (const cameraState of ['permission', 'paused', 'error']) {
+    advance(10_000); await call('command', null, token);
+    await call('heartbeat', { cameraReady: false, cameraState, onDemandCapture: true }, token);
+    assert.equal((await call('status', auth)).body.captureAvailable, false);
+    assert.equal((await call('capture', capture)).status, 409);
+  }
+  advance(10_000); await call('command', null, token);
+  await call('heartbeat', { cameraReady: false, cameraState: 'starting', onDemandCapture: true }, token);
+  assert.equal((await call('capture', capture)).status, 200, 'an opted-in app can finish bounded startup for a pending command');
+});
+
+test('an authorized clip can finish while display suspension exceeds normal player rejoin grace', async t => {
+  const { join, call, pair, advance } = await setup(t, { tickMs: 5, rejoinGraceMs: 25 });
+  const player = await join(), other = await join();
+  const token = await pair(player.auth);
+  const requestId = (await call('capture', { ...player.auth, kind: 'clip', questId: 'dapHandshake' })).body.requestId;
+  player.socket.close(); await once(player.socket, 'close');
+  assert.equal((await call('status', player.auth)).status, 401);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal((await call('command', null, token)).body.command.id, requestId,
+    'the same player and explicit command survive normal room eviction while capture is pending');
+  advance(55_000);
+  await call('heartbeat', { cameraReady: false, cameraState: 'idle', onDemandCapture: true }, token);
+  const evidence = { requestId, status: 'ready', frames: [IMAGE, IMAGE, IMAGE], durationSeconds: 6 };
+  assert.equal((await call('result', evidence, token)).status, 200, 'camera release before upload and display suspension must not cancel explicit evidence');
+  assert.equal((await call('status', other.auth)).body.frames, undefined);
+  assert.equal((await call('capture', { ...player.auth, kind: 'photo', questId: 'touchGrass' })).status, 401);
+  const resumed = await join({ type: 'join', ...player.auth, name: 'Returned from camera' });
+  assert.equal(resumed.playerId, player.playerId);
+  const status = (await call('status', resumed.auth)).body;
+  assert.equal(status.status, 'ready'); assert.equal(status.requestId, requestId);
+  assert.equal(status.questId, 'dapHandshake'); assert.equal(status.kind, 'clip');
+  assert.deepEqual(status.frames, evidence.frames); assert.equal(status.durationSeconds, 6);
+});
+
+test('pending-camera retention and ready evidence expire without extending ordinary player reservations', async t => {
+  const { join, call, pair, advance } = await setup(t, {
+    tickMs: 5, rejoinGraceMs: 25, glassesCamera: { disconnectGraceMs: 1_000 },
+  });
+  const player = await join();
+  await join();
+  const token = await pair(player.auth);
+  const requestId = (await call('capture', { ...player.auth, kind: 'photo', questId: 'touchGrass' })).body.requestId;
+  player.socket.close(); await once(player.socket, 'close');
+  assert.equal((await call('status', player.auth)).status, 401);
+  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 200);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  advance(999);
+  assert.equal((await call('command', null, token)).status, 200);
+  await call('heartbeat', READY, token);
+  advance(1);
+  assert.equal((await call('command', null, token)).status, 401, 'phone traffic cannot extend the original disconnect deadline');
+  await new Promise(resolve => setTimeout(resolve, 15));
+  const replacement = await join({ type: 'lobby', playerToken: player.auth.playerToken, name: 'Returned too late' });
+  assert.notEqual(replacement.playerId, player.playerId);
+  const status = (await call('status', replacement.auth)).body;
+  assert.equal(status.paired, false); assert.equal(status.photoDataUrl, undefined);
+  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 401);
+});
+
+test('explicit cancel after display recovery still prevents delayed evidence from returning', async t => {
+  const { join, call, pair } = await setup(t);
+  const player = await join();
+  const token = await pair(player.auth);
+  const requestId = (await call('capture', { ...player.auth, kind: 'photo', questId: 'touchGrass' })).body.requestId;
+  player.socket.close(); await once(player.socket, 'close');
+  const resumed = await join({ type: 'join', ...player.auth, name: 'Cancel recording' });
+  assert.equal((await call('status', resumed.auth)).body.requestId, requestId);
+  await call('discard', resumed.auth);
+  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 409);
+  assert.equal((await call('status', resumed.auth)).body.photoDataUrl, undefined);
+});
+
+test('same-token reload preserves only a current capture or ready review while the old socket is still open', async t => {
+  const { join, call, pair } = await setup(t);
+  const original = await join();
+  const token = await pair(original.auth);
+  const requestId = (await call('capture', { ...original.auth, kind: 'photo', questId: 'touchGrass' })).body.requestId;
+  assert.equal(original.socket.readyState, WebSocket.OPEN);
+  const originalClosed = once(original.socket, 'close');
+  const capturing = await join({ type: 'join', ...original.auth, name: 'Reloaded while capturing' });
+  assert.equal((await originalClosed)[0], 4001);
+  assert.equal(capturing.playerId, original.playerId);
+  assert.equal((await call('command', null, token)).body.command.id, requestId);
+  assert.equal((await call('status', capturing.auth)).body.status, 'capturing');
+  assert.equal((await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token)).status, 200);
+
+  const captureSocketClosed = once(capturing.socket, 'close');
+  const reviewing = await join({ type: 'join', ...original.auth, name: 'Reloaded before review' });
+  assert.equal((await captureSocketClosed)[0], 4001);
+  assert.equal(reviewing.playerId, original.playerId);
+  const recovered = (await call('status', reviewing.auth)).body;
+  assert.equal(recovered.requestId, requestId); assert.equal(recovered.status, 'ready');
+  assert.equal(recovered.photoDataUrl, IMAGE); assert.equal(recovered.questId, 'touchGrass');
+
+  await call('discard', reviewing.auth);
+  const reviewSocketClosed = once(reviewing.socket, 'close');
+  const idle = await join({ type: 'join', ...original.auth, name: 'Idle replacement' });
+  assert.equal((await reviewSocketClosed)[0], 4001);
+  assert.equal((await call('status', idle.auth)).body.paired, false,
+    'a previous capture must not permanently authorize active replacement of an idle binding');
+  assert.equal((await call('command', null, token)).status, 401);
+});
+
+test('active replacement never preserves expired captures or expired ready evidence', async t => {
+  const { join, call, pair, advance } = await setup(t);
+  let player = await join();
+  let token = await pair(player.auth);
+  await call('capture', { ...player.auth, kind: 'photo', questId: 'touchGrass' });
+  advance(60_000);
+  let replaced = once(player.socket, 'close');
+  player = await join({ type: 'join', ...player.auth, name: 'Expired capture reload' });
+  await replaced;
+  assert.equal((await call('command', null, token)).status, 401);
+  assert.equal((await call('status', player.auth)).body.paired, false);
+
+  token = await pair(player.auth);
+  const requestId = (await call('capture', { ...player.auth, kind: 'photo', questId: 'touchGrass' })).body.requestId;
+  await call('result', { requestId, status: 'ready', photoDataUrl: IMAGE }, token);
+  advance(5 * 60_000);
+  replaced = once(player.socket, 'close');
+  player = await join({ type: 'join', ...player.auth, name: 'Expired review reload' });
+  await replaced;
+  assert.equal((await call('command', null, token)).status, 401);
+  const status = (await call('status', player.auth)).body;
+  assert.equal(status.paired, false); assert.equal(status.photoDataUrl, undefined);
 });

@@ -48,6 +48,59 @@ describe('GlassesCamera session and capture ownership', () => {
     expect(JSON.parse(fetcher.mock.calls[2]![1].body).questId).toBe('touchGrass');
   });
 
+  it('recovers a server-held clip after the display page is recreated, then waits for explicit submission', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ ...ready('saved-clip'), questId: 'meetFriend', kind: 'clip', frames: ['data:image/jpeg;base64,/9j/'], durationSeconds: 6 }))
+      .mockResolvedValueOnce(json({ verified: true, reason: 'Wave visible.' }));
+    vi.stubGlobal('fetch', fetcher);
+    const reopened = new GlassesCamera(() => 'wss://game.example/play', member);
+    const evidence = await reopened.status();
+    expect(evidence.questId).toBe('meetFriend');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await expect(reopened.submit('touchGrass', evidence)).rejects.toThrow('different quest');
+    await expect(reopened.submit('meetFriend', evidence)).resolves.toMatchObject({ verified: true });
+  });
+
+  it('does not recover an unknown quest or replace a newer locally requested capture', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ ...ready('invalid'), questId: 'unknownQuest' }))
+      .mockResolvedValueOnce(json({ requestId: 'new' }))
+      .mockResolvedValueOnce(json({ ...ready('old'), questId: 'touchGrass' }));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    expect((await client.status()).questId).toBeUndefined();
+    await client.capture('clip', 'meetFriend');
+    const old = await client.status();
+    expect(old.questId).toBeUndefined();
+    await expect(client.submit('touchGrass', old)).rejects.toThrow('different quest');
+  });
+
+  it('recovers a replacement accepted by the server when its HTTP response was lost', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'old' }))
+      .mockRejectedValueOnce(new TypeError('Network interrupted'))
+      .mockResolvedValueOnce(json({ ...ready('replacement'), questId: 'meetFriend', kind: 'clip' }))
+      .mockResolvedValueOnce(json({ verified: true }));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    await expect(client.capture('clip', 'meetFriend')).rejects.toThrow('Network interrupted');
+    const recovered = await client.status();
+    expect(recovered.questId).toBe('meetFriend');
+    await expect(client.submit('meetFriend', recovered)).resolves.toMatchObject({ verified: true });
+  });
+
+  it('cannot restore a status response from before an explicit discard', async () => {
+    let finishStatus!: (value: Response) => void;
+    const fetcher = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finishStatus = resolve; }))
+      .mockResolvedValueOnce(json({ ok: true }));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const stale = client.status();
+    await client.discard();
+    finishStatus(json({ ...ready('discarded'), questId: 'touchGrass' }));
+    const evidence = await stale;
+    expect(evidence.questId).toBeUndefined();
+    await expect(client.submit('touchGrass', evidence)).rejects.toThrow('different quest');
+  });
+
   it('explicitly replaces an existing cached code when the phone needs pairing recovery', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(json({ code: 'ABCD2345', expiresAt: Date.now() + 60_000 }))
       .mockResolvedValueOnce(json({ code: 'WXYZ6789', expiresAt: Date.now() + 60_000 }));

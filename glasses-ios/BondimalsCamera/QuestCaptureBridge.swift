@@ -28,9 +28,11 @@ final class QuestCaptureBridge: ObservableObject {
     @Published private(set) var preview: UIImage?
     @Published private(set) var cameraReady = false
     @Published private(set) var cameraState: QuestCameraState = .idle
-    @Published private(set) var cameraMessage = "Start the glasses camera to take a quest photo or clip."
+    @Published private(set) var cameraMessage = "The camera opens only for a requested quest photo or clip."
 
     var requestPhoto: () -> Bool = { false }
+    var prepareCamera: (String) async throws -> Void = { _ in }
+    var finishCamera: (String, Bool) async -> Bool = { _, _ in true }
     var onPaired: () -> Void = {}
     var onUnpaired: () -> Void = {}
     private var endpoint: URL?
@@ -102,7 +104,7 @@ final class QuestCaptureBridge: ObservableObject {
                     if let endpoint = self.endpoint { QuestCameraCredentials.save(origin: endpoint, token: token) }
                     self.paired = true
                     self.pairingCode = ""
-                    self.status = "Game connected. Starting the glasses camera…"
+                    self.status = "Game connected. Request a photo or clip on your glasses when ready."
                     self.startPolling()
                     self.onPaired()
                 } catch {
@@ -127,6 +129,7 @@ final class QuestCaptureBridge: ObservableObject {
 
     func disconnect(_ message: String = "Camera unpaired. Make a new code in the game to reconnect.") {
         onUnpaired()
+        if let request = activeRequest { Task { _ = await finishCamera(request, false) } }
         QuestCameraCredentials.clear()
         generation += 1
         connectionTask?.cancel(); connectionTask = nil
@@ -181,7 +184,7 @@ final class QuestCaptureBridge: ObservableObject {
 
     private func heartbeat() -> [String: Any] {
         refreshReadiness()
-        return ["cameraReady": cameraReady, "cameraState": cameraState.rawValue, "message": cameraMessage]
+        return ["cameraReady": cameraReady, "cameraState": cameraState.rawValue, "message": cameraMessage, "onDemandCapture": true]
     }
 
     func receivePhoto(_ data: Data) {
@@ -193,17 +196,18 @@ final class QuestCaptureBridge: ObservableObject {
         if activeRequest == request, foreground, cameraRunning { photoData = data }
     }
 
-    func cameraStopped(_ message: String, state: QuestCameraState = .paused) {
+    func cameraStopped(_ message: String, state: QuestCameraState = .paused, preservePreview: Bool = false) {
         cameraGeneration += 1
-        cameraRunning = false; latestFrame = nil; preview = nil
+        cameraRunning = false; latestFrame = nil
+        if !preservePreview { preview = nil }
         stopProgress()
         setCameraState(state, message: message)
-        if capturing { status = message }
+        if capturing, !preservePreview { status = message }
         // The capture loop observes this and reports an error to the game.
     }
 
-    func cameraSessionReleased(state: QuestCameraState = .idle, message: String = "Glasses camera stopped. Start it again before capturing a quest.") {
-        cameraStopped(message, state: state)
+    func cameraSessionReleased(state: QuestCameraState = .idle, message: String = "The camera is closed until the next requested photo or clip.", preservePreview: Bool = false) {
+        cameraStopped(message, state: state, preservePreview: preservePreview)
         outstandingPhotoRequest = nil; photoData = nil
     }
 
@@ -223,7 +227,7 @@ final class QuestCaptureBridge: ObservableObject {
                     guard generation == self.generation, !Task.isCancelled else { return }
                     if self.restoring {
                         self.restoring = false
-                        self.status = "Game connection restored. Starting the glasses camera…"
+                        self.status = "Game connection restored. Camera stays closed until your next capture."
                         self.onPaired()
                     }
                     if self.pollFailures > 0, !self.capturing { self.status = "Game camera connection restored." }
@@ -252,6 +256,7 @@ final class QuestCaptureBridge: ObservableObject {
         if kind == "cancel" {
             let target = command["requestId"] as? String
             if target == nil || target == activeRequest || target == previewRequest {
+                if let request = activeRequest { Task { _ = await finishCamera(request, false) } }
                 captureTask?.cancel(); captureTask = nil
                 stopProgress()
                 activeRequest = nil; capturing = false; preview = nil; previewRequest = nil; photoData = nil
@@ -263,18 +268,24 @@ final class QuestCaptureBridge: ObservableObject {
         // the cancel command. The server's newest capture supersedes any local
         // work; do not swallow the new id while the canceled task is finishing.
         captureTask?.cancel(); captureTask = nil
+        if let previous = activeRequest { Task { _ = await finishCamera(previous, false) } }
         stopProgress()
         activeRequest = id; previewRequest = id; capturing = true; preview = nil; photoData = nil
         let generation = self.generation
         captureTask = Task { [weak self] in
             guard let self else { return }
             defer {
+                Task { _ = await self.finishCamera(id, false) }
                 if self.activeRequest == id {
                     self.stopProgress()
                     self.activeRequest = nil; self.capturing = false; self.captureTask = nil
                 }
             }
             do {
+                self.status = "Opening the glasses camera for your quest…"
+                try await self.prepareCamera(id)
+                try Task.checkCancellation()
+                guard generation == self.generation, self.activeRequest == id else { return }
                 var evidence = kind == "photo" ? try await self.capturePhoto() : try await self.captureClip()
                 try Task.checkCancellation()
                 guard generation == self.generation, self.activeRequest == id else { return }
@@ -282,13 +293,19 @@ final class QuestCaptureBridge: ObservableObject {
                     throw BridgeError.message("The camera was interrupted. Keep Kith Camera open and retry.")
                 }
                 self.stopProgress()
+                // Close DAT before upload so the glasses can leave camera mode.
+                // The encoded evidence and phone review thumbnail stay in memory.
+                let released = await self.finishCamera(id, true)
+                try Task.checkCancellation()
+                guard generation == self.generation, self.activeRequest == id else { return }
                 evidence["requestId"] = id
                 evidence["status"] = "ready"
-                self.status = "Sending glasses capture to your game…"
+                self.status = "Captured. Sending the result while the glasses camera closes…"
                 _ = try await self.api("/glasses/result", body: evidence)
                 guard generation == self.generation, self.activeRequest == id, !Task.isCancelled else { return }
-                self.status = "Capture sent. The glasses game shows your quest grading or review."
+                self.status = released ? "Capture sent. Reopen Kith on your glasses to review it, then choose Submit to Muse." : "Capture sent. Close camera mode in Meta AI, then reopen Kith on your glasses to review and Submit to Muse."
             } catch {
+                _ = await self.finishCamera(id, false)
                 guard generation == self.generation, self.activeRequest == id, !Task.isCancelled else { return }
                 self.stopProgress()
                 self.preview = nil
@@ -479,8 +496,8 @@ struct QuestCapturePanel: View {
                 else { Button(quests.connecting ? "Pairing…" : "Pair with glasses game") { quests.pair() }.disabled(quests.connecting) }
                 Text(quests.status).font(.callout).accessibilityIdentifier("quest-camera-status")
                 if let image = quests.preview { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 200).accessibilityLabel("Latest quest capture from the glasses camera") }
-                Text("Pairing starts the glasses camera and any required Meta permission prompt. Keep this app open. Photo & grade or Clip & grade shares your requested capture with Muse Spark; the game shows a live view while recording a clip. Clips contain no audio.").font(.footnote)
-                Text("Camera and glasses Web App running together still require a test on your glasses firmware.").font(.footnote).foregroundStyle(.secondary)
+                Text("Pairing keeps the camera closed. Request a photo or clip from Kith on your glasses, and keep this phone app open for any Meta permission prompt. The camera closes after capture; reopen Kith to review and choose Submit to Muse. Clips contain no audio.").font(.footnote)
+                Text("Your glasses may leave the game during camera capture. Returning to the game is manual; the app does not claim to resume the display automatically.").font(.footnote).foregroundStyle(.secondary)
             }
         }
     }

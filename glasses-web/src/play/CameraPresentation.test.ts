@@ -15,6 +15,11 @@ describe('camera readiness and scoped recording feedback', () => {
     expect(feedback.title).toBe('Camera permission needed');
     expect(feedback.message).toBe('Allow camera in Meta AI.');
   });
+  it('permits an explicitly supported on-demand camera without claiming it is streaming', () => {
+    expect(cameraAvailability({ ...linked, captureAvailable: true, cameraReady: false, cameraState: 'idle' })).toMatchObject({ ready: true, title: 'Ready to capture' });
+    expect(cameraAvailability({ ...linked, connected: false, captureAvailable: true }).ready).toBe(false);
+    expect(cameraAvailability({ ...linked, cameraState: 'idle' }).ready).toBe(false);
+  });
   it('counts down only from valid frames for the active recording', () => {
     const state: CaptureStatus = { ...linked, status: 'capturing', requestId: 'recording', sequence: 3, elapsedSeconds: 2.2, previewDataUrl: 'data:image/jpeg;base64,/9j/' };
     expect(recordingPreview(state, 'recording')).toMatchObject({ remaining: 4, sequence: 3 });

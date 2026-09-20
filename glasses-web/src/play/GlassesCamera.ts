@@ -7,11 +7,15 @@ export interface CaptureStatus {
   connected: boolean;
   /** A fresh heartbeat reports actual glasses frames, not just a paired phone. */
   cameraReady?: boolean;
+  /** Fresh phone connection can start an on-demand capture without holding the display. */
+  captureAvailable?: boolean;
   cameraState?: 'ready' | 'starting' | 'permission' | 'paused' | 'error' | 'idle';
   cameraMessage?: string;
   status: 'idle' | 'capturing' | 'ready' | 'error';
   requestId: string | null;
   questId?: EvidenceQuestId;
+  kind?: 'photo' | 'clip';
+  captureAt?: number;
   error?: string;
   photoDataUrl?: string;
   frames?: string[];
@@ -29,6 +33,7 @@ export class GlassesCamera {
   private pairing: { session: string; value: Pairing } | null = null;
   private captures = new Map<string, { session: string; questId: EvidenceQuestId }>();
   private generation = 0;
+  private captureRevision = 0;
 
   constructor(private readonly endpoint: () => string, private readonly membership: () => Membership | null) {}
 
@@ -37,7 +42,7 @@ export class GlassesCamera {
     return member ? `${this.generation}|${this.endpoint()}|${member.roomCode}|${member.playerToken}` : '';
   }
 
-  reset(): void { this.generation++; this.pairing = null; this.captures.clear(); this.pending = null; }
+  reset(): void { this.generation++; this.captureRevision++; this.pairing = null; this.captures.clear(); this.pending = null; }
 
   get origin(): string {
     const url = new URL(this.endpoint());
@@ -77,6 +82,7 @@ export class GlassesCamera {
   pair(force = false): Promise<Pairing> {
     if (!force && this.pairing?.session === this.sessionKey && this.pairing.value.expiresAt > Date.now()) return Promise.resolve(this.pairing.value);
     return this.mutate('pair', async () => {
+      this.captureRevision++; this.captures.clear();
       const value = await this.request<Pairing>('/glasses/pair');
       if (!/^[A-HJ-NP-Z2-9]{8}$/.test(value.code) || !Number.isFinite(value.expiresAt)) throw new Error('The camera pairing code was invalid.');
       this.pairing = { session: this.sessionKey, value };
@@ -85,14 +91,24 @@ export class GlassesCamera {
     });
   }
   async status(): Promise<CaptureStatus> {
+    const revision = this.captureRevision;
     const state = await this.request<CaptureStatus>('/glasses/status');
     // A claimed code is one-use; do not show it again after a later disconnect.
     if (state.paired) this.pairing = null;
+    if (revision !== this.captureRevision) return { ...state, questId: undefined };
+    // A display interruption can destroy the page. Recover only the authenticated
+    // server's current request, never a locally replaced request or another quest.
+    if (state.requestId && state.questId && ['touchGrass', 'meetFriend', 'dapHandshake', 'squadCircle'].includes(state.questId)
+      && ['capturing', 'ready', 'error'].includes(state.status) && this.captures.size === 0 && !this.pending) {
+      this.captures.set(state.requestId, { session: this.sessionKey, questId: state.questId });
+    }
     const known = state.requestId ? this.captures.get(state.requestId) : null;
     return { ...state, questId: known?.session === this.sessionKey ? known.questId : undefined };
   }
   capture(kind: 'photo' | 'clip', questId: EvidenceQuestId): Promise<{ requestId: string }> {
     return this.mutate(`capture:${kind}:${questId}`, async () => {
+      // A lost HTTP response must not leave an older request blocking recovery.
+      this.captureRevision++; this.captures.clear();
       const result = await this.request<{ requestId: string }>('/glasses/capture', { kind, questId });
       if (!result.requestId) throw new Error('The camera did not accept this capture. Try again.');
       this.captures.clear();
@@ -102,6 +118,7 @@ export class GlassesCamera {
   }
   discard(): Promise<unknown> {
     return this.mutate('discard', async () => {
+      this.captureRevision++; this.captures.clear();
       const result = await this.request('/glasses/discard');
       this.captures.clear();
       return result;

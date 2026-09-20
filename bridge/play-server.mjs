@@ -435,9 +435,11 @@ export function createPlayServer(options = {}) {
           }
           return fail(ws, 'invalid_token', 'This saved session has expired or belongs to a different room.');
         }
-        // A dropped socket can reclaim its camera binding; replacing an active
-        // connection is a new controlling session and revokes that authority.
-        const oldSocket = closePlayer(player, player.socket?.readyState !== WebSocket.OPEN);
+        // A display reload can arrive before its old TCP socket closes. The
+        // same token may recover only its current explicit capture/review;
+        // an ordinary active replacement still revokes an idle camera binding.
+        const oldSocket = closePlayer(player, player.socket?.readyState !== WebSocket.OPEN
+          || glassesCamera.hasRecoverableCapture(player));
         if (oldSocket) oldSocket.close(4001, 'Session resumed on another connection');
         player.name = message.name;
         room.notice = room.encounter ? `${player.name} joined the meetup.` : `${player.name} is back!`;
@@ -610,7 +612,10 @@ export function createPlayServer(options = {}) {
 
   function reapPlayers(room, now) {
     for (const player of room.players.values()) {
-      if (!player.socket && player.disconnectedAt !== null && now - player.disconnectedAt >= rejoinGraceMs) {
+      // DAT recording can suspend the display. Only an already-authorized
+      // capture/review may extend this exact player's normal rejoin window.
+      if (!player.socket && player.disconnectedAt !== null && now - player.disconnectedAt >= rejoinGraceMs
+        && !glassesCamera.hasRetainedCapture(player)) {
         glassesCamera.revoke(player);
         room.players.delete(player.id);
         room.squadReady.delete(player.id);

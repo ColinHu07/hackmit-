@@ -19,7 +19,7 @@ const cleanMessage = value => typeof value === 'string'
 export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () => true, writeJson, readJson, cors, now = Date.now,
   pairTtlMs = 5 * 60_000, idleTtlMs = 60 * 60_000, evidenceTtlMs = 5 * 60_000,
   disconnectGraceMs = 2 * 60_000,
-  cameraFreshMs = 5_000, captureTimeoutMs = 30_000, maxSessions = 1000,
+  cameraFreshMs = 5_000, captureTimeoutMs = 60_000, maxSessions = 1000,
   maxEvidenceBytes = 64 * 1024 * 1024, maxConcurrentUploads = 4,
   previewTtlMs = 3_000, maxProgressBytes = 8 * 1024 * 1024,
 } = {}) {
@@ -90,9 +90,10 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     if (!session.cameraToken) { revoke(owner); return; }
     if (session.disconnectedAt !== null) return;
     session.disconnectedAt = at;
-    cancel(session); clearEvidence(session);
-    session.status = 'idle'; session.requestId = null; session.error = null;
-    session.captureAt = null; session.kind = null; session.questId = null;
+    // DAT camera capture can suspend the display WebApp. Keep only the already
+    // authorized request/review for this exact owner during the bounded grace;
+    // no live frames are collected while that owner is absent.
+    clearProgress(session);
     session.lastPoll = null;
     session.lastHeartbeat = null; session.cameraReady = false; session.cameraState = 'idle'; session.cameraMessage = '';
   }
@@ -102,9 +103,23 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     if (at - session.disconnectedAt >= disconnectGraceMs
       || resolveOwner(session.roomCode, session.playerToken) !== owner) { revoke(owner); return; }
     if (!isOwnerConnected(owner)) return;
-    // Retain only the claimed binding. Evidence/requests were erased at detach.
+    // The same authenticated owner can recover its pending request or review.
     session.disconnectedAt = null;
     session.lastActivity = at;
+  }
+  function hasRecoverableCapture(owner, at = now()) {
+    const session = owners.get(owner);
+    if (!session?.requestId
+      || (session.disconnectedAt !== null && at - session.disconnectedAt >= disconnectGraceMs)
+      || resolveOwner(session.roomCode, session.playerToken) !== owner) return false;
+    return (session.status === 'capturing' && at - session.captureAt < captureTimeoutMs)
+      || (session.status === 'ready' && session.evidenceAt !== null && at - session.evidenceAt < evidenceTtlMs);
+  }
+  function hasRetainedCapture(owner, at = now()) {
+    return owners.get(owner)?.disconnectedAt != null && hasRecoverableCapture(owner, at);
+  }
+  function canFinishCapture(session, at) {
+    return isOwnerConnected(session.owner) || hasRetainedCapture(session.owner, at);
   }
   function sweep(at = now()) {
     for (const [owner, session] of owners) {
@@ -167,13 +182,17 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     return Boolean(session?.cameraToken && session.lastPoll !== null && at - session.lastPoll <= cameraFreshMs);
   }
   function cameraHealth(session, at) {
-    if (!session?.cameraToken) return { cameraReady: false, cameraState: 'idle' };
-    if (session.lastHeartbeat === null) return { cameraReady: false, cameraState: 'idle',
+    if (!session?.cameraToken) return { cameraReady: false, captureAvailable: false, cameraState: 'idle' };
+    if (session.lastHeartbeat === null) return { cameraReady: false, captureAvailable: false, cameraState: 'idle',
       cameraMessage: 'Open the updated Kith Camera app and start the glasses camera.' };
     if (at - session.lastHeartbeat > cameraFreshMs || !connected(session, at)) {
-      return { cameraReady: false, cameraState: 'paused', cameraMessage: 'Keep Kith Camera open and resume the glasses camera.' };
+      return { cameraReady: false, captureAvailable: false, cameraState: 'paused', cameraMessage: 'Keep Kith Camera open and resume the glasses camera.' };
     }
-    return { cameraReady: session.cameraReady && isOwnerConnected(session.owner), cameraState: session.cameraState,
+    const ownerConnected = isOwnerConnected(session.owner);
+    return { cameraReady: session.cameraReady && ownerConnected,
+      captureAvailable: ownerConnected && (session.cameraReady
+        || (session.onDemandCapture && ['idle', 'starting'].includes(session.cameraState))),
+      cameraState: session.cameraState,
       ...(session.cameraMessage ? { cameraMessage: session.cameraMessage } : {}),
     };
   }
@@ -181,6 +200,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     if (!session) return { paired: false, connected: false, requestId: null, status: 'idle', ...cameraHealth(session, at) };
     return { paired: Boolean(session.cameraToken), connected: connected(session, at),
       requestId: session.requestId, status: session.status,
+      ...(session.requestId ? { questId: session.questId, kind: session.kind, captureAt: session.captureAt } : {}),
       ...cameraHealth(session, at), ...(session.progress ?? {}),
       ...(session.error ? { error: session.error } : {}), ...(session.evidence ?? {}),
     };
@@ -205,8 +225,9 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
         return writeJson(response, 200, { command: cameraSession.command });
       }
       if (path === '/glasses/result' || path === '/glasses/progress') {
-        if (!isOwnerConnected(cameraSession.owner) || cameraSession.disconnectedAt !== null) {
-          throw failure(409, 'The game is offline. This capture was canceled; reconnect before capturing again.');
+        if (path === '/glasses/progress' ? !isOwnerConnected(cameraSession.owner) || cameraSession.disconnectedAt !== null
+          : !canFinishCapture(cameraSession, now())) {
+          throw failure(409, 'This camera request is no longer active. Reconnect to the game before capturing again.');
         }
         if (uploading >= maxConcurrentUploads) throw failure(503, 'Camera uploads are busy. Please retry.');
         uploading++; uploadSlot = true;
@@ -221,13 +242,15 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
       }
       if (path === '/glasses/heartbeat') {
         if (typeof input?.cameraReady !== 'boolean' || !CAMERA_STATES.has(input.cameraState)
-          || input.cameraReady !== (input.cameraState === 'ready')) {
+          || input.cameraReady !== (input.cameraState === 'ready')
+          || (input.onDemandCapture !== undefined && typeof input.onDemandCapture !== 'boolean')) {
           throw failure(400, 'Report a valid glasses camera state.');
         }
         cameraSession.lastHeartbeat = at;
         cameraSession.cameraReady = input.cameraReady;
         cameraSession.cameraState = input.cameraState;
         cameraSession.cameraMessage = cleanMessage(input.message);
+        cameraSession.onDemandCapture = input.onDemandCapture === true;
         if (!input.cameraReady) clearProgress(cameraSession);
         return writeJson(response, 200, { ok: true });
       }
@@ -278,8 +301,8 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
       }
       if (path === '/glasses/result') {
         const session = cameraSession;
-        if (!isOwnerConnected(session.owner) || session.disconnectedAt !== null) {
-          throw failure(409, 'The game is offline. This capture was canceled; reconnect before capturing again.');
+        if (!canFinishCapture(session, at)) {
+          throw failure(409, 'This camera request expired while the game was away. Reconnect and capture again.');
         }
         if (session.status !== 'capturing' || input?.requestId !== session.requestId) {
           throw failure(409, 'This capture was canceled, completed or replaced.');
@@ -319,7 +342,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
         while (codes.has(code));
         const paired = { owner, roomCode: input.roomCode, playerToken: input.playerToken, code,
           expiresAt: at + pairTtlMs, cameraToken: null, lastActivity: at, lastPoll: null,
-          lastHeartbeat: null, cameraReady: false, cameraState: 'idle', cameraMessage: '',
+          lastHeartbeat: null, cameraReady: false, cameraState: 'idle', cameraMessage: '', onDemandCapture: false,
           disconnectedAt: null,
           status: 'idle', requestId: null, command: null, captureAt: null, kind: null, questId: null,
           evidence: null, evidenceBytes: 0, evidenceAt: null, error: null, quota: { remaining: 16, at },
@@ -340,7 +363,7 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
       if (path === '/glasses/capture') {
         if (!connected(session, at)) throw failure(409, 'Open the paired glasses camera app and keep it connected.');
         const health = cameraHealth(session, at);
-        if (!health.cameraReady) throw failure(409, health.cameraMessage || 'Start the live glasses camera in Kith Camera before recording.');
+        if (!health.captureAvailable) throw failure(409, health.cameraMessage || 'Open Kith Camera and enable camera capture before recording.');
         if (!['photo', 'clip'].includes(input.kind) || !Object.hasOwn(PHOTO_VERIFICATION_QUESTS, input.questId ?? '')) {
           throw failure(400, 'Choose a valid camera quest and capture type.');
         }
@@ -372,6 +395,8 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     revoke,
     disconnect,
     resume,
+    hasRetainedCapture,
+    hasRecoverableCapture,
     close() {
       closed = true; clearInterval(cleanup);
       for (const owner of owners.keys()) revoke(owner);

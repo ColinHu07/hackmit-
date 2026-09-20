@@ -8,7 +8,7 @@ import MWDATCamera
 final class CameraBridge: ObservableObject {
     let quests = QuestCaptureBridge()
     @Published var pairingLink = ""
-    @Published var status = "Register with Meta AI, then start the glasses camera."
+    @Published var status = "Connect your game. Quest captures open and close the glasses camera automatically."
     @Published var handStatus = "Source: glasses camera only"
     @Published var running = false
     @Published var rotation = 0
@@ -42,6 +42,9 @@ final class CameraBridge: ObservableObject {
     private var webTask: Task<Void, Never>?
     private var lastReadout = 0.0
     private var hasStreamed = false
+    private var questCameraRequestID: String?
+    private var pendingSessionRelease: Task<Bool, Never>?
+    private var releasingSession: DeviceSession?
 
     init() {
         let selector = AutoDeviceSelector(wearables: Wearables.shared)
@@ -74,6 +77,14 @@ final class CameraBridge: ObservableObject {
         quests.requestPhoto = { [weak self] in
             guard let self, self.running, let camera = self.camera, camera.stream.state == .streaming else { return false }
             return camera.stream.capturePhoto(format: .jpeg)
+        }
+        quests.prepareCamera = { [weak self] requestID in
+            guard let self else { throw BridgeError.message("The camera app is unavailable.") }
+            try await self.prepareQuestCamera(requestID)
+        }
+        quests.finishCamera = { [weak self] requestID, preservePreview in
+            guard let self else { return false }
+            return await self.finishQuestCamera(requestID, preservePreview: preservePreview)
         }
         quests.onUnpaired = { [weak self] in self?.questCameraStartRequested = false }
         quests.onPaired = { [weak self] in
@@ -160,6 +171,10 @@ final class CameraBridge: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = true
         quests.setForeground(true)
         quests.restoreConnection()
+        if quests.paired, !running, quests.cameraState == .paused,
+           releasingSession == nil || releasingSession?.state == .stopped {
+            updateCameraStatus(.idle, "Game connected. The camera opens only when you request a photo or clip.")
+        }
         continueQuestCameraSetup()
         writeDiagnostics()
     }
@@ -172,12 +187,12 @@ final class CameraBridge: ObservableObject {
         }
         if running { questCameraStartRequested = false; status = quests.cameraMessage; return }
         if wearables.registrationState == .registered {
-            setupEvent = "camera-start-requested"
+            setupEvent = "quest-camera-armed"
             questCameraStartRequested = false
-            start()
+            updateCameraStatus(.idle, "Game connected. The camera opens only when you request a photo or clip.")
             return
         }
-        updateCameraStatus(.permission, "Complete camera registration in Meta AI. Kith will start the glasses camera when you return.")
+        updateCameraStatus(.permission, "Complete camera registration in Meta AI. Then request a photo or clip from Kith on your glasses.")
         setupEvent = "meta-registration-required"
         guard setupRegistrationTask == nil, wearables.registrationState != .registering else { return }
         setupRegistrationTask = Task { [weak self] in
@@ -190,8 +205,51 @@ final class CameraBridge: ObservableObject {
             }
         }
     }
+    private func prepareQuestCamera(_ requestID: String) async throws {
+        if let previous = questCameraRequestID, previous != requestID {
+            _ = await finishQuestCamera(previous, preservePreview: false)
+        }
+        if let release = pendingSessionRelease {
+            _ = await release.value
+            if let releasingSession, releasingSession.state != .stopped {
+                throw BridgeError.message("Meta has not confirmed the previous camera session closed. Stop the camera in Meta AI and reopen Kith Camera.")
+            }
+        }
+        try Task.checkCancellation()
+        guard UIApplication.shared.applicationState == .active else {
+            throw BridgeError.message("Keep Kith Camera open on the phone while capturing a quest.")
+        }
+        guard wearables.registrationState == .registered else {
+            throw BridgeError.message("Complete registration in Meta AI on the phone, then request the capture again.")
+        }
+        questCameraRequestID = requestID
+        setupEvent = "quest-camera-start-requested"
+        start()
+        let deadline = ProcessInfo.processInfo.systemUptime + 20
+        while !quests.cameraReady {
+            try Task.checkCancellation()
+            guard questCameraRequestID == requestID else { throw CancellationError() }
+            guard running else { throw BridgeError.message(status) }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                throw BridgeError.message("The glasses camera did not become ready in time. Check the phone's Meta permission prompt and retry.")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+    private func finishQuestCamera(_ requestID: String, preservePreview: Bool) async -> Bool {
+        guard questCameraRequestID == requestID else { return await pendingSessionRelease?.value ?? true }
+        questCameraRequestID = nil
+        setupEvent = "quest-camera-releasing"
+        stop("Quest camera closed. Reopen Kith on your glasses to review the capture.", preserveQuestCapture: preservePreview)
+        return await pendingSessionRelease?.value ?? true
+    }
     func start() {
         guard !running else { return }
+        guard !quests.capturing || questCameraRequestID != nil else { return }
+        if let releasingSession, releasingSession.state != .stopped {
+            updateCameraStatus(.error, "The previous camera session is still closing. Wait for the camera light to turn off, then retry.")
+            return
+        }
         guard UIApplication.shared.applicationState == .active else {
             updateCameraStatus(.paused, "Keep Kith Camera open on the phone to start the glasses camera.")
             return
@@ -246,8 +304,8 @@ final class CameraBridge: ObservableObject {
                 try Task.checkCancellation()
                 guard generation == self.generation else { return }
                 try attachCamera(created, generation: generation)
-                // Optional networking cannot prevent or interrupt the local camera preview.
-                if sendToWeb { connectWeb(generation: generation) }
+                // Quest captures do not silently start the optional hand relay.
+                if sendToWeb, questCameraRequestID == nil { connectWeb(generation: generation) }
                 else { webStatus = "Web sharing is off. The camera preview works locally." }
             } catch {
                 if generation == self.generation {
@@ -403,11 +461,12 @@ final class CameraBridge: ObservableObject {
         quests.setForeground(false)
         if camera != nil { stop("Camera paused while the phone app is in the background. Reopen and Start.", cameraState: .paused) }
     }
-    func stop(_ message: String = "Stopped. Camera and relay released.", cameraState: QuestCameraState = .idle) {
+    func stop(_ message: String = "Stopped. Camera and relay released.", cameraState: QuestCameraState = .idle, preserveQuestCapture: Bool = false) {
         questCameraStartRequested = false
         setupRegistrationTask?.cancel(); setupRegistrationTask = nil
         UIApplication.shared.isIdleTimerDisabled = UIApplication.shared.applicationState == .active
         generation += 1
+        let stopGeneration = generation
         startTask?.cancel(); startTask = nil
         webTask?.cancel(); webTask = nil
         firstFrameTask?.cancel(); firstFrameTask = nil
@@ -416,10 +475,14 @@ final class CameraBridge: ObservableObject {
         let oldTokens = streamTokens; streamTokens.removeAll()
         Task { for token in oldTokens { await token.cancel() } }
         camera?.stop(); camera = nil
-        session?.stop(); session = nil
+        let closingSession = session ?? (releasingSession?.state == .stopped ? nil : releasingSession)
+        releasingSession = closingSession
+        closingSession?.stop(); session = nil
         processor = nil
         phoneFrame = nil
-        quests.cameraSessionReleased(state: cameraState, message: CameraDiagnostics.redact(message, secrets: wearables.devices))
+        quests.cameraSessionReleased(state: closingSession == nil ? cameraState : .starting,
+            message: closingSession == nil ? CameraDiagnostics.redact(message, secrets: wearables.devices) : "Closing the glasses camera session…",
+            preservePreview: preserveQuestCapture)
         webConnected = false
         hasStreamed = false
         relay.stop()
@@ -427,6 +490,20 @@ final class CameraBridge: ObservableObject {
         handStatus = "Source: glasses camera only"
         status = message
         webStatus = "Web sharing is stopped."
+        if let closingSession {
+            // DAT stop is asynchronous. Keep the session alive until its
+            // terminal state, even when the capture task was canceled.
+            pendingSessionRelease = Task { [weak self] in
+                let released = await CameraSessionRelease.waitUntilStopped { closingSession.state == .stopped }
+                if let self, self.generation == stopGeneration {
+                    self.sessionStatus = "Session: \(closingSession.state.description) · Camera: off"
+                    self.setupEvent = released ? "quest-camera-released" : "camera-release-unconfirmed"
+                    let finalState: QuestCameraState = cameraState == .paused && UIApplication.shared.applicationState == .active && self.quests.paired ? .idle : cameraState
+                    self.updateCameraStatus(released ? finalState : .error, released ? message : "Meta has not confirmed the camera stopped. Close the camera in Meta AI, then reopen Kith on your glasses.")
+                }
+                return released
+            }
+        }
         print("Kith: stopped: \(message)")
     }
 }

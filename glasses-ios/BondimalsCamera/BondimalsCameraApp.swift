@@ -22,7 +22,7 @@ struct BondimalsCameraApp: App {
                     }
                     Section("Live glasses view") {
                         PhoneCameraPreview(frame: bridge.phoneFrame, running: bridge.running)
-                        Text("The live glasses preview stays on this phone unless you enable optional desktop preview. During a requested quest clip, your paired game also shows the live recording. Quest captures are shared only when you request them.")
+                        Text("Quest photos and clips open the glasses camera briefly, then close it. The glasses may switch away from Kith while recording; reopen Kith afterward to review and submit the result.")
                         Text(bridge.handStatus).font(.caption.monospaced())
                         Text(bridge.sessionStatus).font(.caption.monospaced())
                     }
@@ -48,10 +48,7 @@ struct BondimalsCameraApp: App {
                         }
                     }
                     QuestCapturePanel(quests: bridge.quests)
-                    Section {
-                        Button("Start glasses camera") { bridge.start() }.disabled(bridge.running)
-                        Button("Stop", role: .destructive) { bridge.stop() }.disabled(!bridge.running)
-                    }
+                    ManualCameraControls(bridge: bridge, quests: bridge.quests)
                     Section("While previewing") {
                         Text("Keep this app open. The feed comes from the glasses camera; the phone camera is never used.")
                         if bridge.sendToWeb {
@@ -81,7 +78,25 @@ private struct QuestSetupSummary: View {
                     .font(.caption.bold())
                 Text(quests.status).font(.callout)
                 if quests.paired { Text(quests.cameraMessage).font(.callout) }
+                if let image = quests.preview, !quests.capturing {
+                    Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 160)
+                        .accessibilityLabel("Latest frame of your glasses quest capture")
+                    Text("Capture thumbnail. Reopen Kith on your glasses to review the photo or full clip and choose Submit to Muse.")
+                        .font(.caption)
+                }
             }.accessibilityIdentifier("quest-setup-summary")
+        }
+    }
+}
+
+private struct ManualCameraControls: View {
+    @ObservedObject var bridge: CameraBridge
+    @ObservedObject var quests: QuestCaptureBridge
+    var body: some View {
+        Section("Optional continuous preview") {
+            Text("Manual preview keeps camera mode open and may hide Kith on the glasses. Quest capture closes the camera afterward, including an existing manual preview.").font(.footnote)
+            Button("Start manual camera preview") { bridge.start() }.disabled(bridge.running || quests.capturing)
+            Button("Stop camera", role: .destructive) { bridge.stop() }.disabled(!bridge.running)
         }
     }
 }
