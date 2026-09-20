@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CameraConnectionError, GlassesCamera, isCameraConnectionError, type CaptureStatus } from './GlassesCamera';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CameraConnectionError, GlassesCamera, isCameraConnectionError, type CaptureStatus, type VerificationStatus } from './GlassesCamera';
 import type { Membership } from '../../../companion-web/src/RoomClient';
+import type { EvidenceQuestId } from '../../../shared/play-protocol';
 
 const member = (): Membership => ({ roomCode: 'ABCDEF', playerToken: 'a'.repeat(48), playerId: 'one', name: 'Explorer' });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const ready = (requestId: string): CaptureStatus => ({ paired: true, connected: true, status: 'ready', requestId, photoDataUrl: 'data:image/jpeg;base64,/9j/' });
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+const SUBMISSION_ID = '10000000-0000-4000-8000-000000000001';
+const NEXT_SUBMISSION_ID = '10000000-0000-4000-8000-000000000002';
+const complete = (questId: EvidenceQuestId, verified = true, submissionId = SUBMISSION_ID): VerificationStatus => ({
+  submissionId, questId, status: 'complete', verified, reason: verified ? 'Action visible.' : 'Action not visible.',
+});
+beforeEach(() => { vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValue(SUBMISSION_ID) }); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('GlassesCamera session and capture ownership', () => {
   it.each(['wss://game.example/play', 'https://game.example/play'])('preserves HTTPS for %s and sends explicit JSON acceptance', async endpoint => {
@@ -36,7 +43,7 @@ describe('GlassesCamera session and capture ownership', () => {
   it('binds review and submission to the quest that requested this capture', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'capture-1' }))
       .mockResolvedValueOnce(json(ready('capture-1')))
-      .mockResolvedValueOnce(json({ verified: true, reason: 'Hand touching grass.' }));
+      .mockResolvedValueOnce(json(complete('touchGrass')));
     vi.stubGlobal('fetch', fetcher);
     const client = new GlassesCamera(() => 'wss://game.example/play', member);
     await client.capture('photo', 'touchGrass');
@@ -50,7 +57,7 @@ describe('GlassesCamera session and capture ownership', () => {
 
   it('recovers a server-held clip after the display page is recreated, then waits for explicit submission', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(json({ ...ready('saved-clip'), questId: 'meetFriend', kind: 'clip', frames: ['data:image/jpeg;base64,/9j/'], durationSeconds: 6 }))
-      .mockResolvedValueOnce(json({ verified: true, reason: 'Wave visible.' }));
+      .mockResolvedValueOnce(json(complete('meetFriend')));
     vi.stubGlobal('fetch', fetcher);
     const reopened = new GlassesCamera(() => 'wss://game.example/play', member);
     const evidence = await reopened.status();
@@ -77,7 +84,7 @@ describe('GlassesCamera session and capture ownership', () => {
     const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'old' }))
       .mockRejectedValueOnce(new TypeError('Network interrupted'))
       .mockResolvedValueOnce(json({ ...ready('replacement'), questId: 'meetFriend', kind: 'clip' }))
-      .mockResolvedValueOnce(json({ verified: true }));
+      .mockResolvedValueOnce(json(complete('meetFriend')));
     vi.stubGlobal('fetch', fetcher);
     const client = new GlassesCamera(() => 'wss://game.example/play', member);
     await client.capture('photo', 'touchGrass');
@@ -164,16 +171,18 @@ describe('GlassesCamera session and capture ownership', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it('lets verification finish within the server deadline instead of the shorter control deadline', async () => {
+  it('submits only the stored capture reference and reads asynchronous results separately', async () => {
     const timeouts = vi.spyOn(AbortSignal, 'timeout');
     const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'capture-1' }))
       .mockResolvedValueOnce(json(ready('capture-1')))
-      .mockResolvedValueOnce(json({ verified: false, reason: 'No grass visible.' }));
+      .mockResolvedValueOnce(json(complete('touchGrass', false)));
     vi.stubGlobal('fetch', fetcher);
     const client = new GlassesCamera(() => 'wss://game.example/play', member);
     await client.capture('photo', 'touchGrass');
     await client.submit('touchGrass', await client.status());
-    expect(timeouts).toHaveBeenLastCalledWith(45_000);
+    expect(timeouts).toHaveBeenLastCalledWith(15_000);
+    expect(JSON.parse(fetcher.mock.calls[2]![1].body)).toEqual({ roomCode: 'ABCDEF', playerToken: 'a'.repeat(48),
+      questId: 'touchGrass', captureRequestId: 'capture-1', submissionId: SUBMISSION_ID });
   });
 
   it.each([
@@ -200,7 +209,7 @@ describe('GlassesCamera session and capture ownership', () => {
     const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
       .mockResolvedValueOnce(broken)
       .mockResolvedValueOnce(json(ready('one')))
-      .mockResolvedValueOnce(json({ verified: true }));
+      .mockResolvedValueOnce(json(complete('touchGrass')));
     vi.stubGlobal('fetch', fetcher);
     const client = new GlassesCamera(() => 'wss://game.example/play', member);
     await client.capture('photo', 'touchGrass');
@@ -211,7 +220,7 @@ describe('GlassesCamera session and capture ownership', () => {
     await expect(client.submit('touchGrass', evidence)).resolves.toMatchObject({ verified: true });
   });
 
-  it.each([429, 502, 503, 504])('normalizes HTTP %s even when the tunnel returns HTML', async status => {
+  it.each([408, 429, 500, 502, 503, 504])('normalizes HTTP %s even when the tunnel returns HTML', async status => {
     const fetcher = vi.fn().mockResolvedValue(new Response('<html>Temporarily unavailable</html>', { status }));
     vi.stubGlobal('fetch', fetcher);
     const client = new GlassesCamera(() => 'wss://game.example/play', member);
@@ -270,5 +279,166 @@ describe('GlassesCamera session and capture ownership', () => {
     expect(timeouts).toHaveBeenLastCalledWith(45_000);
     await client.status(7_000);
     expect(timeouts).toHaveBeenLastCalledWith(7_000);
+  });
+
+  it('polls an accepted grading job without another submission or media upload', async () => {
+    vi.useFakeTimers();
+    const pending: VerificationStatus = { submissionId: SUBMISSION_ID, questId: 'touchGrass', status: 'pending' };
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockResolvedValueOnce(json(pending, 202))
+      .mockResolvedValueOnce(json(complete('touchGrass')));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const progress = vi.fn();
+    const submission = client.submit('touchGrass', await client.status(), { onProgress: progress });
+    const assertion = expect(submission).resolves.toMatchObject({ verified: true, submissionId: SUBMISSION_ID });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetcher.mock.calls.slice(2).map(([url]) => new URL(url).pathname)).toEqual(['/verify', '/verify/status']);
+    expect(progress).toHaveBeenCalledWith('pending');
+    for (const [, options] of fetcher.mock.calls.slice(2)) {
+      expect(JSON.parse(options.body)).not.toHaveProperty('photoDataUrl');
+      expect(JSON.parse(options.body)).not.toHaveProperty('frames');
+    }
+  });
+
+  it('recovers a lost submission acknowledgement by reading the accepted job', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(json(complete('touchGrass')));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const progress = vi.fn();
+    const assertion = expect(client.submit('touchGrass', await client.status(), { onProgress: progress })).resolves.toMatchObject({ verified: true });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetcher.mock.calls.slice(2).map(([url]) => new URL(url).pathname)).toEqual(['/verify', '/verify/status']);
+    expect(progress).toHaveBeenCalledWith('reconnecting');
+  });
+
+  it.each([408, 500])('recovers an accepted job when a proxy replaces its lost acknowledgement with empty HTTP %s', async status => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockResolvedValueOnce(new Response('', { status }))
+      .mockResolvedValueOnce(json(complete('touchGrass')));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const assertion = expect(client.submit('touchGrass', await client.status())).resolves.toMatchObject({ verified: true });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetcher.mock.calls.slice(2).map(([url]) => new URL(url).pathname)).toEqual(['/verify', '/verify/status']);
+    expect(crypto.randomUUID).toHaveBeenCalledOnce();
+  });
+
+  it('reuses the same logical ID if status proves the unacknowledged request was not accepted', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(json({ error: 'Unknown submission.' }, 404))
+      .mockResolvedValueOnce(json(complete('touchGrass')));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const assertion = expect(client.submit('touchGrass', await client.status())).resolves.toMatchObject({ verified: true });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetcher.mock.calls.slice(2).map(([url]) => new URL(url).pathname)).toEqual(['/verify', '/verify/status', '/verify']);
+    expect(fetcher.mock.calls.slice(2).map(([, options]) => JSON.parse(options.body).submissionId)).toEqual(Array(3).fill(SUBMISSION_ID));
+    expect(crypto.randomUUID).toHaveBeenCalledOnce();
+  });
+
+  it('retains the logical job across a polling timeout and a later explicit reconnect', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const evidence = await client.status();
+    const assertion = expect(client.submit('touchGrass', evidence, { budgetMs: 1000 })).rejects.toThrow('retrieving the Muse result');
+    await vi.runAllTimersAsync();
+    await assertion;
+    fetcher.mockResolvedValueOnce(json(complete('touchGrass')));
+    await expect(client.submit('touchGrass', evidence)).resolves.toMatchObject({ verified: true });
+    expect(new URL(fetcher.mock.calls[3]![0]).pathname).toBe('/verify/status');
+    expect(crypto.randomUUID).toHaveBeenCalledOnce();
+  });
+
+  it('restores existing grading from server capture metadata after page recreation, using reads only', async () => {
+    const verification: VerificationStatus = { submissionId: SUBMISSION_ID, questId: 'meetFriend', status: 'pending' };
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ ...ready('one'), questId: 'meetFriend', verification }))
+      .mockResolvedValueOnce(json(complete('meetFriend')));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const evidence = await client.status();
+    expect(evidence.verification).toEqual(verification);
+    await expect(client.resumeSubmission(evidence.verification!)).resolves.toMatchObject({ verified: true });
+    expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(['/glasses/status', '/verify/status']);
+    expect(crypto.randomUUID).not.toHaveBeenCalled();
+  });
+
+  it('never recreates an expired job during read-only reload recovery', async () => {
+    const verification: VerificationStatus = { submissionId: SUBMISSION_ID, questId: 'touchGrass', status: 'pending' };
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ ...ready('one'), questId: 'touchGrass', verification }))
+      .mockResolvedValueOnce(json({ error: 'This quest check expired.' }, 404));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    const evidence = await client.status();
+    await expect(client.resumeSubmission(evidence.verification!)).rejects.toThrow('expired');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves terminal provider errors and starts a new job only on another explicit Submit', async () => {
+    vi.mocked(crypto.randomUUID).mockReturnValueOnce(SUBMISSION_ID).mockReturnValueOnce(NEXT_SUBMISSION_ID);
+    const failed: VerificationStatus = { submissionId: SUBMISSION_ID, questId: 'touchGrass', status: 'error', error: 'Muse could not be reached. Please retry.' };
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockResolvedValueOnce(json(failed))
+      .mockResolvedValueOnce(json(complete('touchGrass', true, NEXT_SUBMISSION_ID)));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const evidence = await client.status();
+    const error = await client.submit('touchGrass', evidence).catch(error => error);
+    expect(error.message).toBe(failed.error);
+    expect(isCameraConnectionError(error)).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    await expect(client.submit('touchGrass', evidence)).resolves.toMatchObject({ verified: true });
+    expect(JSON.parse(fetcher.mock.calls[3]![1].body).submissionId).toBe(NEXT_SUBMISSION_ID);
+  });
+
+  it('does not accept results for a different job or repaint after the submitting view changes', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockResolvedValueOnce(json(complete('touchGrass', true, NEXT_SUBMISSION_ID)));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const evidence = await client.status();
+    await expect(client.submit('touchGrass', evidence)).rejects.toThrow('invalid response');
+    let current = true;
+    fetcher.mockImplementationOnce(async () => { current = false; return json(complete('touchGrass')); });
+    await expect(client.submit('touchGrass', evidence, { isCurrent: () => current })).rejects.toThrow('Return to this quest');
+  });
+
+  it('waits for a visible game connection before submitting and does not invent grading during a status read', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn().mockResolvedValueOnce(json({ requestId: 'one' }))
+      .mockResolvedValueOnce(json(ready('one'))).mockResolvedValueOnce(json(complete('touchGrass')));
+    vi.stubGlobal('fetch', fetcher);
+    const client = new GlassesCamera(() => 'wss://game.example/play', member);
+    await client.capture('photo', 'touchGrass');
+    const evidence = await client.status();
+    expect(evidence.verification).toBeUndefined();
+    let connected = false;
+    const submission = client.submit('touchGrass', evidence, { canRead: () => connected });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    connected = true;
+    const assertion = expect(submission).resolves.toMatchObject({ verified: true });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });

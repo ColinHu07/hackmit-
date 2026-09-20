@@ -87,3 +87,19 @@ test('invalid files, provider failures, and missing configuration cannot approve
   const failing = createQuestPhotoVerifier({ apiKey: 'test', baseUrl: 'https://model.example/v1', model: 'vision', fetchImpl: async () => ({ ok: false, status: 401 }) });
   await assert.rejects(failing.verify({ questId: 'touchGrass', photoDataUrl: tinyPhoto }), /HTTP 401/);
 });
+
+test('server cancellation reaches the provider request and a body timeout remains an explicit grading error', async () => {
+  const controller = new AbortController();
+  let providerSignal;
+  const verifier = createQuestPhotoVerifier({ apiKey: 'test', baseUrl: 'https://model.example/v1', model: 'vision',
+    fetchImpl: async (_url, { signal }) => {
+      providerSignal = signal;
+      return { ok: true, json: async () => {
+        controller.abort();
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      } };
+    },
+  });
+  await assert.rejects(verifier.verify({ questId: 'touchGrass', photoDataUrl: tinyPhoto }, { signal: controller.signal }), /timed out or could not be reached/);
+  assert.equal(providerSignal.aborted, true);
+});

@@ -35,7 +35,7 @@ export interface GlassesMotionOptions {
   host?: GlassesSensorHost;
   visibility?: GlassesVisibilityHost;
   now?: () => number;
-  /** Sign of alpha's change during a clockwise/right head turn. Verify while worn. */
+  /** Sign of alpha's change during a right head turn; +1 matches the tested Meta glasses. */
   yawSign?: 1 | -1;
 }
 
@@ -62,8 +62,8 @@ const messages: Record<GlassesMotionStatus, string> = {
  * documented DeviceOrientationEvent and DeviceMotionEvent APIs together before
  * yielding the user activation. See docs/meta-capabilities.md for hardware limits.
  *
- * The first alpha is forward at the current avatar yaw. Standard alpha increases
- * counterclockwise, so default yawSign=-1; mounting/sign must be checked on-device.
+ * The first alpha is forward at the current avatar yaw. Physical testing on the
+ * user's Meta glasses confirmed yawSign=+1: increasing alpha is a right head turn.
  * Shared play-protocol/WalkingTracker convention: yaw is radians, forward is
  * (sin(yaw), cos(yaw)) in X/Z, yaw=PI faces -Z, and a right turn decreases yaw.
  * Orientation only changes yaw. Only confirmed acceleration rhythms translate.
@@ -114,7 +114,7 @@ export class GlassesMotion {
     this.host = options.host ?? window;
     this.visibility = options.visibility ?? document;
     this.now = options.now ?? (() => performance.now());
-    this.yawSign = options.yawSign ?? -1;
+    this.yawSign = options.yawSign ?? 1;
   }
 
   get pose(): WalkingPose { return { ...this.walking.pose }; }

@@ -17,6 +17,7 @@ const cleanMessage = value => typeof value === 'string'
 
 /** Private, memory-only camera commands/evidence. Never verifies or rewards a quest. */
 export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () => true, writeJson, readJson, cors, now = Date.now,
+  getVerificationStatus = () => null,
   pairTtlMs = 5 * 60_000, idleTtlMs = 60 * 60_000, evidenceTtlMs = 5 * 60_000,
   disconnectGraceMs = 2 * 60_000,
   cameraFreshMs = 5_000, captureTimeoutMs = 60_000, maxSessions = 1000,
@@ -199,10 +200,12 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
   }
   function status(session, at) {
     if (!session) return { paired: false, connected: false, requestId: null, status: 'idle', ...cameraHealth(session, at) };
+    const verification = session.requestId ? getVerificationStatus(session.owner, session.requestId) : null;
     return { paired: Boolean(session.cameraToken), connected: connected(session, at),
       requestId: session.requestId, status: session.status,
       ...(session.requestId ? { questId: session.questId, kind: session.kind, captureAt: session.captureAt } : {}),
       ...cameraHealth(session, at), ...(session.progress ?? {}),
+      ...(verification ? { verification } : {}),
       ...(session.error ? { error: session.error } : {}), ...(session.evidence ?? {}),
     };
   }
@@ -414,6 +417,12 @@ export function createGlassesCameraBridge({ resolveOwner, isOwnerConnected = () 
     resume,
     hasRetainedCapture,
     hasRecoverableCapture,
+    readyEvidence(owner, requestId, questId) {
+      sweep();
+      const session = owners.get(owner);
+      if (!session || session.status !== 'ready' || session.requestId !== requestId || session.questId !== questId) return null;
+      return session.evidence;
+    },
     close() {
       closed = true; clearInterval(cleanup);
       for (const owner of owners.keys()) revoke(owner);

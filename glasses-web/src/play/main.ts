@@ -40,7 +40,6 @@ let cameraGeneration = 0;
 let cameraBusy = false;
 let previousMember = '';
 let walkingRequest = 0;
-let headingSign: 1 | -1 = read('yaw-sign') === '1' ? 1 : -1;
 let simulatorHeading = 0;
 let lastRoomNotice = '';
 let grassQuestAvailable: boolean | undefined;
@@ -50,7 +49,7 @@ let walkingWanted = false;
 let pageInCache = false;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header class="glass-header"><span class="brand">kith<small>Meadow 6</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
+  <header class="glass-header"><span class="brand">kith<small>Meadow 7</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
   <canvas id="playground" aria-label="Your shared beaver playground"></canvas>
   <div id="tracking-status" class="glass-status">Loading your beaver…</div><div id="notice" class="glass-notice" role="status"></div>
   <nav class="action-rail" aria-label="Game actions"><button id="walk" type="button" disabled>Walk</button><button data-action="wave" type="button" disabled>Wave</button><button data-action="feed" id="feed" type="button" disabled>Berry</button><button id="quests" type="button" disabled>Quests</button><button id="more" type="button">More</button></nav>
@@ -133,7 +132,6 @@ const motion = new GlassesMotion({
     if (el('recenter')) el<HTMLButtonElement>('recenter').disabled = !motionEnabled;
   },
 });
-motion.setYawSign(headingSign);
 
 const client = new RoomClient({
   state: state => {
@@ -230,9 +228,8 @@ function more(): void {
 }
 
 function controls(): void {
-  panel('Connection & controls', `<p class="small">${escape(name)} · Room ${escape(member?.roomCode || '—')}</p>${button('Change server', 'change-server')}${button(headingSign === -1 ? 'Reverse head-turn direction' : 'Restore head-turn direction', 'reverse')}<p class="small">If turning right faces your beaver left, reverse head-turn direction once. Recenter while looking straight ahead.</p>${button('Step forward', 'step', connection !== 'connected')}<p class="small">Step forward also works when motion sensors are unavailable.</p>${button('Back', 'back')}`, 'controls');
+  panel('Connection & controls', `<p class="small">${escape(name)} · Room ${escape(member?.roomCode || '—')}</p>${button('Change server', 'change-server')}<p class="small">Turn right to face right; turn left to face left. Use Recenter in the previous menu while looking straight ahead.</p>${button('Step forward', 'step', connection !== 'connected')}<p class="small">Step forward also works when motion sensors are unavailable.</p>${button('Back', 'back')}`, 'controls');
   bind('change-server', () => settings());
-  bind('reverse', () => { headingSign = headingSign === 1 ? -1 : 1; save('yaw-sign', String(headingSign)); motion.setYawSign(headingSign); motion.recenter(); closePanel(); });
   bind('step', () => {
     const local = snapshot?.players.find(player => player.id === member?.playerId);
     if (!local || connection !== 'connected' || document.hidden) return;
@@ -295,7 +292,7 @@ function cameraFeedback(message: string): void {
   else tell(message);
 }
 async function recoverCameraCapture(showEmpty = false): Promise<void> {
-  if (showEmpty) cameraFeedback('Checking your recent capture…');
+  if (showEmpty) cameraFeedback('Checking this quest’s saved capture…');
   if (document.hidden) return;
   const session = camera.sessionKey, generation = cameraGeneration;
   if (cameraRecoveryRun?.session === session && cameraRecoveryRun.generation === generation) {
@@ -313,43 +310,54 @@ async function recoverCameraCapture(showEmpty = false): Promise<void> {
     });
     if (!state || !current()) return;
     if (state.questId && state.requestId && state.status === 'ready') {
+      const recorderQuestChanged = currentPanel === 'capture' && selectedQuest !== state.questId;
       captureSession = null; capture = state; captureQuest = state.questId;
-      reviewCapture();
+      // Resume into the capture's quest after display takeover. Opening another
+      // quest must not be redirected by an unrelated saved capture.
+      if (!currentPanel || ['capture', 'quest'].includes(currentPanel) && selectedQuest === state.questId) {
+        selectedQuest = state.questId; questPanel();
+      } else if (recorderQuestChanged) {
+        questPanel('This recording did not start. Your previous capture is still saved in its own quest. Choose Photo or Record 6s to try again.');
+      }
     } else if (state.questId && state.requestId && state.status === 'capturing') {
-      selectedQuest = state.questId;
-      await startCapture(state.kind ?? 'clip', state);
-    } else if (currentPanel === 'capture' || currentPanel === 'review') {
+      if (!currentPanel || ['capture', 'quest'].includes(currentPanel) && selectedQuest === state.questId) {
+        selectedQuest = state.questId;
+        await startCapture(state.kind ?? 'clip', state);
+      } else if (currentPanel === 'capture') {
+        questPanel('A capture for another quest is still finishing. Return to that quest or start a new capture here.');
+      }
+    } else if (currentPanel === 'capture') {
       captureSession = null; capture = null; captureQuest = null;
       questPanel(state.error || 'No saved capture. Choose Photo or Record 6s to try again.');
-    } else if (run.showEmpty) cameraFeedback(state.error || 'No saved capture. Open a quest and choose Photo or Record 6s.');
+    } else if (run.showEmpty) cameraFeedback(state.error || 'Choose Photo or Record 6s to capture this quest.');
   } catch (error) {
     if (current()) {
       const message = error instanceof Error ? error.message : 'Could not restore your capture.';
       if (isCameraConnectionError(error)) {
-        cameraFeedback('Still unable to retrieve the recording. Select Review recent capture to retry when connected.');
+        cameraFeedback('Still unable to retrieve the recording. Reopen this quest to reconnect when your connection returns.');
         if (currentPanel === 'capture') {
           el('retry-capture').hidden = false; el<HTMLButtonElement>('retry-capture').disabled = false;
           el('recording-clock').textContent = 'Connection paused';
         }
-      } else if (run.showEmpty || ['capture', 'review'].includes(currentPanel)) cameraFeedback(message);
+      } else if (run.showEmpty || ['capture', 'quest'].includes(currentPanel)) cameraFeedback(message);
     }
   } finally { if (cameraRecoveryRun === run) cameraRecoveryRun = null; }
 }
 function questList(): void {
-  panel('Real-world quests', `<p id="panel-status" role="status" class="small">Complete quests with your glasses camera.</p><div class="quest-list">${quests.map(quest => button(`${quest.title}<span class="quest-mark">${snapshot?.quests[member?.playerId || '']?.[quest.id] ? '✓' : '→'}</span>`, `quest-${quest.id}`)).join('')}</div>${button('Review recent capture', 'recover-capture')}${button('Raid · calm Mossback', 'raid', !snapshot || snapshot.raid.state === 'defeated')}${button('Back', 'back')}`, 'quests');
-  for (const quest of quests) bind(`quest-${quest.id}`, () => { selectedQuest = quest.id; questPanel(); });
+  panel('Real-world quests', `<p id="panel-status" role="status" class="small">Capture and submit directly from each quest.</p><div class="quest-list">${quests.map(quest => button(`${quest.title}<span class="quest-mark">${capture?.status === 'ready' && captureQuest === quest.id ? 'Saved' : snapshot?.quests[member?.playerId || '']?.[quest.id] ? '✓' : '→'}</span>`, `quest-${quest.id}`)).join('')}</div>${button('Raid · calm Mossback', 'raid', !snapshot || snapshot.raid.state === 'defeated')}${button('Back', 'back')}`, 'quests');
+  for (const quest of quests) bind(`quest-${quest.id}`, () => { selectedQuest = quest.id; questPanel(); if (!capture || captureQuest !== quest.id) void recoverCameraCapture(); });
   bind('raid', () => { client.readyRaid(); closePanel(); });
-  bind('recover-capture', () => recoverCameraCapture(true));
   bind('back', closePanel);
 }
 function questPanel(message = ''): void {
+  if (capture?.status === 'ready' && captureQuest === selectedQuest && capture.questId === selectedQuest) {
+    questCapture(message); return;
+  }
   const quest = quests.find(item => item.id === selectedQuest)!;
   const readiness = evidenceReadiness(selectedQuest, snapshot, member?.playerId, connection === 'connected');
-  const canReview = capture?.status === 'ready' && captureQuest === selectedQuest && capture.questId === selectedQuest;
-  panel(quest.title, `<p>${quest.instruction}</p><p id="panel-status" class="small">${escape(message || readiness.message)}</p><div class="button-row">${button('Photo', 'capture-photo', !readiness.ready || selectedQuest === 'dapHandshake')}${button('Record 6s', 'capture-clip', !readiness.ready)}</div><p class="small">Review your capture, then select Submit to Muse. The display may pause while recording; reopen Kith when the camera stops.</p>${canReview ? button('Review last capture', 'review') : ''}${button('Back', 'back')}`, 'quest');
+  panel(quest.title, `<p>${quest.instruction}</p><p id="panel-status" role="status" class="small">${escape(message || readiness.message)}</p><div class="button-row">${button('Photo', 'capture-photo', !readiness.ready || selectedQuest === 'dapHandshake')}${button('Record 6s', 'capture-clip', !readiness.ready)}</div><p class="small">Your capture stays in this quest. Submit it to Muse or retake it here. The display may pause while recording; reopen Kith when the camera stops.</p>${button('Back', 'back')}`, 'quest');
   bind('capture-photo', () => startCapture('photo'));
   bind('capture-clip', () => startCapture('clip'));
-  bind('review', () => reviewCapture());
   bind('back', questList);
 }
 async function pairCamera(returnToQuest?: EvidenceQuestId): Promise<void> {
@@ -366,7 +374,7 @@ async function pairCamera(returnToQuest?: EvidenceQuestId): Promise<void> {
     const available = cameraAvailability(state);
     if (available.ready && returnToQuest) {
       selectedQuest = returnToQuest;
-      questPanel('Camera connected. Choose Photo or Record 6s, then review and submit.');
+      questPanel('Camera connected. Choose Photo or Record 6s, then submit from this quest.');
       return;
     }
     el('panel-status').textContent = available.message;
@@ -421,7 +429,7 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
   if (!resumed && (!readiness.ready || kind === 'photo' && questId === 'dapHandshake')) return;
   cameraBusy = true; capture = null; captureQuest = questId;
   captureSession = session; cancelCaptureRequested = false;
-  panel(kind === 'photo' ? 'Glasses photo' : 'Record a 6-second clip', `<div class="recorder-view"><img id="recording-preview" alt="Live view from your glasses camera" hidden><p id="recording-placeholder">Connecting to your glasses camera…</p><span id="recording-clock" class="recording-clock">Preparing</span></div><p id="panel-status" class="small">The display may pause for recording. Reopen Kith after the camera stops to review and submit.</p><div class="button-row">${button('Try again', 'retry-capture', true)}${button('Cancel', 'cancel-capture')}</div>${button('Camera setup', 'recorder-setup')}`, 'capture');
+  panel(kind === 'photo' ? 'Glasses photo' : 'Record a 6-second clip', `<div class="recorder-view"><img id="recording-preview" alt="Live view from your glasses camera" hidden><p id="recording-placeholder">Connecting to your glasses camera…</p><span id="recording-clock" class="recording-clock">Preparing</span></div><p id="panel-status" class="small">The display may pause for recording. Reopen Kith after the camera stops to return to this quest and submit.</p><div class="button-row">${button('Try again', 'retry-capture', true)}${button('Cancel', 'cancel-capture')}</div>${button('Camera setup', 'recorder-setup')}`, 'capture');
   el('retry-capture').hidden = true; el('recorder-setup').hidden = true;
   const generation = cameraGeneration;
   const current = () => cameraViewMatches(generation, 'capture', session) && !cancelCaptureRequested;
@@ -487,7 +495,7 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
     const request = resumed?.requestId ? { requestId: resumed.requestId } : await camera.capture(kind, questId);
     if (!current()) { cameraBusy = false; if (cancelCaptureRequested) await discardActiveCapture(); return; }
     cameraBusy = false;
-    el('panel-status').textContent = kind === 'photo' ? 'Taking a photo through your glasses…' : 'Recording starts when the camera is ready. If the display pauses, reopen Kith after recording to review and submit.';
+    el('panel-status').textContent = kind === 'photo' ? 'Taking a photo through your glasses…' : 'Recording starts when the camera is ready. If the display pauses, reopen Kith after recording to return to this quest and submit.';
     el('recording-placeholder').textContent = 'Waiting for the glasses camera…';
     const startedAt = resumed?.captureAt ?? Date.now();
     let lastSequence = 0;
@@ -500,7 +508,7 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
         if (state.status === 'ready') {
           clearTimeout(recorderPreviewTimer);
           captureSession = null; capture = state; captureQuest = questId;
-          reviewCapture(); return;
+          selectedQuest = questId; questPanel(); return;
         }
         const preview = recordingPreview(state, request.requestId);
         if (preview && preview.sequence > lastSequence) {
@@ -515,7 +523,7 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
         }
         // A reconnect clears the previous phone heartbeat. Give its polling
         // loop time to catch up; a fresh capture result can still arrive.
-        if (!state.connected) el('panel-status').textContent = 'Reconnecting to the camera. Your requested capture is being kept for review.';
+        if (!state.connected) el('panel-status').textContent = 'Reconnecting to the camera. Your requested capture is being saved to this quest.';
         if (Date.now() - startedAt > 65_000) throw new Error('The glasses camera did not finish recording. Check Kith Camera on your phone and retry.');
         cameraPoll = setTimeout(() => { void poll(); }, 500);
       } catch (error) {
@@ -537,27 +545,29 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
   }
 }
 
-function reviewCapture(): void {
+function questCapture(message = ''): void {
   if (!capture || capture.status !== 'ready' || !captureQuest || capture.questId !== captureQuest || document.hidden) return;
   const evidence = capture, questId = captureQuest, session = camera.sessionKey;
+  const quest = quests.find(item => item.id === questId)!;
   selectedQuest = questId;
   const frameCount = evidence.frames?.length ?? 0;
   const seconds = evidence.durationSeconds ?? 6;
-  panel('Review your capture', `<img id="capture-preview" class="camera-preview" alt="Your glasses camera capture"><p id="capture-frame" class="small">${frameCount ? `${seconds.toFixed(1)}-second clip · ${frameCount} sampled frames` : 'Glasses photo'} · ${quests.find(quest => quest.id === questId)!.title}</p>${frameCount ? `<div class="button-row">${button('Pause preview', 'preview-toggle')}${button('Next frame', 'preview-next')}</div>` : ''}<p id="panel-status" class="small">Your capture is saved. Submit it to Muse for quest grading, or discard and try again.</p><div class="button-row">${button('Submit to Muse', 'submit')}${button('Discard', 'discard')}</div>${button('Back to quest', 'back')}`, 'review');
+  const kind = evidence.kind ?? (frameCount ? 'clip' : 'photo');
+  const readiness = evidenceReadiness(questId, snapshot, member?.playerId, connection === 'connected');
+  panel(quest.title, `<img id="capture-preview" class="camera-preview" alt="Saved capture for ${quest.title}"><p id="capture-frame" class="small">${frameCount ? `${seconds.toFixed(1)}-second clip` : 'Glasses photo'} saved to this quest</p><p id="panel-status" role="status" class="small">${escape(message || 'Ready to submit. Retake if you want another capture.')}</p><div class="button-row">${button('Submit to Muse', 'submit', cameraBusy)}${button(kind === 'clip' ? 'Retake clip' : 'Retake photo', 'retake', cameraBusy || !readiness.ready)}</div><div class="button-row">${frameCount ? `${button('Pause preview', 'preview-toggle')}${button('Next frame', 'preview-next')}` : ''}${button('Quests', 'back', cameraBusy)}</div>`, 'quest');
   const generation = cameraGeneration;
-  const current = () => cameraViewMatches(generation, 'review', session) && capture === evidence;
-  // Returning from a hidden tab rebuilds the review controls. A verification
-  // already requested by the user can finish into that same evidence view.
-  const reviewingEvidence = () => currentPanel === 'review' && camera.sessionKey === session && capture === evidence && !document.hidden;
+  const current = () => cameraViewMatches(generation, 'quest', session) && capture?.requestId === evidence.requestId && selectedQuest === questId;
+  // A display interruption can rebuild the same quest. An already requested
+  // grade may finish there without starting another verification.
+  const showingEvidence = () => currentPanel === 'quest' && camera.sessionKey === session
+    && capture?.requestId === evidence.requestId && selectedQuest === questId && !document.hidden;
   const image = el<HTMLImageElement>('capture-preview');
-  const submit = el<HTMLButtonElement>('submit');
-  const discard = el<HTMLButtonElement>('discard');
   image.src = evidence.photoDataUrl || evidence.frames?.[0] || '';
   let frame = 0, playing = true;
   const showFrame = () => {
     if (!current() || !evidence.frames?.length) return;
     image.src = evidence.frames[frame % frameCount]!;
-    el('capture-frame').textContent = `${seconds.toFixed(1)}s clip · frame ${frame % frameCount + 1}/${frameCount} · ${quests.find(quest => quest.id === questId)!.title}`;
+    el('capture-frame').textContent = `${seconds.toFixed(1)}s clip · frame ${frame % frameCount + 1}/${frameCount}`;
   };
   const cycle = () => {
     if (!current() || !playing) return;
@@ -569,49 +579,54 @@ function reviewCapture(): void {
     bind('preview-toggle', () => { playing = !playing; clearTimeout(cameraPoll); el('preview-toggle').textContent = playing ? 'Pause preview' : 'Play preview'; if (playing) cycle(); });
     bind('preview-next', () => { playing = false; clearTimeout(cameraPoll); el('preview-toggle').textContent = 'Play preview'; showFrame(); frame++; });
   }
-  bind('back', () => { if (!cameraBusy) questPanel(); });
-  const submitEvidence = async () => {
+  bind('back', () => { if (!cameraBusy) questList(); });
+  bind('retake', () => { if (!cameraBusy && current()) return startCapture(kind); });
+  const setBusy = (busy: boolean) => {
+    if (!showingEvidence()) return;
+    el<HTMLButtonElement>('submit').disabled = busy;
+    el<HTMLButtonElement>('retake').disabled = busy || !evidenceReadiness(questId, snapshot, member?.playerId, connection === 'connected').ready;
+    el<HTMLButtonElement>('back').disabled = busy;
+  };
+  const submitEvidence = async (resume = false) => {
     if (!current() || cameraBusy) return;
-    cameraBusy = true; submit.disabled = true; discard.disabled = true;
-    el<HTMLButtonElement>('back').disabled = true;
-    el('panel-status').textContent = 'Checking your quest…';
+    cameraBusy = true; setBusy(true);
+    el('panel-status').textContent = resume ? 'Retrieving your Muse result…' : 'Sending your saved capture to Muse…';
     try {
-      const result = await camera.submit(questId, evidence);
+      const options = {
+        isCurrent: () => camera.sessionKey === session && capture?.requestId === evidence.requestId,
+        canRead: () => connection === 'connected' && !document.hidden,
+        onProgress: (state: 'pending' | 'reconnecting') => {
+          if (showingEvidence()) el('panel-status').textContent = state === 'pending'
+            ? 'Muse is checking your quest… Your capture is saved.'
+            : 'Reconnecting to your Muse result… Your capture is saved.';
+        },
+      };
+      const result = resume && evidence.verification
+        ? await camera.resumeSubmission(evidence.verification, options)
+        : await camera.submit(questId, evidence, options);
       if (result.verified) {
+        const showCompletion = showingEvidence();
         await camera.discard().catch(() => {});
-        const showCompletion = reviewingEvidence();
         capture = null; captureQuest = null; clearTimeout(cameraPoll);
-        if (showCompletion) {
-          selectedQuest = questId; questPanel(`Quest complete! ${result.reason}`);
+        if (showCompletion && currentPanel === 'quest' && selectedQuest === questId && !document.hidden) {
+          questPanel(`Quest complete! ${result.reason}`);
         } else tell(`Quest complete! ${result.reason}`);
-      } else if (reviewingEvidence()) {
-        el('panel-title').textContent = 'Try another capture';
+      } else if (showingEvidence()) {
         el('panel-status').textContent = result.reason || 'Try capturing the action again.';
       }
-    } catch (error) { if (reviewingEvidence()) {
-      el('panel-title').textContent = 'Could not grade capture';
-      el('panel-status').textContent = error instanceof Error ? error.message : 'Quest check failed. Please retry.';
-    } }
-    finally {
-      cameraBusy = false;
-      if (reviewingEvidence()) {
-        el<HTMLButtonElement>('discard').disabled = false;
-        el<HTMLButtonElement>('submit').disabled = false;
-        el<HTMLButtonElement>('back').disabled = false;
-        if (!el('panel').contains(document.activeElement)) el('discard').focus();
-      }
+    } catch (error) {
+      if (showingEvidence()) el('panel-status').textContent = error instanceof Error ? error.message : 'Quest check failed. Your capture is saved; try submitting again.';
+    } finally {
+      cameraBusy = false; setBusy(false);
+      if (showingEvidence() && !el('panel').contains(document.activeElement)) el('retake').focus();
     }
   };
-  bind('submit', submitEvidence);
-  bind('discard', async () => {
-    if (cameraBusy || !current()) return;
-    cameraBusy = true; discard.disabled = true; submit.disabled = true;
-    try {
-      await camera.discard(); capture = null; captureQuest = null; clearTimeout(cameraPoll);
-      if (cameraGeneration === generation && currentPanel === 'review' && !document.hidden) { selectedQuest = questId; questPanel('Capture discarded.'); }
-    } catch (error) { if (current()) el('panel-status').textContent = error instanceof Error ? error.message : 'Discard failed. Please retry.'; }
-    finally { cameraBusy = false; if (current()) { discard.disabled = false; submit.disabled = false; } }
-  });
+  bind('submit', () => submitEvidence());
+  if (evidence.verification?.status === 'pending' || evidence.verification?.status === 'complete') {
+    void submitEvidence(true);
+  } else if (evidence.verification?.status === 'error' && !message) {
+    el('panel-status').textContent = evidence.verification.error || 'Muse could not grade this capture. Submit again or retake it.';
+  }
 }
 
 bind('walk', enableWalking); bind('quests', questList); bind('more', more);

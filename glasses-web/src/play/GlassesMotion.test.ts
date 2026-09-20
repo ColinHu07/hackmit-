@@ -48,27 +48,30 @@ describe('relative head facing and estimated walking', () => {
     t.host.orientation(358);
     expect(t.controller.pose).toEqual({ x: 3, z: -2, yaw: Math.PI });
     t.at(20); t.host.orientation(2);
-    expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI + 4 * Math.PI / 180);
+    expect(t.controller.pose.yaw).toBeCloseTo(Math.PI - 4 * Math.PI / 180);
     expect(t.controller.pose.x).toBe(3); expect(t.controller.pose.z).toBe(-2);
     expect(t.onPose).toHaveBeenLastCalledWith(t.controller.pose, 'heading');
     t.at(40); t.host.orientation(355);
-    expect(t.controller.pose.yaw).toBeCloseTo(Math.PI - 3 * Math.PI / 180);
+    expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI + 3 * Math.PI / 180);
     t.controller.stop();
   });
 
-  it('turns without translating and only rhythmic footfalls move in the facing direction', async () => {
+  it.each([
+    { direction: 'right', alphaDelta: 90, yaw: Math.PI / 2, xSign: 1 },
+    { direction: 'left', alphaDelta: -90, yaw: -Math.PI / 2, xSign: -1 },
+  ])('uses the calibrated Meta $direction turn by default and walks in that direction', async ({ alphaDelta, yaw, xSign }) => {
     const t = setup();
     await t.controller.start();
-    t.host.orientation(0);
+    t.host.orientation(200);
     for (let now = 0; now < 1500; now += 25) {
-      t.at(now); t.host.orientation(-now / 1500 * 90); t.host.motion(0);
+      t.at(now); t.host.orientation(200 + now / 1500 * alphaDelta); t.host.motion(0);
     }
     expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
     expect(t.controller.state.steps).toBe(0);
-    t.walk(1500, 2000, 270);
+    t.walk(1500, 2000, 200 + alphaDelta);
     expect(t.controller.state.steps).toBe(4);
-    expect(t.controller.pose.yaw).toBeCloseTo(Math.PI / 2);
-    expect(t.controller.pose.x).toBeCloseTo(4 * stepDistance);
+    expect(t.controller.pose.yaw).toBeCloseTo(yaw);
+    expect(t.controller.pose.x).toBeCloseTo(xSign * 4 * stepDistance);
     expect(t.controller.pose.z).toBeCloseTo(0);
     t.controller.stop();
   });
@@ -97,8 +100,8 @@ describe('relative head facing and estimated walking', () => {
     t.controller.syncPose({ x: 2, z: 3, yaw: Math.PI / 2 });
     expect(t.controller.recenter()).toBe(true);
     expect(t.controller.pose).toEqual({ x: 2, z: 3, yaw: Math.PI });
-    t.controller.setYawSign(1);
-    t.host.orientation(0);
+    t.controller.setYawSign(-1);
+    t.host.orientation(180);
     expect(t.controller.pose.yaw).toBeCloseTo(Math.PI / 2);
     expect(t.controller.pose.x).toBe(2); expect(t.controller.pose.z).toBe(3);
     t.controller.stop();
@@ -173,7 +176,7 @@ describe('permission and foreground lifecycle', () => {
       t.at(100); t.host.orientation(90);
       expect(t.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: false });
       expect(t.controller.state.message).toContain(motion ? 'steps denied' : 'steps unavailable');
-      expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI / 2);
+      expect(t.controller.pose.yaw).toBeCloseTo(Math.PI / 2);
       t.walk(200, 2000, 90);
       expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
       expect(t.controller.state.steps).toBe(0);
@@ -294,7 +297,7 @@ describe('permission and foreground lifecycle', () => {
     expect(await t.controller.start()).toBe(true);
     t.host.orientation(0); t.at(100); t.host.orientation(90);
     expect(t.controller.state).toMatchObject({ status: 'live', headStatus: 'ready', stepStatus: 'permission' });
-    expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI / 2);
+    expect(t.controller.pose.yaw).toBeCloseTo(Math.PI / 2);
     t.walk(200, 1000, 90);
     expect(t.controller.state.steps).toBe(0);
     grant('granted'); await vi.advanceTimersByTimeAsync(0);
@@ -399,13 +402,13 @@ describe('permission and foreground lifecycle', () => {
     t.host.orientation(220, 'deviceorientationabsolute');
     t.at(100); t.host.orientation(230, 'deviceorientationabsolute');
     const before = t.controller.pose;
-    expect(before.yaw).toBeCloseTo(-Math.PI + 10 * Math.PI / 180);
+    expect(before.yaw).toBeCloseTo(Math.PI - 10 * Math.PI / 180);
     t.host.orientation(20);
     expect(t.controller.pose).toEqual(before);
     t.at(1400); t.host.orientation(80);
     expect(t.controller.pose, 'fallback switches origins without rotating the pet').toEqual(before);
     t.at(1500); t.host.orientation(90);
-    expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI + 20 * Math.PI / 180);
+    expect(t.controller.pose.yaw).toBeCloseTo(Math.PI - 20 * Math.PI / 180);
     expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
     expect(t.controller.state.steps).toBe(0);
     t.controller.stop();

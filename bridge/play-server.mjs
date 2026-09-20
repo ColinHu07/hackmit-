@@ -31,9 +31,19 @@ export function createPlayServer(options = {}) {
   const addresses = new Map();
   const photoVerifier = options.photoVerifier ?? createQuestPhotoVerifier(options.meta);
   const petStore = options.petStore ?? createPetStore(options.database ?? ':memory:', options.now);
+  const verificationJobs = new Map();
+  const activeVerifications = new Set();
+  const verificationNow = options.verification?.now ?? Date.now;
+  const verificationTimeoutMs = options.verification?.timeoutMs ?? 35_000;
+  const verificationTtlMs = options.verification?.resultTtlMs ?? 5 * 60_000;
+  const verificationReconnectMs = options.verification?.reconnectGraceMs ?? 2 * 60_000;
+  const maxVerificationJobs = options.verification?.maxJobs ?? 1000;
+  const maxActiveVerifications = options.verification?.maxConcurrent ?? 4;
+  const validSubmissionId = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
   let closing = false;
 
   function writeJson(response, status, body) {
+    if (response.destroyed || response.writableEnded) return;
     response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     response.end(JSON.stringify(body));
   }
@@ -60,12 +70,57 @@ export function createPlayServer(options = {}) {
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
     catch { throw new Error('The photo request was unreadable.'); }
   }
+  function sweepVerifications() {
+    const now = verificationNow();
+    for (const [key, job] of verificationJobs) {
+      if (job.status !== 'pending' && (now - job.finishedAt >= verificationTtlMs
+        || rooms.get(job.room.code) !== job.room || job.room.players.get(job.owner.id) !== job.owner)) verificationJobs.delete(key);
+    }
+  }
+  function verificationStatus(job) {
+    return { submissionId: job.id, questId: job.questId, status: job.status, ...job.result };
+  }
+  function currentVerification(owner, captureRequestId) {
+    sweepVerifications();
+    let latest;
+    for (const job of verificationJobs.values()) if (job.owner === owner && job.captureRequestId === captureRequestId) latest = job;
+    return latest ? verificationStatus(latest) : null;
+  }
+  function hasRetainedVerification(player, now) {
+    if ([...activeVerifications].some(attempt => attempt.asynchronous && attempt.participants.includes(player))) return true;
+    if (player.disconnectedAt === null || now - player.disconnectedAt >= verificationReconnectMs) return false;
+    return [...verificationJobs.values()].some(job => job.owner === player && job.status !== 'pending'
+      && verificationNow() - job.finishedAt < verificationTtlMs);
+  }
+  async function verificationLookup(request, response) {
+    if (!cors(request, response)) return writeJson(response, 403, { error: 'Quest verification is not allowed from this site.' });
+    let input;
+    try { input = await readJson(request, 20_000); }
+    catch (cause) { return writeJson(response, 400, { error: cause.message }); }
+    const { roomCode, playerToken, questId, submissionId } = input ?? {};
+    if (typeof roomCode !== 'string' || !/^[A-Z0-9]{6}$/.test(roomCode)
+      || typeof playerToken !== 'string' || !/^[a-f0-9]{48}$/.test(playerToken)
+      || !validSubmissionId(submissionId) || typeof questId !== 'string' || !Object.hasOwn(PHOTO_VERIFICATION_QUESTS, questId)) {
+      return writeJson(response, 400, { error: 'The verification status request is invalid.' });
+    }
+    const room = rooms.get(roomCode);
+    const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
+    if (!player || !player.socket) return writeJson(response, 401, { error: 'Reconnect to the game to check this submission.' });
+    const at = Date.now();
+    const quota = player.verificationStatusQuota ??= { tokens: 20, at };
+    if (!consume(quota, 20, 4, at)) return writeJson(response, 429, { error: 'Please wait before checking this submission again.' });
+    sweepVerifications();
+    const job = verificationJobs.get(`${player.id}:${submissionId}`);
+    if (!job || job.owner !== player || job.questId !== questId) return writeJson(response, 404, { error: 'This submission was not found or has expired.' });
+    return writeJson(response, job.status === 'pending' ? 202 : 200, verificationStatus(job));
+  }
   async function verifyQuestPhoto(request, response) {
     if (!cors(request, response)) return writeJson(response, 403, { error: 'Photo verification is not allowed from this site.' });
     let input;
     try { input = await readJson(request); }
     catch (cause) { return writeJson(response, 400, { error: cause instanceof Error ? cause.message : 'The photo request was unreadable.' }); }
-    const { roomCode, playerToken, questId, photoDataUrl, frames, durationSeconds } = input ?? {};
+    const { roomCode, playerToken, questId, submissionId, captureRequestId } = input ?? {};
+    let { photoDataUrl, frames, durationSeconds } = input ?? {};
     if (typeof roomCode !== 'string' || typeof playerToken !== 'string' || typeof questId !== 'string'
       || !/^[A-Z0-9]{6}$/.test(roomCode) || !/^[a-f0-9]{48}$/.test(playerToken) || !Object.hasOwn(PHOTO_VERIFICATION_QUESTS, questId)) {
       return writeJson(response, 400, { error: 'The photo request is invalid.' });
@@ -74,6 +129,25 @@ export function createPlayServer(options = {}) {
     const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
     if (!room || !player) return writeJson(response, 401, { error: 'This quest session has expired.' });
     if (!player.socket) return writeJson(response, 409, { error: 'Reconnect to the pen before submitting evidence.' });
+    const asynchronous = submissionId !== undefined;
+    sweepVerifications();
+    if (asynchronous) {
+      if (!validSubmissionId(submissionId) || !validSubmissionId(captureRequestId)
+        || photoDataUrl !== undefined || frames !== undefined || durationSeconds !== undefined) {
+        return writeJson(response, 400, { error: 'Submit the saved capture with a valid submission ID.' });
+      }
+      const existing = verificationJobs.get(`${player.id}:${submissionId}`);
+      if (existing) {
+        if (existing.owner !== player || existing.questId !== questId || existing.captureRequestId !== captureRequestId) {
+          return writeJson(response, 409, { error: 'This submission ID already belongs to a different capture or quest.' });
+        }
+        return writeJson(response, existing.status === 'pending' ? 202 : 200, verificationStatus(existing));
+      }
+      if (verificationJobs.size >= maxVerificationJobs) return writeJson(response, 503, { error: 'Quest submission storage is busy. Please retry shortly.' });
+      const saved = glassesCamera.readyEvidence(player, captureRequestId, questId);
+      if (!saved) return writeJson(response, 409, { error: 'This saved capture is unavailable or belongs to a different quest. Capture again.' });
+      ({ photoDataUrl, frames, durationSeconds } = saved);
+    } else if (captureRequestId !== undefined) return writeJson(response, 400, { error: 'A saved capture requires a submission ID.' });
     try { validateEvidence({ questId, photoDataUrl, frames, durationSeconds }); }
     catch (cause) { return writeJson(response, 400, { error: cause.message }); }
     const remaining = petStore.questCooldown(player.token, questId);
@@ -88,42 +162,74 @@ export function createPlayServer(options = {}) {
     const groupCooldown = Math.max(...participants.map(peer => petStore.questCooldown(peer.token, questId)));
     if (groupCooldown > 0) return writeJson(response, 409, { error: `Your group can repeat this quest in ${Math.ceil(groupCooldown / 1000)}s.`, retryAfterMs: groupCooldown });
     if (participants.some(peer => peer.quests.photoVerification[questId] === 'pending')) return writeJson(response, 409, { error: 'Your group already has evidence being checked.' });
+    if (activeVerifications.size >= maxActiveVerifications) return writeJson(response, 503, { error: 'Quest grading is busy. Please retry shortly.' });
     const now = Date.now();
     const attempts = player.verificationAttempts[questId] ??= { tokens: 3, at: now };
     if (!consume(attempts, 3, 0.05, now)) return writeJson(response, 429, { error: 'Please wait a moment before submitting more evidence.' });
     const previous = participants.map(peer => peer.quests.photoVerification[questId] ?? 'required');
+    const job = asynchronous ? { id: submissionId, captureRequestId, owner: player, room, questId,
+      status: 'pending', result: {}, finishedAt: null } : null;
+    if (job) verificationJobs.set(`${player.id}:${submissionId}`, job);
     participants.forEach(peer => { peer.quests.photoVerification[questId] = 'pending'; });
     broadcast(room);
-    try {
-      const result = await photoVerifier.verify({ questId, ...(photoDataUrl ? { photoDataUrl } : { frames, durationSeconds }), participantCount: participants.length });
-      // An old request cannot approve a new room membership or a different quest group.
-      if (rooms.get(room.code) !== room || participants.some(peer => room.players.get(peer.id) !== peer || !peer.socket)) {
-        participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index]; });
-        return writeJson(response, 409, { error: 'The group changed during verification. Reconnect and submit again.' });
-      }
-      const rewards = result.verified ? petStore.completeQuest(participants.map(peer => peer.token), questId) : [];
-      participants.forEach(peer => { peer.quests.photoVerification[questId] = result.verified ? 'approved' : 'rejected'; });
-      if (result.verified) {
-        participants.forEach(peer => {
-          peer.quests[questId] = true;
-          if (questId === 'dapHandshake') peer.quests.dapHandshakeReady = true;
-          peer.evidenceGroups[questId] = participants.map(member => member.id);
+    const attempt = { participants, asynchronous, controller: new AbortController() };
+    activeVerifications.add(attempt);
+    const grade = async () => {
+      let timer;
+      try {
+        const deadline = new Promise((_, reject) => {
+          const fail = () => reject(new Error(closing ? 'The game server is restarting. Please retry.' : 'Quest grading timed out. Please retry.'));
+          attempt.controller.signal.addEventListener('abort', fail, { once: true });
+          timer = setTimeout(() => attempt.controller.abort(), verificationTimeoutMs);
+          timer.unref();
         });
-        if (questId === 'dapHandshake') room.bond += 1;
+        const result = await Promise.race([deadline, photoVerifier.verify({ questId,
+          ...(photoDataUrl ? { photoDataUrl } : { frames, durationSeconds }), participantCount: participants.length },
+        { signal: attempt.controller.signal })]);
+        // An old request cannot approve a new room membership or a different quest group.
+        if (closing || rooms.get(room.code) !== room || participants.some(peer => room.players.get(peer.id) !== peer || (!asynchronous && !peer.socket))) {
+          throw Object.assign(new Error('The group changed during verification. Reconnect and submit again.'), { status: 409 });
+        }
+        const rewards = result.verified ? petStore.completeQuest(participants.map(peer => peer.token), questId) : [];
+        participants.forEach(peer => { peer.quests.photoVerification[questId] = result.verified ? 'approved' : 'rejected'; });
+        if (result.verified) {
+          participants.forEach(peer => {
+            peer.quests[questId] = true;
+            if (questId === 'dapHandshake') peer.quests.dapHandshakeReady = true;
+            peer.evidenceGroups[questId] = participants.map(member => member.id);
+          });
+          if (questId === 'dapHandshake') room.bond += 1;
+        }
+        room.notice = result.verified ? `Quest complete! Each pet earned +${QUEST_REWARD.happiness} happiness, +${QUEST_REWARD.berries} berries and +${QUEST_REWARD.points} points.` : result.reason;
+        broadcast(room);
+        return { status: 200, body: { ...result, ...(result.verified ? { reward: rewards[0] } : {}) } };
+      } catch (cause) {
+        participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index]; });
+        broadcast(room);
+        return { status: cause?.status ?? (cause?.code === 'quest_cooldown' ? 409 : photoVerifier.configured ? 502 : 503),
+          body: { error: cause instanceof Error ? cause.message : 'Verification is unavailable.', ...(cause?.retryAfterMs ? { retryAfterMs: cause.retryAfterMs } : {}) } };
+      } finally {
+        clearTimeout(timer);
+        activeVerifications.delete(attempt);
       }
-      room.notice = result.verified ? `Quest complete! Each pet earned +${QUEST_REWARD.happiness} happiness, +${QUEST_REWARD.berries} berries and +${QUEST_REWARD.points} points.` : result.reason;
-      broadcast(room);
-      return writeJson(response, 200, { ...result, ...(result.verified ? { reward: rewards[0] } : {}) });
-    } catch (cause) {
-      participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index]; });
-      broadcast(room);
-      return writeJson(response, cause.code === 'quest_cooldown' ? 409 : photoVerifier.configured ? 502 : 503, { error: cause instanceof Error ? cause.message : 'Verification is unavailable.', ...(cause.retryAfterMs ? { retryAfterMs: cause.retryAfterMs } : {}) });
+    };
+    const completion = grade();
+    if (job) {
+      void completion.then(result => {
+        job.status = result.status === 200 ? 'complete' : 'error';
+        job.result = result.body;
+        job.finishedAt = verificationNow();
+      });
+      return writeJson(response, 202, verificationStatus(job));
     }
+    const result = await completion;
+    return writeJson(response, result.status, result.body);
   }
 
   const glassesCamera = createGlassesCameraBridge({
     ...options.glassesCamera, now: options.glassesCamera?.now ?? options.now ?? Date.now,
     writeJson, readJson,
+    getVerificationStatus: currentVerification,
     // Native DAT requests have no browser Origin; browser calls retain the allowlist.
     cors: (request, response) => !request.headers.origin || cors(request, response),
     resolveOwner(roomCode, playerToken) {
@@ -153,11 +259,12 @@ export function createPlayServer(options = {}) {
       })();
       return;
     }
-    if (path === '/verify' && request.method === 'OPTIONS') {
+    if (['/verify', '/verify/status'].includes(path) && request.method === 'OPTIONS') {
       if (!cors(request, response)) return writeJson(response, 403, { error: 'Photo verification is not allowed from this site.' });
       response.writeHead(204); response.end(); return;
     }
     if (path === '/verify' && request.method === 'POST') { void verifyQuestPhoto(request, response); return; }
+    if (path === '/verify/status' && request.method === 'POST') { void verificationLookup(request, response); return; }
     if (request.method === 'GET' && path === '/health') {
       let players = 0;
       let activeRooms = 0;
@@ -612,10 +719,10 @@ export function createPlayServer(options = {}) {
 
   function reapPlayers(room, now) {
     for (const player of room.players.values()) {
-      // DAT recording can suspend the display. Only an already-authorized
-      // capture/review may extend this exact player's normal rejoin window.
+      // Capture and grading can outlast a display disconnect. Only an already
+      // authorized request/review extends this exact player's rejoin window.
       if (!player.socket && player.disconnectedAt !== null && now - player.disconnectedAt >= rejoinGraceMs
-        && !glassesCamera.hasRetainedCapture(player)) {
+        && !glassesCamera.hasRetainedCapture(player) && !hasRetainedVerification(player, now)) {
         glassesCamera.revoke(player);
         room.players.delete(player.id);
         room.squadReady.delete(player.id);
@@ -673,6 +780,9 @@ export function createPlayServer(options = {}) {
   }, tickMs);
   const heartbeat = setInterval(() => {
     const now = Date.now();
+    // Release expired result metadata and its room/player references even when
+    // nobody makes another submission or status request.
+    sweepVerifications();
     for (const ws of connections) {
       if (!ws.alive || (!ws.session && now - ws.connectedAt > 30_000)) { ws.terminate(); continue; }
       ws.alive = false;
@@ -691,6 +801,8 @@ export function createPlayServer(options = {}) {
     async close() {
       if (closing) return;
       closing = true;
+      for (const attempt of activeVerifications) attempt.controller.abort();
+      verificationJobs.clear();
       glassesCamera.close();
       clearInterval(tick);
       clearInterval(heartbeat);
