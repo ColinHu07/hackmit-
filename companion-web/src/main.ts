@@ -116,10 +116,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section id="compact-quests" class="compact-quests" aria-label="Quest board"><h2>Quests</h2><div id="quest-board-list" class="compact-quest-list"></div></section>
       <div id="native-tools" class="native-tools" hidden>
         <div class="native-walking-heading"><strong id="view-title">Walk with your pet</strong><span id="compass-reading">Compass off</span></div>
-        <p id="walking-status" role="status">Your pet follows your location. Turn or tilt your device to look around.</p>
+        <p id="walking-status" role="status">Your pet follows your steps. Turn or tilt your device to look around.</p>
         <div class="movement-controls" aria-label="Move your pet"><button data-move="forward" aria-label="Move forward">↑</button><button data-move="left" aria-label="Move left">←</button><button data-move="back" aria-label="Move backward">↓</button><button data-move="right" aria-label="Move right">→</button><button id="recenter-view">Recenter view</button></div>
       </div>
-      <div id="browser-view-tools" class="native-tools" hidden><div class="native-walking-heading"><strong>Your pet’s view</strong><span id="browser-compass-status">Facing forward</span></div><p>Your pet stays in the middle. On mobile, location moves your pet and the compass turns the view. Desktop players can use the ground or arrow keys to move.</p><p id="browser-walking-status" role="status">Walking is off · tap to move, or enable walking on your phone.</p><div class="native-buttons"><button id="enable-compass">Enable phone compass</button><button id="enable-walking">Enable walking</button></div></div>
+      <div id="browser-view-tools" class="native-tools" hidden><div class="native-walking-heading"><strong>Your pet’s view</strong><span id="browser-compass-status">Facing forward</span></div><p>Your pet stays in the middle. On mobile, enable walking to follow your steps and use the compass to turn the view. Desktop players can use the ground or arrow keys to move.</p><p id="browser-walking-status" role="status">Walking is off · tap to move, or enable walking on your phone.</p><div class="native-buttons"><button id="enable-compass">Enable phone compass</button><button id="enable-walking">Enable walking</button></div></div>
       <section id="quest-tools" class="native-tools quest-tools" aria-label="Quest clips" hidden>
         <div class="native-walking-heading evidence-heading"><strong>Quest clip</strong></div>
         <div class="evidence-selector"><label for="evidence-quest">Quest to verify</label><select id="evidence-quest"><option value="touchGrass">Solo · touch grass</option><option value="meetFriend">Duo · say hello</option><option value="dapHandshake">Duo · handshake / dap</option><option value="squadCircle">Squad · circle and cheer</option></select></div>
@@ -1130,7 +1130,7 @@ if (!isNativePhone()) {
   el('local-weather').hidden = false;
   el('browser-view-tools').hidden = false;
   el('enable-compass').hidden = !window.matchMedia('(pointer: coarse)').matches;
-  el('enable-walking').hidden = mobileMovement || !window.matchMedia('(pointer: coarse)').matches;
+  el('enable-walking').hidden = !window.matchMedia('(pointer: coarse)').matches;
   el('weather-status').textContent = 'Local weather is ready when you allow location';
 }
 let browserHasHeading = false;
@@ -1322,20 +1322,10 @@ try {
   error('We couldn’t load the 3D playground. Check your connection and WebGL support, then refresh.');
 }
 
-function receiveGameLocation(fix: LocationFix): void {
-  if (!walking || !mobileMovement) return;
-  if (fix.accuracy > 25) { el('walking-status').textContent = stepSensorAvailable ? 'GPS is weak · walking with your steps.' : 'Waiting for a clearer GPS signal.'; return; }
-  if (membership && connection === 'connected') client.location(fix);
-  el('walking-status').textContent = `Following your location · GPS ±${Math.ceil(fix.accuracy)} m`;
-}
-const browserGameLocation = new LocationDiscovery({ fix: receiveGameLocation,
-  status: message => { el('browser-walking-status').textContent = message; },
-  unavailable: message => { el('browser-walking-status').textContent = message; }, paused: () => {} });
 function stopWalking(): void {
   if (!walking) return;
   walking = false;
   stepSensorAvailable = false; stepDetector.reset(); walkingTracker.setStepTracking(false);
-  browserGameLocation.stop();
   nativeCommand('stopLocation', { purpose: 'walking' });
   playground?.setWalkingPose(null);
   playground?.setViewTilt();
@@ -1345,7 +1335,7 @@ function stopWalking(): void {
   updateControls();
 }
 function startWalking(): void {
-  if ((!mobileMovement && !browserWalkingEnabled) || !ready || walking || document.hidden) return;
+  if ((!isNativePhone() && !browserWalkingEnabled) || !ready || walking || document.hidden) return;
   walking = true;
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
   walkingTracker.reset(local?.targetX ?? walkingTracker.pose.x, local?.targetZ ?? walkingTracker.pose.z);
@@ -1358,13 +1348,12 @@ function startWalking(): void {
   publishWalking();
   updateControls();
   nativeCommand('startLocation', { purpose: 'walking' });
-  if (!isNativePhone() && mobileMovement) browserGameLocation.start();
 }
 function publishWalking(moved = false, initialHeading = false): void {
   if (!walking) return;
   playground?.setWalkingPose(walkingTracker.pose, initialHeading, connection !== 'connected');
   if (membership && connection === 'connected') {
-    if (moved && !mobileMovement) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
+    if (moved) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
     client.heading(walkingTracker.pose.yaw);
   }
 }
@@ -1372,7 +1361,6 @@ function receiveWalkingMotion(verticalG: number, timestamp: number): void {
   if (!walking || !stepSensorAvailable || document.hidden) return;
   const steps = stepDetector.sample(verticalG, timestamp);
   if (!walkingTracker.steps(steps)) return;
-  if (mobileMovement && membership && connection === 'connected') client.steps(steps, walkingTracker.pose.yaw);
   walkingSteps += steps;
   el(isNativePhone() ? 'walking-status' : 'browser-walking-status').textContent = `Walking with you · ${walkingSteps} steps detected`;
   publishWalking(true);
@@ -1408,10 +1396,10 @@ if (isNativePhone()) {
     if (event.type === 'motionStatus') {
       stepSensorAvailable = event.available === true;
       stepDetector.reset(); walkingTracker.setStepTracking(stepSensorAvailable);
-      el('walking-status').textContent = stepSensorAvailable ? 'Walking ready · steps follow you between GPS updates.' : 'Using GPS for walking.';
+      el('walking-status').textContent = stepSensorAvailable ? 'Walking ready · walk with your device to move.' : 'Using GPS for walking.';
     }
     if (event.type === 'motion') receiveWalkingMotion(event.verticalG ?? NaN, event.timestamp ?? NaN);
-    if (event.type === 'status' && !stepSensorAvailable && !mobileMovement) el('walking-status').textContent = event.message ?? '';
+    if (event.type === 'status' && !stepSensorAvailable) el('walking-status').textContent = event.message ?? '';
     if (event.type === 'attitude') {
       const view = deviceView.sample({ yaw: event.yaw ?? NaN, gravityX: event.gravityX ?? NaN,
         gravityY: event.gravityY ?? NaN, gravityZ: event.gravityZ ?? NaN,
@@ -1433,8 +1421,7 @@ if (isNativePhone()) {
       } else if (!walkingTracker.hasHeading) el('compass-reading').textContent = 'Waiting for motion or compass…';
     }
     const fix = nativeFix(event);
-    if (fix && mobileMovement) receiveGameLocation(fix);
-    else if (fix && !stepSensorAvailable) {
+    if (fix && !stepSensorAvailable) {
       const result = walkingTracker.location(fix);
       el('walking-status').textContent = result.message;
       publishWalking(result.moved);

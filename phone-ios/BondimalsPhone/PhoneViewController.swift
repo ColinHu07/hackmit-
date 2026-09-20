@@ -154,7 +154,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
             // Walking and turning use Core Motion, independently of GPS access.
             if locationPurposes.contains("walking") { startWalkingMotion() }
-            emit(["type": "unavailable", "message": "Location is off. Walking, turning, and touch controls still work. Enable Location in Settings → Kith for nearby discovery."])
+            emit(["type": "unavailable", "message": "Location is off. Walking and turning still work. Enable Location in Settings → Kith for nearby discovery."])
         @unknown default: break
         }
     }
@@ -191,7 +191,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private func startWalkingMotion() {
         guard !motionManager.isDeviceMotionActive, UIApplication.shared.applicationState == .active else { return }
         guard motionManager.isDeviceMotionAvailable else {
-            emit(["type": "motionStatus", "available": false, "message": "Motion unavailable. Tap the ground or arrows to move. Check Motion & Fitness access in Settings → Kith."])
+            emit(["type": "motionStatus", "available": false, "message": "Motion unavailable. Check Motion & Fitness access in Settings → Kith."])
             return
         }
         motionGeneration += 1
@@ -204,12 +204,12 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
                   UIApplication.shared.applicationState == .active else { return }
             guard let motion, error == nil else {
                 self.stopWalkingMotion()
-                self.emit(["type": "motionStatus", "available": false, "message": "Motion unavailable. Tap the ground or arrows to move. Check Motion & Fitness access in Settings → Kith."])
+                self.emit(["type": "motionStatus", "available": false, "message": "Motion unavailable. Check Motion & Fitness access in Settings → Kith."])
                 return
             }
             if !self.receivedMotion {
                 self.receivedMotion = true
-                self.emit(["type": "motionStatus", "available": true, "message": "Motion ready · walk with your device, turn to look around, or tap to move."])
+                self.emit(["type": "motionStatus", "available": true, "message": "Motion ready · walk with your device and turn to look around."])
                 print("Kith motion ready")
             }
             let a = motion.userAcceleration
