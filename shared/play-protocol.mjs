@@ -1,6 +1,7 @@
 export const PLAY_WORLD_LIMIT = 3;
 export const PLAY_FRIEND_DISTANCE = 1.5;
 export const PLAY_TICK_MS = 50;
+export const PLAY_MAX_PLAYERS = 4;
 export const PLAY_ACTIONS = Object.freeze(['wave', 'feed', 'play', 'jump']);
 export const PLAY_ACTION_DURATION = Object.freeze({ wave: 1800, feed: 2400, play: 3000, jump: 1000 });
 export const PLAY_ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -11,11 +12,13 @@ export function parsePlayMessage(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const allowed = {
     create: ['type', 'name'], join: ['type', 'roomCode', 'name', 'playerToken'],
-    heading: ['type', 'yaw'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'],
+    heading: ['type', 'yaw'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'], ready_squad_quest: ['type'], ready_raid: ['type'],
   };
   if (typeof input.type !== 'string' || !Object.hasOwn(allowed, input.type) || Object.keys(input).some(key => !allowed[input.type].includes(key))) return null;
   if (input.type === 'leave') return { type: 'leave' };
   if (input.type === 'confirm_dap') return { type: 'confirm_dap' };
+  if (input.type === 'ready_squad_quest') return { type: 'ready_squad_quest' };
+  if (input.type === 'ready_raid') return { type: 'ready_raid' };
   if (input.type === 'heading') {
     if (typeof input.yaw !== 'number' || !Number.isFinite(input.yaw)) return null;
     return { type: 'heading', yaw: Math.atan2(Math.sin(input.yaw), Math.cos(input.yaw)) };

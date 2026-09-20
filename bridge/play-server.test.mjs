@@ -56,9 +56,6 @@ test('two phones share authoritative movement, quests, and one cooperative bond 
   const second = await welcome(b);
   assert.equal(second.snapshot.players.length, 2);
   assert.notEqual(second.playerToken, first.playerToken);
-  const outsider = await connect('/ws');
-  outsider.send({ type: 'join', roomCode: first.roomCode, name: 'Chris' });
-  await error(outsider, 'room_full');
   a.clear();
   a.send({ type: 'move', x: 0, z: 0 });
   const moving = await state(a, snapshot => snapshot.players[0].targetX === 0 && snapshot.players[0].x > -1.2);
@@ -78,6 +75,88 @@ test('two phones share authoritative movement, quests, and one cooperative bond 
   await error(b, 'action_busy');
   b.clear();
   assert.equal((await state(b, snapshot => snapshot.bond === 1)).bond, 1);
+});
+
+test('solo, duo, and squad quests are individual and enforce party-size gates', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'create', name: 'Alex' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'join', roomCode: first.roomCode, name: 'Blair' }); const second = await welcome(b);
+  const c = await connect(); c.send({ type: 'join', roomCode: first.roomCode, name: 'Casey' }); const third = await welcome(c);
+  const d = await connect(); d.send({ type: 'join', roomCode: first.roomCode, name: 'Devon' }); await welcome(d);
+  const fifth = await connect(); fifth.send({ type: 'join', roomCode: first.roomCode, name: 'Evan' }); await error(fifth, 'room_full');
+
+  a.send({ type: 'move', x: 0, z: 0 });
+  b.send({ type: 'move', x: 0, z: 0 });
+  c.send({ type: 'move', x: 0, z: 0 });
+  d.send({ type: 'move', x: 0, z: 0 });
+  const gathered = await state(a, snapshot => snapshot.players.every(player => Math.hypot(player.x, player.z) < 0.1));
+  assert.equal(gathered.quests[first.playerId].touchGrass, true, 'walking is the solo touch-grass proof');
+  assert.equal(gathered.quests[second.playerId].meetFriend, true, 'a nearby player completes only that player’s duo quest');
+
+  a.send({ type: 'ready_squad_quest' });
+  b.send({ type: 'ready_squad_quest' });
+  c.send({ type: 'ready_squad_quest' });
+  d.send({ type: 'ready_squad_quest' });
+  const completed = await state(c, snapshot => Object.values(snapshot.quests).every(quest => quest.squadCircle));
+  assert.equal(completed.bond, 3);
+  assert.deepEqual(completed.squad.ready, []);
+  assert.equal(parsePlayMessage({ type: 'ready_squad_quest' }).type, 'ready_squad_quest');
+});
+
+test('photo verification is gated by earned quest progress and stores only its decision', async t => {
+  const checks = [];
+  const { origin, connect } = await setup(t, { photoVerifier: {
+    configured: true,
+    async verify(input) { checks.push(input); return { verified: true, reason: 'Grass is clearly visible.' }; },
+  } });
+  const a = await connect(); a.send({ type: 'create', name: 'Alex' }); const session = await welcome(a);
+  const body = {
+    roomCode: session.roomCode, playerToken: session.playerToken, questId: 'touchGrass',
+    photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+  };
+  let response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal(response.status, 409, 'a photo cannot bypass the movement requirement');
+  a.send({ type: 'move', x: 0, z: 0 });
+  await state(a, snapshot => snapshot.quests[session.playerId].touchGrass);
+  response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.deepEqual(await response.json(), { verified: true, reason: 'Grass is clearly visible.' });
+  const verified = await state(a, snapshot => snapshot.quests[session.playerId].photoVerification.touchGrass === 'approved');
+  assert.equal(verified.quests[session.playerId].photoVerification.touchGrass, 'approved');
+  assert.deepEqual(checks, [{ questId: 'touchGrass', photoDataUrl: body.photoDataUrl }]);
+  assert.equal(JSON.stringify(verified).includes(body.photoDataUrl), false, 'snapshots never contain uploaded image data');
+});
+
+test('a completed squad can start and finish the Mossback raid with per-player rewards', async t => {
+  const { connect } = await setup(t);
+  const a = await connect(); a.send({ type: 'create', name: 'Alex' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'join', roomCode: first.roomCode, name: 'Blair' }); const second = await welcome(b);
+  const c = await connect(); c.send({ type: 'join', roomCode: first.roomCode, name: 'Casey' }); const third = await welcome(c);
+
+  a.send({ type: 'ready_raid' });
+  await error(a, 'raid_needs_squad');
+  for (const client of [a, b, c]) client.send({ type: 'move', x: 0, z: 0 });
+  await state(a, snapshot => snapshot.players.every(player => Math.hypot(player.x, player.z) < 0.1));
+  for (const client of [a, b, c]) client.send({ type: 'ready_squad_quest' });
+  await state(a, snapshot => snapshot.players.every(player => snapshot.quests[player.id].squadCircle));
+
+  a.send({ type: 'ready_raid' }); b.send({ type: 'ready_raid' });
+  const waiting = await state(c, snapshot => snapshot.raid.ready.length === 2);
+  assert.equal(waiting.raid.state, 'waiting');
+  c.send({ type: 'ready_raid' });
+  const active = await state(a, snapshot => snapshot.raid.state === 'active');
+  assert.equal(active.raid.maxHealth, 14);
+  assert.equal(parsePlayMessage({ type: 'ready_raid' }).type, 'ready_raid');
+
+  // Three pets can each jump once per second; fourteen actions calm a three-pet Mossback.
+  for (let round = 0; round < 4; round++) {
+    for (const client of [a, b, c]) client.send({ type: 'action', action: 'jump' });
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+  }
+  a.send({ type: 'action', action: 'jump' });
+  b.send({ type: 'action', action: 'jump' });
+  const defeated = await state(c, snapshot => snapshot.raid.state === 'defeated');
+  assert.equal(defeated.bond, 8, 'three squad moments plus five raid moments');
+  for (const id of [first.playerId, second.playerId, third.playerId]) assert.equal(defeated.quests[id].raidBoss, true);
 });
 
 test('room membership, token rejoin, and socket replacement isolate control', async t => {

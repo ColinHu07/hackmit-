@@ -131,6 +131,8 @@ export class RoomClient {
   heading(yaw: number): void { if (Number.isFinite(yaw)) this.send({ type: 'heading', yaw }); }
   action(action: PetActionKind): void { this.send({ type: 'action', action }); }
   confirmDap(): void { this.send({ type: 'confirm_dap' }); }
+  readySquadQuest(): void { this.send({ type: 'ready_squad_quest' }); }
+  readyRaid(): void { this.send({ type: 'ready_raid' }); }
   private send(message: object): void {
     if (this.connected && this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
   }

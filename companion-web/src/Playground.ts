@@ -10,7 +10,7 @@ import type { PlayPlayer, PlaySnapshot } from '../../shared/play-protocol';
 
 const WORLD_LIMIT = 3;
 const PET_EXTENT = 1.5;
-const SLOT_COLORS = [0x759582, 0xd58e70] as const;
+const SLOT_COLORS = [0x759582, 0xd58e70, 0x8177a8, 0xd3aa5c] as const;
 
 interface NearbyPet {
   id: string;
@@ -184,7 +184,7 @@ export class Playground {
     const players = snapshot?.players ?? [];
     for (let index = 0; index < this.pets.length; index++) {
       const pet = this.pets[index]!;
-      const player = index < 2 ? players.find((candidate) => candidate.slot === index) : undefined;
+      const player = players.find((candidate) => candidate.slot === index);
       const isPreview = !snapshot && index === 0;
       pet.root.visible = isPreview || Boolean(player?.connected);
       if (isPreview) {
@@ -466,7 +466,7 @@ export class Playground {
     body.add(normalized);
     root.add(body);
     const ring = this.mesh(new THREE.RingGeometry(0.45, 0.49, 64), new THREE.MeshBasicMaterial({
-      color: SLOT_COLORS[slot === 0 ? 0 : 1], opacity: 0.72, transparent: true, depthWrite: false,
+      color: SLOT_COLORS[slot] ?? SLOT_COLORS[0], opacity: 0.72, transparent: true, depthWrite: false,
     }));
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.009;

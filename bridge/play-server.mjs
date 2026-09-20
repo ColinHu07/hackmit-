@@ -3,12 +3,13 @@ import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto
 import { pathToFileURL } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { attachNearbyDiscovery } from './nearby-discovery.mjs';
+import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS } from './quest-verification.mjs';
 import {
   PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES,
-  PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
+  PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
 } from '../shared/play-protocol.mjs';
 
-/** Ephemeral, server-authoritative two-person playground; no account or camera data. */
+/** Ephemeral, server-authoritative four-person playground; no account or camera data. */
 export function createPlayServer(options = {}) {
   const tickMs = options.tickMs ?? PLAY_TICK_MS;
   const rejoinGraceMs = options.rejoinGraceMs ?? 30_000;
@@ -20,9 +21,77 @@ export function createPlayServer(options = {}) {
   const rooms = new Map();
   const connections = new Set();
   const addresses = new Map();
+  const verificationAttempts = new Map();
+  const photoVerifier = options.photoVerifier ?? createQuestPhotoVerifier(options.meta);
   let closing = false;
 
+  function writeJson(response, status, body) {
+    response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    response.end(JSON.stringify(body));
+  }
+  function cors(request, response) {
+    const origin = request.headers.origin;
+    if (!origin || (origins.size && !origins.has(origin))) return !origin;
+    response.setHeader('access-control-allow-origin', origin);
+    response.setHeader('vary', 'Origin');
+    response.setHeader('access-control-allow-methods', 'POST, OPTIONS');
+    response.setHeader('access-control-allow-headers', 'content-type');
+    return true;
+  }
+  async function readJson(request, limit = 5_500_000) {
+    const declared = Number(request.headers['content-length'] ?? 0);
+    if (!Number.isFinite(declared) || declared > limit) throw new Error('Photo upload is too large.');
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of request) {
+      size += chunk.length;
+      if (size > limit) throw new Error('Photo upload is too large.');
+      chunks.push(chunk);
+    }
+    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+    catch { throw new Error('The photo request was unreadable.'); }
+  }
+  async function verifyQuestPhoto(request, response) {
+    if (!cors(request, response)) return writeJson(response, 403, { error: 'Photo verification is not allowed from this site.' });
+    let input;
+    try { input = await readJson(request); }
+    catch (cause) { return writeJson(response, 400, { error: cause instanceof Error ? cause.message : 'The photo request was unreadable.' }); }
+    const { roomCode, playerToken, questId, photoDataUrl } = input ?? {};
+    if (typeof roomCode !== 'string' || typeof playerToken !== 'string' || typeof questId !== 'string' || typeof photoDataUrl !== 'string'
+      || !/^[A-Z0-9]{6}$/.test(roomCode) || !/^[a-f0-9]{48}$/.test(playerToken) || !Object.hasOwn(PHOTO_VERIFICATION_QUESTS, questId)) {
+      return writeJson(response, 400, { error: 'The photo request is invalid.' });
+    }
+    const room = rooms.get(roomCode);
+    const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
+    if (!room || !player) return writeJson(response, 401, { error: 'This quest session has expired.' });
+    if (!player.quests[questId]) return writeJson(response, 409, { error: 'Finish the in-game part of this quest before sending a photo.' });
+    const current = player.quests.photoVerification[questId];
+    if (current === 'approved') return writeJson(response, 200, { verified: true, reason: 'This quest photo was already approved.' });
+    if (current === 'pending') return writeJson(response, 409, { error: 'That photo is already being checked.' });
+    const now = Date.now();
+    const attemptKey = `${room.code}:${player.id}:${questId}`;
+    const attempts = verificationAttempts.get(attemptKey) ?? { tokens: 3, at: now };
+    verificationAttempts.set(attemptKey, attempts);
+    if (!consume(attempts, 3, 0.05, now)) return writeJson(response, 429, { error: 'You have sent several photos. Please wait a moment before trying again.' });
+    player.quests.photoVerification[questId] = 'pending';
+    try {
+      const result = await photoVerifier.verify({ questId, photoDataUrl });
+      player.quests.photoVerification[questId] = result.verified ? 'approved' : 'rejected';
+      room.notice = result.verified ? `${player.name}'s photo verified the ${PHOTO_VERIFICATION_QUESTS[questId].label} quest.` : `That photo did not clearly verify ${player.name}'s quest. Try another photo.`;
+      broadcast(room);
+      return writeJson(response, 200, result);
+    } catch (cause) {
+      player.quests.photoVerification[questId] = current ?? 'required';
+      return writeJson(response, photoVerifier.configured ? 502 : 503, { error: cause instanceof Error ? cause.message : 'Photo verification is unavailable.' });
+    }
+  }
   const server = createServer((request, response) => {
+    const path = request.url?.split('?')[0];
+    if (path === '/verify' && request.method === 'OPTIONS') {
+      if (!cors(request, response)) return writeJson(response, 403, { error: 'Photo verification is not allowed from this site.' });
+      response.writeHead(204); response.end(); return;
+    }
+    if (path === '/verify' && request.method === 'POST') { void verifyQuestPhoto(request, response); return; }
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ ok: true, service: 'bondimals-play', rooms: rooms.size }));
@@ -76,7 +145,16 @@ export function createPlayServer(options = {}) {
         x: player.x, z: player.z, targetX: player.targetX, targetZ: player.targetZ,
         yaw: player.yaw, connected: Boolean(player.socket), action: player.action,
       })),
-      bond: room.bond, quest: { ...room.quest }, notice: room.notice,
+      bond: room.bond,
+      quests: Object.fromEntries([...room.players.values()].map(player => [player.id, { ...player.quests }])),
+      squad: { ready: [...room.squadReady], minPlayers: 3 },
+      raid: {
+        state: room.raid?.state ?? 'waiting', ready: [...room.raidReady],
+        participants: room.raid?.participants ?? [], minPlayers: 3,
+        health: room.raid?.health ?? 0, maxHealth: room.raid?.maxHealth ?? 0,
+        endsAt: room.raid?.endsAt ?? null,
+      },
+      quest: { ...room.quest }, notice: room.notice,
       ...(room.encounter ? { encounter: {
         kind: 'nearby', dapConfirmed: [...room.encounter.dapConfirmed], dapComplete: room.encounter.dapComplete,
       } } : {}),
@@ -106,6 +184,7 @@ export function createPlayServer(options = {}) {
     player.action = null;
     if (intentional) {
       room.players.delete(player.id);
+      room.squadReady.delete(player.id);
       room.notice = `${player.name} left the playground.`;
     } else {
       player.disconnectedAt = now;
@@ -118,7 +197,7 @@ export function createPlayServer(options = {}) {
     do { code = Array.from({ length: 6 }, () => PLAY_ROOM_ALPHABET[randomInt(PLAY_ROOM_ALPHABET.length)]).join(''); }
     while (rooms.has(code));
     const room = {
-      code, players: new Map(), bond: 0, quest: { met: false, waved: false, played: false },
+      code, players: new Map(), bond: 0, quest: { met: false, waved: false, played: false }, squadReady: new Set(), raidReady: new Set(), raid: null,
       notice: 'Invite a friend with your room code.', lastActivity: Date.now(), lastPlayAt: 0,
     };
     rooms.set(code, room);
@@ -133,19 +212,22 @@ export function createPlayServer(options = {}) {
     broadcast(room);
   }
   function makePlayer(room, name) {
-    const slot = [...room.players.values()].some(player => player.slot === 0) ? 1 : 0;
-    const x = slot === 0 ? -1.2 : 1.2;
+    const slot = [0, 1, 2, 3].find(candidate => ![...room.players.values()].some(player => player.slot === candidate));
+    const starts = [[-1.2, 0], [1.2, 0], [0, -1.2], [0, 1.2]];
+    const [x, z] = starts[slot];
     const player = {
       id: randomUUID(), token: randomBytes(24).toString('hex'), name, slot,
-      x, z: 0, targetX: x, targetZ: 0, yaw: slot === 0 ? Math.PI / 2 : -Math.PI / 2,
+      x, z, targetX: x, targetZ: z, yaw: Math.atan2(-x, -z),
       action: null, socket: null, disconnectedAt: null, lastActionAt: 0,
+      movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, photoVerification: {} },
     };
     room.players.set(player.id, player);
     return player;
   }
   function addPlayer(ws, room, name) {
     const player = makePlayer(room, name);
-    if (room.players.size === 2) room.notice = `${name} joined! Bring your pets together.`;
+    if (room.players.size === 2) room.notice = `${name} joined the pen! Duo quests are now live.`;
+    else if (room.players.size >= 3) room.notice = `${name} joined the pen! Squad quest and raid party are ready.`;
     welcome(ws, room, player);
   }
   function reserveNearbyRoom(names) {
@@ -161,12 +243,52 @@ export function createPlayServer(options = {}) {
   }
   const sameToken = (a, b) => timingSafeEqual(Buffer.from(a), Buffer.from(b));
   const friends = room => [...room.players.values()].filter(player => player.socket);
-  const together = players => players.length === 2 && Math.hypot(players[0].x - players[1].x, players[0].z - players[1].z) <= PLAY_FRIEND_DISTANCE;
+  const neighboringPlayers = (player, players) => players.filter(candidate => candidate !== player && Math.hypot(player.x - candidate.x, player.z - candidate.z) <= PLAY_FRIEND_DISTANCE);
+  const clustered = players => players.length >= 3 && players.every(player => players.every(other => player === other || Math.hypot(player.x - other.x, player.z - other.z) <= PLAY_FRIEND_DISTANCE));
+  function completeSquadQuest(room, players, now) {
+    if (players.length < 3) return false;
+    if (!players.every(player => room.squadReady.has(player.id))) return false;
+    if (!clustered(players)) return false;
+    for (const player of players) player.quests.squadCircle = true;
+    room.squadReady.clear();
+    room.bond += 3;
+    room.notice = 'Squad circle complete! Every pet earned a shared moment.';
+    broadcast(room, now);
+    return true;
+  }
   function setAction(player, kind, now) {
     player.action = { id: randomUUID(), kind, startedAt: now, duration: PLAY_ACTION_DURATION[kind] };
     player.lastActionAt = now;
     player.targetX = player.x;
     player.targetZ = player.z;
+  }
+  function startRaid(room, players, now) {
+    const maxHealth = 8 + players.length * 2;
+    room.raid = { state: 'active', participants: players.map(player => player.id), health: maxHealth, maxHealth, endsAt: now + 45_000 };
+    room.raidReady.clear();
+    room.notice = 'Mossback wakes! Use Wave, Treat, Jump, or Play together to calm the tangled guardian.';
+  }
+  function failRaid(room, message) {
+    room.raid = null;
+    room.raidReady.clear();
+    room.notice = message;
+  }
+  function damageRaid(room, player, action, now) {
+    const raid = room.raid;
+    if (raid?.state !== 'active' || !raid.participants.includes(player.id)) return false;
+    const damage = action === 'play' ? 2 : 1;
+    raid.health = Math.max(0, raid.health - damage);
+    if (raid.health === 0) {
+      raid.state = 'defeated';
+      raid.endsAt = null;
+      for (const id of raid.participants) {
+        const participant = room.players.get(id);
+        if (participant) participant.quests.raidBoss = true;
+      }
+      room.bond += 5;
+      room.notice = 'Mossback is calm! Every raider earned a Mossback Leaf and five shared moments.';
+    } else room.notice = `${player.name}'s ${action === 'feed' ? 'treat' : action} calmed Mossback. ${raid.health}/${raid.maxHealth} calm points remain.`;
+    return true;
   }
   function processMessage(ws, message) {
     const now = Date.now();
@@ -193,7 +315,7 @@ export function createPlayServer(options = {}) {
         return;
       }
       if (room.encounter) return fail(ws, 'private_room', 'This nearby playground requires your invitation session.');
-      if (room.players.size >= 2) return fail(ws, 'room_full', 'This room has two players. Disconnected places are briefly reserved.');
+      if (room.players.size >= PLAY_MAX_PLAYERS) return fail(ws, 'room_full', 'This pen already has four players. Start another pen for a new squad.');
       addPlayer(ws, room, message.name);
       return;
     }
@@ -201,6 +323,32 @@ export function createPlayServer(options = {}) {
     if (!ws.session) return fail(ws, 'not_joined', 'Create or join a room first.');
     const { room, player } = ws.session;
     room.lastActivity = now;
+    if (message.type === 'ready_squad_quest') {
+      const connected = friends(room);
+      if (player.quests.squadCircle) return fail(ws, 'squad_complete', 'You already completed this squad quest.');
+      if (connected.length < 3) return fail(ws, 'squad_locked', 'The squad quest unlocks when three pets are in the pen.');
+      if (!clustered(connected)) return fail(ws, 'squad_too_far', 'Bring the whole squad close together before you ready up.');
+      room.squadReady.add(player.id);
+      if (!completeSquadQuest(room, connected, now)) {
+        room.notice = `${player.name} is ready. Waiting for the rest of the squad.`;
+        broadcast(room, now);
+      }
+      return;
+    }
+    if (message.type === 'ready_raid') {
+      const connected = friends(room);
+      if (player.quests.raidBoss) return fail(ws, 'raid_complete', 'You already calmed Mossback in this pen.');
+      if (room.raid?.state === 'active') return fail(ws, 'raid_active', 'Mossback is already awake. Help your squad calm it.');
+      if (room.raid?.state === 'defeated') return fail(ws, 'raid_defeated', 'Mossback is already calm in this pen.');
+      if (connected.length < 3) return fail(ws, 'raid_locked', 'The raid needs three connected pets in the pen.');
+      if (!connected.every(candidate => candidate.quests.squadCircle)) return fail(ws, 'raid_needs_squad', 'Complete the squad circle together before calling Mossback.');
+      if (!clustered(connected)) return fail(ws, 'raid_too_far', 'Gather the whole squad close together before calling Mossback.');
+      room.raidReady.add(player.id);
+      if (connected.every(candidate => room.raidReady.has(candidate.id))) startRaid(room, connected, now);
+      else room.notice = `${player.name} is ready to call Mossback. Waiting for the squad.`;
+      broadcast(room, now);
+      return;
+    }
     if (message.type === 'confirm_dap') {
       if (!room.encounter) return fail(ws, 'not_nearby_encounter', 'This quest is available after accepting a nearby invitation.');
       if (friends(room).length !== 2) return fail(ws, 'friend_disconnected', 'Both people need to be connected to confirm this quest.');
@@ -228,27 +376,28 @@ export function createPlayServer(options = {}) {
     if (now - player.lastActionAt < 600 || (player.action && now < player.action.startedAt + player.action.duration)) {
       return fail(ws, 'action_busy', 'Give your pet a moment to finish.');
     }
-    const nearby = friends(room);
+    const connectedPlayers = friends(room);
     if (message.action === 'play') {
-      if (!together(nearby)) return fail(ws, 'friend_too_far', 'Bring both connected pets close together to play.');
+      const playmates = [player, ...connectedPlayers.filter(friend => friend !== player && Math.hypot(player.x - friend.x, player.z - friend.z) <= PLAY_FRIEND_DISTANCE)];
+      if (playmates.length < 2) return fail(ws, 'friend_too_far', 'Bring another connected pet close together to play.');
       if (now - room.lastPlayAt < 5000) return fail(ws, 'play_cooldown', 'Your pets are catching their breath. Try again in a moment.');
       room.lastPlayAt = now;
       room.bond += 1;
       room.quest.met = true;
       room.quest.played = true;
-      for (const friend of nearby) {
-        const other = nearby.find(candidate => candidate !== friend);
+      for (const friend of playmates) {
+        const other = playmates.find(candidate => candidate !== friend);
         friend.yaw = Math.atan2(other.x - friend.x, other.z - friend.z);
         setAction(friend, 'play', now);
       }
-      room.notice = 'Your pets played together! Friendship grew.';
+      if (!damageRaid(room, player, message.action, now)) room.notice = 'Your pets played together! Friendship grew.';
     } else {
       setAction(player, message.action, now);
-      if (message.action === 'wave' && together(nearby)) {
+      if (message.action === 'wave' && neighboringPlayers(player, connectedPlayers).length) {
         room.quest.met = true;
         room.quest.waved = true;
         room.notice = `${player.name} waved hello!`;
-      } else room.notice = `${player.name}'s pet ${message.action === 'feed' ? 'is enjoying a snack' : message.action === 'jump' ? 'jumped for joy' : 'waved'}!`;
+      } else if (!damageRaid(room, player, message.action, now)) room.notice = `${player.name}'s pet ${message.action === 'feed' ? 'is enjoying a snack' : message.action === 'jump' ? 'jumped for joy' : 'waved'}!`;
     }
     broadcast(room, now);
   }
@@ -286,6 +435,7 @@ export function createPlayServer(options = {}) {
     for (const player of room.players.values()) {
       if (!player.socket && player.disconnectedAt !== null && now - player.disconnectedAt >= rejoinGraceMs) {
         room.players.delete(player.id);
+        room.squadReady.delete(player.id);
         room.notice = `${player.name} left the playground. Invite a friend to join.`;
       }
     }
@@ -299,6 +449,11 @@ export function createPlayServer(options = {}) {
       reapPlayers(room, now);
       const connected = friends(room);
       if (connected.length === 0 && now - room.lastActivity >= roomIdleMs) { rooms.delete(room.code); continue; }
+      if (room.raid?.state === 'active') {
+        const participants = room.raid.participants.map(id => room.players.get(id));
+        if (participants.some(player => !player?.socket)) failRaid(room, 'Mossback settled back into the meadow when a raider left. Gather again to retry.');
+        else if (room.raid.endsAt !== null && now >= room.raid.endsAt) failRaid(room, 'Mossback wandered back to its lanterns. The squad can gather and try again.');
+      }
       for (const player of connected) {
         if (player.action && now >= player.action.startedAt + player.action.duration) player.action = null;
         const dx = player.targetX - player.x, dz = player.targetZ - player.z;
@@ -308,11 +463,20 @@ export function createPlayServer(options = {}) {
           const fraction = Math.min(distance / remaining, 1);
           player.x += dx * fraction;
           player.z += dz * fraction;
+          player.movedForGrass += Math.hypot(dx * fraction, dz * fraction);
+          if (!player.quests.touchGrass && player.movedForGrass >= 1) {
+            player.quests.touchGrass = true;
+            player.quests.photoVerification.touchGrass = 'required';
+            room.notice = `${player.name} touched grass! Add a photo to verify this quest.`;
+          }
         }
       }
-      if (!room.quest.met && together(connected)) {
-        room.quest.met = true;
-        room.notice = 'Your pets met! Wave hello or play together.';
+      for (const player of connected) {
+        if (neighboringPlayers(player, connected).length) {
+          if (!player.quests.meetFriend) room.notice = `${player.name} met another pet! Duo quest complete.`;
+          player.quests.meetFriend = true;
+          room.quest.met = true;
+        }
       }
       if (connected.length) broadcast(room, now);
     }
@@ -328,7 +492,7 @@ export function createPlayServer(options = {}) {
   }, heartbeatMs);
   tick.unref();
   heartbeat.unref();
-  const nearby = attachNearbyDiscovery(server, reserveNearbyRoom, {
+  const nearbyService = attachNearbyDiscovery(server, reserveNearbyRoom, {
     ...options.nearby, allowedOrigins: options.allowedOrigins,
   });
 
@@ -339,12 +503,13 @@ export function createPlayServer(options = {}) {
       closing = true;
       clearInterval(tick);
       clearInterval(heartbeat);
-      await nearby.close();
+      await nearbyService.close();
       for (const ws of connections) ws.terminate();
       await new Promise(resolve => wss.close(resolve));
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       rooms.clear();
       addresses.clear();
+      verificationAttempts.clear();
     },
   };
 }

@@ -18,6 +18,21 @@ HOST=0.0.0.0 PORT=8788 npm run play:server
 
 WebSocket endpoints `/`, `/play`, and `/ws` are equivalent. `GET /health` returns JSON with `ok`, `service`, and the number of rooms. A local HTTP client can use `ws://YOUR_LAN_IP:8788`; a client served over HTTPS must use `wss://`.
 
+## Optional photo verification
+
+The solo **touch grass** quest has a **Photo check** tag. After the server observes the walking requirement, the phone can upload one JPEG, PNG, or WebP photo (maximum 4 MB) to `POST /verify`. The server forwards that photo directly to Meta Model API for one visual decision, stores only the resulting pass/fail status and short reason in the player's in-memory quest state, then discards the photo. It does not use face identification, location metadata, or a player's gallery beyond the photo they select.
+
+Set these only in the server environment, never in the phone build:
+
+```sh
+MODEL_API_KEY='your-meta-model-api-key' \
+META_MODEL_API_BASE_URL=https://api.meta.ai/v1 \
+META_MODEL_ID=muse-spark-1.3 \
+npm run play:server
+```
+
+The endpoint uses Meta Model API's OpenAI-compatible `POST /v1/chat/completions` surface with an `image_url` content part. Without `MODEL_API_KEY`, `/verify` returns a clear 503 and no photo is sent anywhere. Each earned quest permits a small, replenishing upload budget (three immediate attempts, then one every 20 seconds) to protect the model API from accidental or abusive retry loops. If `ALLOWED_ORIGINS` is set, the same origin policy applies to `/verify`; proxy this route alongside `/play` and `/nearby` in production.
+
 ## Host it
 
 Use a persistent Node 22+ process/container with WebSocket support. Static hosting alone cannot run this service. Set `HOST=0.0.0.0` where your hosting platform requires it, and let the platform supply `PORT`. Start command from the repo root: `npm run play:server`.
@@ -33,7 +48,7 @@ When configured, absent and nonmatching `Origin` headers are rejected. When unse
 Example nginx location inside your HTTPS site configuration:
 
 ```nginx
-location ~ ^/(play|nearby)$ {
+location ~ ^/(play|nearby|verify)$ {
     proxy_pass http://127.0.0.1:8788;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -62,9 +77,10 @@ The TypeScript contract is in `shared/play-protocol.ts`; runtime input validatio
 
 - Send `{ "type": "create", "name": "Alex" }`, or `{ "type": "join", "roomCode": "ABC234", "name": "Blair" }`. Names are limited to 24 Unicode characters. The `welcome` response includes room code, your player ID, your private rejoin token, and the current snapshot.
 - Save the returned token privately per room/player. To reconnect within 30 seconds of disconnection, send `join` with the saved `playerToken`. The same player resumes; a still-open old connection is replaced. Tokens are never included in public snapshots. After grace expires, join without the expired token to take an available slot.
-- A second player needs the room code, not the first player's token. Explicit `leave` immediately releases the slot and invalidates its token. A disconnected player reserves their place briefly; the snapshot marks `connected: false`.
+- Up to three additional players need the room code, not another player's token. Explicit `leave` immediately releases the slot and invalidates its token. A disconnected player reserves their place briefly; the snapshot marks `connected: false`.
 - Send `{ "type": "move", "x": 1, "z": 0 }` for a destination in the shared ground plane. X/Z are clamped to ±3. The server moves pets at 2 units/second and broadcasts authoritative snapshots at 20Hz. Throttle pointer movement to about 10 updates/second; do not send every render frame. Client rendering can interpolate positions between snapshots.
-- Send `{ "type": "action", "action": "wave" }` for `wave`, `feed`, `jump`, or `play`. Action timing uses epoch milliseconds from the server. `play` requires both players connected and within 1.5 units, animates both pets, and awards one bond point with a five-second cooldown. Quest flags record meeting, waving near a friend, and playing together.
+- Send `{ "type": "action", "action": "wave" }` for `wave`, `feed`, `jump`, or `play`. Action timing uses epoch milliseconds from the server. `play` requires another connected pet within 1.5 units, animates the nearby playmates, and awards one bond point with a five-second cooldown. Each snapshot includes individual quest progress: walking one world-unit completes solo `touchGrass`; meeting another nearby pet completes `meetFriend`; `ready_squad_quest` only completes `squadCircle` when every connected member of a three-or-four-pet clustered squad confirms.
+- A squad that has all completed `squadCircle` can send `ready_raid`. All connected squad members must ready while clustered to wake Mossback. During the 45-second raid, player actions calm its server-owned meter (Play together is worth two points). If a participant disconnects or time expires, the raid safely resets; victory awards each participant's `raidBoss` quest and five shared bond points.
 - Errors include `room_not_found`, `room_full`, `invalid_token`, `not_joined`, `already_joined`, `friend_too_far`, `action_busy`, `play_cooldown`, `invalid_message`, `rate_limited`, and `server_full`. Display the message; never silently create a fake companion.
 
 The service bounds rooms, connections, message size, send buffers, and per-connection mutation rates. It expires empty rooms after ten minutes and drops nonresponsive clients using heartbeat pings. Admission limits use the actual peer IP, ignoring untrusted forwarded headers; when many users share a reverse proxy or NAT, its burst capacity is shared. For a public launch, use edge rate limits and a deliberate trusted-proxy setup. Room codes are invitations, and possession of a rejoin token permits control of its pet. Do not put tokens in public invitation URLs or logs.

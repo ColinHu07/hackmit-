@@ -73,10 +73,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="roster" id="roster" aria-label="Players"></div>
         <div id="dap-quest" class="quest-card dap-card" hidden><div class="quest-header"><span class="quest-symbol">${icon('wave')}</span><div><span class="small-label">MEET IN REAL LIFE</span><h2>Dap them up</h2></div></div><p>Walk over, introduce yourselves, and share a dap, high-five, or wave.</p><button class="primary-button" id="confirm-dap">We said hello ${icon('check')}</button><p id="dap-status" role="status">Both players confirm after meeting in person.</p></div>
         <div class="quest-card">
-          <div class="quest-header"><span class="quest-symbol">${icon('play')}</span><div><span class="small-label">YOUR FIRST LITTLE ADVENTURE</span><h2>Make a new friend</h2></div><span class="quest-count" id="quest-count">0/3</span></div>
-          <ol class="quest-list"><li id="quest-met"><span class="quest-tick">${icon('check')}</span>Bring your pets together</li><li id="quest-waved"><span class="quest-tick">${icon('check')}</span>Give your new friend a wave</li><li id="quest-played"><span class="quest-tick">${icon('check')}</span>Share a little playtime</li></ol>
-          <button id="meet-button" class="text-button" disabled>Meet in the middle ${icon('arrow')}</button>
+          <div class="quest-header"><span class="quest-symbol">${icon('play')}</span><div><span class="small-label">YOUR QUEST BOARD</span><h2>Grow your little world</h2></div><span class="quest-count" id="quest-count">0/4</span></div>
+          <ol class="quest-list"><li id="quest-touch-grass"><span class="quest-tick">${icon('check')}</span><span><strong>Solo · touch grass <em class="verification-tag" id="touch-grass-tag">PHOTO CHECK</em></strong><small>Walk your pet one world-unit, then share a photo of grass to finish it.</small></span></li><li id="quest-meet-friend"><span class="quest-tick">${icon('check')}</span><span><strong>Duo · meet another user</strong><small id="duo-status">Bring a second pet into the pen, then meet nearby.</small></span></li><li id="quest-squad-circle"><span class="quest-tick">${icon('check')}</span><span><strong>Squad · circle up</strong><small id="squad-status">Needs three connected pets in the pen.</small></span></li><li id="quest-raid-boss"><span class="quest-tick">${icon('check')}</span><span><strong>Raid · calm Mossback</strong><small id="raid-quest-status">Complete the squad circle to call the meadow’s tangled guardian.</small></span></li></ol>
+          <button id="meet-button" class="text-button" disabled>Meet in the middle ${icon('arrow')}</button><button id="ready-squad" class="text-button" disabled>Ready for squad circle ${icon('arrow')}</button><button id="verify-touch-grass" class="text-button" hidden>Verify touch grass photo ${icon('arrow')}</button><input id="touch-grass-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden /><p id="photo-verification-status" class="photo-verification-status" role="status" hidden></p>
         </div>
+        <div class="quest-card raid-card" id="raid-card"><div class="quest-header"><span class="quest-symbol">✦</span><div><span class="small-label">SQUAD RAID · 3–4 PETS</span><h2>Mossback, Keeper of the Pen</h2></div></div><p id="raid-description">A gentle guardian’s vine magic has tangled up. Gather a completed squad close together, then calm it with your pets’ actions.</p><div class="raid-health"><span id="raid-health-label">Mossback is resting</span><meter id="raid-health-meter" min="0" max="1" value="0"></meter></div><button id="ready-raid" class="primary-button" disabled>Call Mossback ${icon('arrow')}</button></div>
         <button id="leave-button" class="leave-button">Leave playground</button>
       </div>
       <div id="error-message" class="error-message" role="alert" hidden></div>
@@ -99,7 +100,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="native-walking-heading"><strong>Quest clips</strong></div>
         <p>Save a moment from your adventure.</p>
         <div class="native-buttons"><button id="record-clip">Record quest clip</button><button id="review-clip">Review clip</button><button id="delete-clip">Delete clip</button></div>
-        <p id="recording-status" role="status">Record up to 10 seconds. AI verification comes later.</p>
+        <p id="recording-status" role="status">Record up to 10 seconds. Quest photo checks use a photo you choose to share.</p>
       </section>
       <div class="meadow-footer"><span>01 / THE FIRST HELLO</span><span>A WORLD WE MAKE TOGETHER</span></div>
     </section>
@@ -143,6 +144,7 @@ let discoveryConnected = false;
 let nearbyPeers: NearbyPet[] = [];
 let pendingMeet: (MeetRequest & { incoming: boolean }) | null = null;
 let nearbyListKey = '';
+let photoVerificationPending = false;
 const canvas = el<HTMLCanvasElement>('playground');
 const nameInput = el<HTMLInputElement>('player-name');
 const codeInput = el<HTMLInputElement>('room-input');
@@ -177,6 +179,17 @@ function toast(message: string): void {
   el('toast').hidden = false;
   toastTimer = setTimeout(() => { el('toast').hidden = true; }, 4000);
 }
+function verificationEndpoint(): string {
+  const url = new URL(serverUrl);
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+  url.pathname = '/verify';
+  url.search = '';
+  url.hash = '';
+  return url.href;
+}
+function photoQuestComplete(quests: { touchGrass: boolean; photoVerification: Partial<Record<'touchGrass', 'required' | 'pending' | 'approved' | 'rejected'>> }, key: 'touchGrass' | 'meetFriend' | 'squadCircle' | 'raidBoss'): boolean {
+  return key !== 'touchGrass' || quests.photoVerification.touchGrass === 'approved';
+}
 function error(message: string, terminal = false): void {
   if (terminal) clearResume();
   if (terminal && !membership && !nearbyActive) {
@@ -209,18 +222,25 @@ function updateEntry(): void {
 }
 function updateControls(): void {
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
-  const friend = snapshot?.players.find(p => p.id !== membership?.playerId && p.connected);
-  const near = !!local && !!friend && Math.hypot(local.x - friend.x, local.z - friend.z) <= 1.5;
+  const friends = snapshot?.players.filter(p => p.id !== membership?.playerId && p.connected) ?? [];
+  const friend = friends[0];
+  const near = !!local && friends.some(other => Math.hypot(local.x - other.x, local.z - other.z) <= 1.5);
   const connected = connection === 'connected';
   playground?.setEnabled(ready && (nearbyActive ? locationActive && discoveryConnected : connected));
   document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     button.disabled = !connected || !!local?.action || (button.dataset.action === 'play' && !near);
   });
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend || walking;
+  el<HTMLButtonElement>('ready-squad').disabled = !connected || !local || !!snapshot?.quests[local.id]?.squadCircle || (snapshot?.players.filter(player => player.connected).length ?? 0) < 3;
+  const raid = snapshot?.raid;
+  const connectedPlayers = snapshot?.players.filter(player => player.connected) ?? [];
+  const squadComplete = connectedPlayers.length >= 3 && connectedPlayers.every(player => snapshot?.quests[player.id]?.squadCircle);
+  el<HTMLButtonElement>('ready-raid').disabled = !connected || !local || !!snapshot?.quests[local.id]?.raidBoss
+    || raid?.state === 'active' || raid?.state === 'defeated' || !squadComplete;
   el<HTMLButtonElement>('confirm-dap').disabled = !connected || !friend || !!snapshot?.encounter?.dapConfirmed.includes(membership?.playerId ?? '') || !!snapshot?.encounter?.dapComplete;
   el('scene-hint').textContent = connection === 'offline' ? 'Offline. Leave the playground to connect again.'
     : !connected ? 'Reconnecting. Your pets are waiting for you.'
-    : !friend ? 'Invite a friend, or tap the ground to explore.'
+    : !friend ? 'Touch grass to finish your solo quest, or invite a friend.'
     : near ? 'You’re close! Wave hello or play together.' : 'Tap to move, or meet in the middle.';
 }
 function setConnection(state: ConnectionState): void {
@@ -259,10 +279,10 @@ function renderRoster(): void {
     item.append(avatar, text, status);
     roster.append(item);
   }
-  if (snapshot.players.length < 2) {
+  if (snapshot.players.length < 4) {
     const empty = document.createElement('div');
     empty.className = 'empty-friend';
-    empty.innerHTML = `${icon('people')}<span>A little space for your friend</span>`;
+    empty.innerHTML = `${icon('people')}<span>${4 - snapshot.players.length} ${4 - snapshot.players.length === 1 ? 'space' : 'spaces'} open in the pen</span>`;
     roster.append(empty);
   }
 }
@@ -285,26 +305,61 @@ const client = new RoomClient({
     el('app').classList.add('in-room');
     el('app').classList.remove('in-nearby');
     el('room-code').textContent = member.roomCode;
-    el('connection-label').textContent = `${next.players.filter(p => p.connected).length}/2 here`;
+    const connectedCount = next.players.filter(p => p.connected).length;
+    el('connection-label').textContent = `${connectedCount}/4 here`;
     el<HTMLButtonElement>('server-settings').disabled = true;
     el('room-invite').hidden = !!next.encounter;
     el('dap-quest').hidden = !next.encounter;
-    el('invite-note').textContent = next.encounter ? 'You found each other nearby. Make this a real-world hello.' : next.players.filter(p => p.connected).length === 2 ? 'Both pets are here. Let the little adventures begin.' : 'Share your room code. Your friend’s pet will appear here.';
+    el('invite-note').textContent = next.encounter ? 'You found each other nearby. Make this a real-world hello.' : connectedCount >= 3 ? 'Squad is here! Circle up for your shared quest.' : connectedCount === 2 ? 'Duo quest unlocked. Meet each other in the pen.' : 'Share your room code. Up to four pets can join this pen.';
     if (next.encounter) {
       const confirmed = next.encounter.dapConfirmed.includes(member.playerId);
       el('dap-status').textContent = next.encounter.dapComplete ? 'You both confirmed your hello. One shared moment earned!' : confirmed ? 'You confirmed. Waiting for your friend to confirm too.' : 'Both players confirm after meeting in person.';
       el('confirm-dap').textContent = next.encounter.dapComplete ? 'Hello completed ✓' : confirmed ? 'Waiting for your friend…' : 'We said hello';
     }
     renderRoster();
+    const quests = next.quests[member.playerId] ?? { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, photoVerification: {} };
     let done = 0;
-    for (const key of ['met', 'waved', 'played'] as const) {
-      el(`quest-${key}`).classList.toggle('done', next.quest[key]);
-      if (next.quest[key]) done++;
+    for (const [key, doneId] of [['touchGrass', 'touch-grass'], ['meetFriend', 'meet-friend'], ['squadCircle', 'squad-circle'], ['raidBoss', 'raid-boss']] as const) {
+      const complete = quests[key] && photoQuestComplete(quests, key);
+      el(`quest-${doneId}`).classList.toggle('done', complete);
+      if (complete) done++;
     }
-    el('quest-count').textContent = `${done}/3`;
+    el('quest-count').textContent = `${done}/4`;
+    const squadUnlocked = connectedCount >= next.squad.minPlayers;
+    const squadReady = next.squad.ready.includes(member.playerId);
+    el('duo-status').textContent = quests.meetFriend ? 'Completed with a nearby pet.' : connectedCount < 2 ? 'Locked until another user enters the pen.' : 'Bring your pets close together to complete it.';
+    el('squad-status').textContent = quests.squadCircle ? 'Your squad circle is complete.' : !squadUnlocked ? 'Locked until three pets are connected in the pen.' : squadReady ? 'You are ready. Waiting for the squad to ready up.' : 'Gather close, then have every squad member ready up.';
+    el<HTMLButtonElement>('ready-squad').textContent = quests.squadCircle ? 'Squad circle completed ✓' : squadReady ? 'Ready · waiting for squad…' : 'Ready for squad circle →';
+    const photoStatus = quests.photoVerification.touchGrass;
+    const photoButton = el<HTMLButtonElement>('verify-touch-grass');
+    photoButton.hidden = !quests.touchGrass || photoStatus === 'approved';
+    photoButton.disabled = photoVerificationPending || photoStatus === 'pending';
+    photoButton.textContent = photoStatus === 'pending' || photoVerificationPending ? 'Checking photo…' : photoStatus === 'rejected' ? 'Try another grass photo →' : 'Verify touch grass photo →';
+    el('touch-grass-tag').classList.toggle('verified', photoStatus === 'approved');
+    const photoMessage = el('photo-verification-status');
+    photoMessage.hidden = !quests.touchGrass || photoStatus === 'approved';
+    photoMessage.textContent = photoStatus === 'pending' || photoVerificationPending ? 'Checking your photo…' : photoStatus === 'rejected' ? 'That photo did not clearly show grass. Try another one.' : 'Photo check needed to finish this quest.';
+    const allConnectedSquadComplete = connectedCount >= next.raid.minPlayers && next.players.filter(player => player.connected).every(player => next.quests[player.id]?.squadCircle);
+    const raid = next.raid;
+    const raidReady = raid.ready.includes(member.playerId);
+    const raidMeter = el<HTMLMeterElement>('raid-health-meter');
+    const raidActive = raid.state === 'active';
+    raidMeter.max = Math.max(1, raid.maxHealth);
+    raidMeter.value = raidActive ? raid.health : 0;
+    el('raid-health-label').textContent = raidActive ? `${raid.health}/${raid.maxHealth} calm points remaining` : raid.state === 'defeated' ? 'Mossback is calm' : 'Mossback is resting';
+    el('raid-quest-status').textContent = quests.raidBoss ? 'You calmed Mossback with your squad.'
+      : raidActive ? 'Mossback is awake — use any pet action to calm it.'
+        : raid.state === 'defeated' ? 'Mossback is already calm in this pen.'
+          : !allConnectedSquadComplete ? 'Complete the squad circle with three connected pets first.'
+            : raidReady ? 'You are ready. Waiting for the squad to call it.' : 'Gather close, then have every squad member call it.';
+    el('raid-description').textContent = raidActive
+      ? 'Every pet action soothes the guardian; Play together is especially powerful. Keep all raiders here until it is calm.'
+      : 'A gentle guardian’s vine magic has tangled up. A completed squad can gather close and calm it together.';
+    el<HTMLButtonElement>('ready-raid').textContent = quests.raidBoss || raid.state === 'defeated' ? 'Mossback calmed ✓'
+      : raidActive ? 'Mossback is awake!' : raidReady ? 'Ready · waiting for squad…' : 'Call Mossback →';
     const previousMood = mood;
-    for (const key of ['met', 'waved', 'played', 'dap'] as const) {
-      if (key === 'dap' ? next.encounter?.dapComplete : next.quest[key]) {
+    for (const key of ['touchGrass', 'meetFriend', 'squadCircle', 'raidBoss', 'dap'] as const) {
+      if (key === 'dap' ? next.encounter?.dapComplete : key === 'touchGrass' ? quests.touchGrass && photoQuestComplete(quests, key) : quests[key]) {
         mood = rewardMood(mood, `${member.playerToken}:${key}`);
       }
     }
@@ -547,6 +602,36 @@ document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => 
 el('meet-button').addEventListener('click', () => {
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
   if (local) client.move(local.slot === 0 ? -0.5 : 0.5, 0);
+});
+el('ready-squad').addEventListener('click', () => { client.readySquadQuest(); });
+el('ready-raid').addEventListener('click', () => { client.readyRaid(); });
+const touchGrassPhotoInput = el<HTMLInputElement>('touch-grass-photo');
+el('verify-touch-grass').addEventListener('click', () => { touchGrassPhotoInput.click(); });
+touchGrassPhotoInput.addEventListener('change', () => {
+  const file = (touchGrassPhotoInput.files ?? [])[0];
+  touchGrassPhotoInput.value = '';
+  if (!file || !membership || !snapshot) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) {
+    toast('Choose a JPEG, PNG, or WebP photo smaller than 4 MB.');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => toast('That photo could not be read. Please try another one.');
+  reader.onload = () => {
+    if (typeof reader.result !== 'string' || !membership || !snapshot) return;
+    photoVerificationPending = true;
+    updateControls();
+    void fetch(verificationEndpoint(), {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ roomCode: membership.roomCode, playerToken: membership.playerToken, questId: 'touchGrass', photoDataUrl: reader.result }),
+    }).then(async response => {
+      const result = await response.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string };
+      if (!response.ok) throw new Error(result.error || 'Photo verification is unavailable.');
+      toast(result.verified ? 'Photo verified — touch grass is complete!' : result.reason || 'That photo did not clearly show grass. Try another one.');
+    }).catch(cause => toast(cause instanceof Error ? cause.message : 'Photo verification is unavailable.'))
+      .finally(() => { photoVerificationPending = false; updateControls(); });
+  };
+  reader.readAsDataURL(file);
 });
 canvas.addEventListener('keydown', event => {
   const direction: Record<string, [number, number]> = { ArrowUp: [0, -0.5], ArrowDown: [0, 0.5], ArrowLeft: [-0.5, 0], ArrowRight: [0.5, 0] };
