@@ -1,6 +1,8 @@
 import '@fontsource-variable/dm-sans';
 import '@fontsource-variable/manrope';
 import './style.css';
+import { LocalWeather } from './LocalWeather';
+import { readMood, moodValue, rewardMood } from './PetMood';
 import { Playground } from './Playground';
 import { RoomClient, normalizeServerUrl } from './RoomClient';
 import { NearbyClient } from './NearbyClient';
@@ -44,7 +46,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <form id="entry-form" class="entry-card">
           <div id="manual-modes" class="entry-tabs" role="tablist" aria-label="How to join" hidden><button type="button" role="tab" aria-selected="true" id="create-tab">Start a playground</button><button type="button" role="tab" aria-selected="false" id="join-tab">Join a friend</button></div>
           <label for="player-name">Your name</label><input id="player-name" name="name" autocomplete="given-name" maxlength="24" placeholder="What should we call you?" required />
-          <div id="location-explainer" class="location-explainer"><span class="range-chip">ABOUT 10 METERS</span><p>Find people who are also playing nearby. Your location is shared with the game server while nearby mode is active. Other players see your pet and an approximate distance.</p><span id="location-host"></span></div>
+          <div id="location-explainer" class="location-explainer"><span class="range-chip">ABOUT 10 METERS</span><p>Find people who are also playing nearby. Nearby discovery starts automatically and can be paused. Your location is shared with the game server while it is active. Rounded coordinates are used for local weather. Other players see your pet and an approximate distance.</p><span id="location-host"></span></div>
           <div id="room-input-wrap" hidden><label for="room-input">Your friend's room code</label><input id="room-input" name="room" maxlength="6" minlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC123" pattern="[A-Za-z0-9]{6}" /></div>
           <button class="primary-button" id="enter-button" type="submit" disabled><span id="enter-label">Loading your pet…</span>${icon('arrow')}</button>
           <p class="form-note" id="entry-note">${icon('people')} Turn a nearby pet into a real hello.</p>
@@ -61,7 +63,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div id="nearby-list" class="nearby-list" aria-label="Nearby pets"></div>
         <div id="meet-request" class="quest-card request-card" hidden><span class="small-label">A LITTLE HELLO</span><h2 id="request-title"></h2><p id="request-description"></p><div class="request-actions"><button id="accept-meet" class="primary-button">Let’s meet ${icon('arrow')}</button><button id="decline-meet" class="text-button">Not now</button></div></div>
         <button id="resume-nearby" class="primary-button" hidden>Resume nearby ${icon('arrow')}</button>
-        <button id="stop-nearby" class="leave-button">Stop nearby discovery</button>
+        <p class="nearby-accuracy">Discovery shares your location with the game server while this app is open. Local weather uses rounded coordinates.</p><button id="stop-nearby" class="leave-button">Stop nearby discovery</button>
       </div>
       <div id="room-panel" hidden>
         <div class="eyebrow"><span class="sun-dot"></span> YOUR SHARED PLAYGROUND</div>
@@ -79,18 +81,19 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <div id="error-message" class="error-message" role="alert" hidden></div>
     </section>
-    <section class="playground-panel" aria-label="The meadow">
-      <div class="scene-topline"><div class="scene-title">${icon('leaf')} THE MEADOW</div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
-      <div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
+    <section class="playground-panel" aria-label="Your local world">
+      <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
+      <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><a href="https://open-meteo.com/" target="_blank" rel="noopener">Weather by Open-Meteo</a></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
+      <div class="mood-card"><div><strong>Your pet’s happiness</strong><span id="mood-label"></span></div><meter id="mood-meter" min="0" max="100" value="70" aria-label="Pet happiness"></meter><p id="mood-note">Complete a quest together for +12 happiness. Slowly drifts down between adventures.</p></div>
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
-        <div class="moment-line"><span id="scene-hint">Tap the meadow to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
+        <div class="moment-line"><span id="scene-hint">Tap the ground to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
         <div class="action-bar"><button data-action="wave">${icon('wave')}<span>Wave</span></button><button data-action="feed">${icon('treat')}<span>Treat</span></button><button data-action="jump">${icon('jump')}<span>Jump</span></button><button data-action="play" class="co-op-action">${icon('play')}<span>Play together</span></button></div>
         <p class="action-notice" id="action-notice" role="status" aria-live="polite">Your little adventure starts here.</p>
       </div>
       <div id="native-tools" class="native-tools" hidden>
         <div class="native-walking-heading"><strong>Walk with your pet</strong><span id="compass-reading">N ↑ · compass off</span></div>
-        <p id="walking-status" role="status">Use your iPhone’s location and compass. Movement is scaled to the meadow.</p>
+        <p id="walking-status" role="status">Use your iPhone’s location and compass. Movement is scaled to your world.</p>
         <div class="native-buttons"><button id="walk-toggle">Start walking</button><button id="walk-recenter" disabled>Recenter</button></div>
         <div class="native-buttons"><button id="record-clip">Record quest clip</button><button id="review-clip">Review clip</button><button id="delete-clip">Delete clip</button></div>
         <p id="recording-status" role="status">Record up to 10 seconds. AI verification comes later.</p>
@@ -139,8 +142,30 @@ let nearbyListKey = '';
 const canvas = el<HTMLCanvasElement>('playground');
 const nameInput = el<HTMLInputElement>('player-name');
 const codeInput = el<HTMLInputElement>('room-input');
-nameInput.value = stored('bondimals:name') || '';
+nameInput.value = stored('bondimals:name') || 'Explorer';
 codeInput.value = (params.get('room') || '').toUpperCase().slice(0, 6);
+
+let mood = readMood(stored('bondimals:mood'));
+save('bondimals:mood', JSON.stringify(mood));
+function renderMood(): void {
+  const value = Math.round(moodValue(mood));
+  el<HTMLMeterElement>('mood-meter').value = value;
+  el('mood-label').textContent = `${value}% · ${value >= 80 ? 'Joyful' : value >= 50 ? 'Content' : 'Ready for company'}`;
+}
+renderMood();
+setInterval(renderMood, 60_000);
+const weather = new LocalWeather(value => {
+  el('weather-status').textContent = value.label;
+  document.querySelector<HTMLElement>('.playground-panel')!.dataset.weather = value.kind;
+  playground?.setWeather(value.kind);
+});
+let autoNearby = stored('bondimals:auto-nearby') !== 'off';
+function resumeAutomaticNearby(): void {
+  renderMood();
+  if (!ready || !autoNearby || membership || connection === 'connecting' || connection === 'reconnecting' || mode !== 'nearby' || document.hidden || (nearbyActive && locationActive)) return;
+  try { startNearby(); } catch (cause) { error(cause instanceof Error ? cause.message : 'Check your server settings.'); }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) resumeAutomaticNearby(); });
 
 function toast(message: string): void {
   clearTimeout(toastTimer);
@@ -191,7 +216,7 @@ function updateControls(): void {
   el<HTMLButtonElement>('confirm-dap').disabled = !connected || !friend || !!snapshot?.encounter?.dapConfirmed.includes(membership?.playerId ?? '') || !!snapshot?.encounter?.dapComplete;
   el('scene-hint').textContent = connection === 'offline' ? 'Offline. Leave the playground to connect again.'
     : !connected ? 'Reconnecting. Your pets are waiting for you.'
-    : !friend ? 'Invite a friend, or tap the meadow to explore.'
+    : !friend ? 'Invite a friend, or tap the ground to explore.'
     : near ? 'You’re close! Wave hello or play together.' : 'Tap to move, or meet in the middle.';
 }
 function setConnection(state: ConnectionState): void {
@@ -272,6 +297,14 @@ const client = new RoomClient({
       if (next.quest[key]) done++;
     }
     el('quest-count').textContent = `${done}/3`;
+    const previousMood = mood;
+    for (const key of ['met', 'waved', 'played', 'dap'] as const) {
+      if (key === 'dap' ? next.encounter?.dapComplete : next.quest[key]) {
+        mood = rewardMood(mood, `${member.playerToken}:${key}`);
+      }
+    }
+    if (mood !== previousMood) save('bondimals:mood', JSON.stringify(mood));
+    renderMood();
     el('bond-count').textContent = String(next.bond);
     if (next.notice && next.notice !== lastNotice) {
       lastNotice = next.notice;
@@ -399,7 +432,7 @@ const nearbyClient = new NearbyClient({
   error(message) { if (nearbyActive) { el('location-status').textContent = message; toast(message); } },
 });
 const locationCallbacks = {
-  fix(fix: LocationFix) { if (nearbyActive && locationActive) nearbyClient.location(fix); },
+  fix(fix: LocationFix) { void weather.update(fix); if (nearbyActive && locationActive) nearbyClient.location(fix); },
   status(message: string) { if (nearbyActive) el('location-status').textContent = message; },
   unavailable(message: string) { pauseLocation(); if (nearbyActive) el('location-status').textContent = message; },
   paused() { pauseLocation(); if (nearbyActive) el('location-status').textContent = 'Location paused while you were away. Tap Resume nearby.'; },
@@ -408,6 +441,7 @@ const locationTracker = import.meta.env.DEV && params.get('demo') === 'nearby'
   ? new DevelopmentLocation(locationCallbacks, params.get('player') === '2')
   : isNativePhone() ? new NativeLocation(locationCallbacks) : new LocationDiscovery(locationCallbacks);
 function startNearby(): void {
+  autoNearby = true; save('bondimals:auto-nearby', 'on');
   stopWalking();
   serverUrl = normalizeServerUrl(serverUrl);
   nearbyActive = true;
@@ -425,7 +459,7 @@ function startNearby(): void {
   canvas.setAttribute('aria-label', 'Nearby pets. Tap a pet to invite its owner to meet, or use the nearby pet list. Pet placement is illustrative.');
   el<HTMLButtonElement>('server-settings').disabled = true;
   nearbyClient.start(serverUrl, nameInput.value.trim());
-  // Called in the initiating tap. There is no location request on page load.
+  // iOS/browser still owns the permission prompt; discovery is on by default.
   if (locationActive) locationTracker.start();
   renderNearby();
 }
@@ -449,7 +483,7 @@ function stopNearby(): void {
 }
 
 el('entry-mode').addEventListener('click', () => { mode = mode === 'nearby' ? 'join' : 'nearby'; updateEntry(); });
-el('stop-nearby').addEventListener('click', stopNearby);
+el('stop-nearby').addEventListener('click', () => { autoNearby = false; save('bondimals:auto-nearby', 'off'); stopNearby(); });
 el('resume-nearby').addEventListener('click', () => {
   // A pause removes server presence too. Re-register before publishing a new fix.
   startNearby();
@@ -495,6 +529,7 @@ el('leave-button').addEventListener('click', () => {
   mode = 'nearby';
   el('scene-caption').textContent = 'Small paws. Big adventures.';
   updateEntry();
+  resumeAutomaticNearby();
 });
 document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
   button.addEventListener('click', () => {
@@ -539,7 +574,7 @@ el('invite-button').addEventListener('click', () => {
   url.hash = '';
   url.searchParams.set('room', membership.roomCode);
   url.searchParams.set('server', serverUrl);
-  const share = { title: 'Come play in my Bondimals meadow', text: `Bring your pet! Room ${membership.roomCode}`, url: url.href };
+  const share = { title: 'Come play in my Bondimals world', text: `Bring your pet! Room ${membership.roomCode}`, url: url.href };
   if (navigator.share) void navigator.share(share).catch(cause => { if (cause.name !== 'AbortError') toast('Share the room code shown on screen.'); });
   else void copy(url.href).then(() => toast('Invite link copied. Send it to your friend.')).catch(cause => toast(String(cause.message)));
 });
@@ -558,7 +593,8 @@ el('settings-form').addEventListener('submit', event => {
     updateEntry();
     settings.close();
     el('error-message').hidden = true;
-    toast('Server saved. You’re ready to open a playground.');
+    toast('Server saved.');
+    resumeAutomaticNearby();
   } catch (cause) {
     el('settings-error').textContent = cause instanceof Error ? cause.message : 'Check the server URL.';
     el('settings-error').hidden = false;
@@ -591,7 +627,7 @@ try {
   }
 } catch (cause) {
   console.error('Playground could not load:', cause);
-  el('scene-loading').textContent = 'The meadow couldn’t load. Refresh to try again.';
+  el('scene-loading').textContent = 'Your world couldn’t load. Refresh to try again.';
   el('enter-label').textContent = 'Pet unavailable';
   error('We couldn’t load the 3D playground. Check your connection and WebGL support, then refresh.');
 }
@@ -638,6 +674,9 @@ if (isNativePhone()) {
     el(id).addEventListener('click', () => nativeCommand(command));
   }
   onNativeEvent(event => {
+    if (event.type === 'active') resumeAutomaticNearby();
+    const weatherFix = nativeFix(event);
+    if (weatherFix) void weather.update(weatherFix);
     if (event.type === 'recording') el('recording-status').textContent = event.message ?? '';
     if (event.type === 'paused' || event.type === 'unavailable') {
       stopWalking();
@@ -660,3 +699,5 @@ if (isNativePhone()) {
   });
   nativeCommand('ready', { sceneReady: ready });
 }
+
+resumeAutomaticNearby();

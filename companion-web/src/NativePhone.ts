@@ -11,7 +11,7 @@ export function nativeCommand(command: string, extra: object = {}): void {
   window.webkit?.messageHandlers?.bondimals?.postMessage({ command, ...extra });
 }
 export interface NativeEvent {
-  type: 'location' | 'heading' | 'paused' | 'unavailable' | 'status' | 'recording';
+  type: 'active' | 'location' | 'heading' | 'paused' | 'unavailable' | 'status' | 'recording';
   latitude?: number; longitude?: number; accuracy?: number; timestamp?: number;
   degrees?: number; reference?: 'true' | 'magnetic'; message?: string;
 }

@@ -97,7 +97,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         case "reviewClip": reviewClip()
         case "deleteClip": deleteClip()
         case "loadError":
-            loadingLabel.text = "The meadow could not start. Close and reopen Bondimals."
+            loadingLabel.text = "Your world could not start. Close and reopen Bondimals."
             print("Bondimals web error: \(body["message"] ?? "Unknown error")")
         case "ready":
             print(body["sceneReady"] as? Bool == true ? "Bondimals ready: bundled pet scene loaded." : "Bondimals UI loaded; pet scene unavailable.")
@@ -152,7 +152,10 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         isTracking = false; lastFix = nil
         locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
     }
-    @objc private func becameActive() { authorizeLocation() }
+    @objc private func becameActive() {
+        authorizeLocation()
+        if presentedViewController == nil { emit(["type": "active"]) }
+    }
     @objc private func backgrounded() {
         locationPurposes.removeAll(); stopSensors()
         emit(["type": "paused", "message": "Location and walking paused while the app was away."])

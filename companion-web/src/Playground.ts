@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
 import { SoftHead } from '../../glasses-web/src/rendering/SoftHead';
+import type { WeatherKind } from './LocalWeather';
 import type { WalkingPose } from './WalkingTracker';
 import type { PlayPlayer, PlaySnapshot } from '../../shared/play-protocol';
 
@@ -49,6 +50,10 @@ export class Playground {
   private readonly intersectionObserver: IntersectionObserver;
   private readonly motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly shadowTexture: THREE.CanvasTexture;
+  private readonly flowers = new THREE.Group();
+  private readonly weatherParticles = new THREE.Group();
+  private weatherKind: WeatherKind = 'unknown';
+  private groundMaterial = new THREE.MeshStandardMaterial({ color: 0xc5d5a8, transparent: true, opacity: 0.65, roughness: 1 });
   private snapshot: PlaySnapshot | null = null;
   private localPlayerId: string | null = null;
   private nearby: NearbyPet[] | null = null;
@@ -80,6 +85,15 @@ export class Playground {
 
     this.shadowTexture = this.makeShadowTexture();
     this.buildIsland();
+    this.scene.add(this.flowers, this.weatherParticles);
+    const dropGeometry = new THREE.SphereGeometry(0.022, 4, 4);
+    const dropMaterial = new THREE.MeshBasicMaterial({ color: 0xd5e9ff, transparent: true, opacity: 0.65 });
+    for (let i = 0; i < 100; i++) {
+      const drop = this.mesh(dropGeometry, dropMaterial);
+      drop.position.set(Math.sin(i * 17.13) * 4, (i % 23) / 23 * 6, Math.cos(i * 9.17) * 4);
+      this.weatherParticles.add(drop);
+    }
+    this.setWeather('unknown');
     this.target = this.buildTarget();
     this.scene.add(this.target);
     this.ball = this.buildBall();
@@ -116,6 +130,15 @@ export class Playground {
     this.intersectionObserver.observe(canvas);
     this.resize();
     this.refreshAnimation();
+  }
+
+  setWeather(kind: WeatherKind): void {
+    this.weatherKind = kind;
+    this.flowers.visible = kind === 'sunny';
+    this.weatherParticles.visible = kind === 'rain' || kind === 'snow';
+    this.groundMaterial.color.set(kind === 'snow' ? 0xe3edf3 : kind === 'rain' ? 0x8fa7a6 : kind === 'night' ? 0x79849c : 0xc5d5a8);
+    for (const drop of this.weatherParticles.children) drop.scale.set(1, kind === 'rain' ? 9 : 1.8, 1);
+    this.renderer.toneMappingExposure = kind === 'night' ? 0.72 : kind === 'rain' ? 0.92 : 1.12;
   }
 
   setWalkingPose(pose: WalkingPose | null): void {
@@ -291,33 +314,23 @@ export class Playground {
     return texture;
   }
 
-  private islandShape(): THREE.Shape {
-    const extent = 3.85;
-    const inner = 2.65;
-    const shape = new THREE.Shape();
-    shape.moveTo(-inner, -extent);
-    shape.lineTo(inner, -extent);
-    shape.quadraticCurveTo(extent, -extent, extent, -inner);
-    shape.lineTo(extent, inner);
-    shape.quadraticCurveTo(extent, extent, inner, extent);
-    shape.lineTo(-inner, extent);
-    shape.quadraticCurveTo(-extent, extent, -extent, inner);
-    shape.lineTo(-extent, -inner);
-    shape.quadraticCurveTo(-extent, -extent, -inner, -extent);
-    return shape;
-  }
-
   private buildIsland(): void {
-    const island = this.mesh(new THREE.ExtrudeGeometry(this.islandShape(), {
-      depth: 0.48, bevelEnabled: true, bevelSegments: 3,
-      steps: 1, bevelSize: 0.1, bevelThickness: 0.1, curveSegments: 12,
-    }), this.material(0xa8b68a));
-    island.rotation.x = -Math.PI / 2;
-    island.position.y = -0.59;
-    island.receiveShadow = true;
-    this.scene.add(island);
-
-    const lawn = this.mesh(new THREE.ShapeGeometry(this.islandShape(), 18), this.material(0xc5d5a8));
+    const fadeCanvas = document.createElement('canvas');
+    fadeCanvas.width = fadeCanvas.height = 128;
+    const context = fadeCanvas.getContext('2d');
+    if (context) {
+      const fade = context.createRadialGradient(64, 64, 20, 64, 64, 64);
+      fade.addColorStop(0, '#fff');
+      fade.addColorStop(0.65, '#888');
+      fade.addColorStop(1, '#000');
+      context.fillStyle = fade;
+      context.fillRect(0, 0, 128, 128);
+    }
+    const alpha = new THREE.CanvasTexture(fadeCanvas);
+    this.textures.add(alpha);
+    this.groundMaterial.alphaMap = alpha;
+    this.groundMaterial.depthWrite = false;
+    const lawn = this.mesh(new THREE.CircleGeometry(5.5, 80), this.groundMaterial);
     lawn.rotation.x = -Math.PI / 2;
     lawn.position.y = 0.001;
     lawn.receiveShadow = true;
@@ -377,7 +390,8 @@ export class Playground {
           }
           flower.add(this.mesh(new THREE.SphereGeometry(0.035, 6, 4), flowerCenterMaterial));
           flower.position.set(x, 0.2, z);
-          this.scene.add(flower);
+          flower.scale.setScalar(1.6);
+          this.flowers.add(flower);
         }
       }
     }
@@ -588,6 +602,12 @@ export class Playground {
       this.target.scale.setScalar(reducedMotion ? 1 : 1 + Math.sin(now / 220) * 0.05);
     }
     this.animateBall(serverTime, reducedMotion);
+    if (this.weatherParticles.visible && !reducedMotion) {
+      for (const drop of this.weatherParticles.children) {
+        drop.position.y -= delta * (this.weatherKind === 'rain' ? 5 : 0.65);
+        if (drop.position.y < 0) drop.position.y = 6;
+      }
+    }
     this.renderer.render(this.scene, this.camera);
     this.refreshAnimation();
   };
