@@ -205,7 +205,7 @@ test('solo, duo, and squad quests are individual and enforce party-size gates', 
   assert.equal(parsePlayMessage({ type: 'ready_squad_quest' }).type, 'ready_squad_quest');
 });
 
-test('photo verification is gated by earned quest progress and stores only its decision', async t => {
+test('solo evidence can be graded without movement and stores only its decision', async t => {
   const checks = [];
   const { origin, connect } = await setup(t, { photoVerifier: {
     configured: true,
@@ -216,11 +216,7 @@ test('photo verification is gated by earned quest progress and stores only its d
     roomCode: session.roomCode, playerToken: session.playerToken, questId: 'touchGrass',
     photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
   };
-  let response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  assert.equal(response.status, 409, 'a photo cannot bypass the movement requirement');
-  a.send({ type: 'move', x: 0, z: 0 });
-  await state(a, snapshot => snapshot.quests[session.playerId].touchGrass);
-  response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   assert.deepEqual(await response.json(), { verified: true, reason: 'Grass is clearly visible.' });
   const verified = await state(a, snapshot => snapshot.quests[session.playerId].photoVerification.touchGrass === 'approved');
   assert.equal(verified.quests[session.playerId].photoVerification.touchGrass, 'approved');
@@ -414,21 +410,21 @@ test('compass heading changes shared facing without moving the pet', async t => 
   assert.equal(parsePlayMessage({ type: 'heading', yaw: 0, latitude: 42 }), null);
 });
 
-test('duo clip verification approves only original participants and is idempotent', async t => {
+test('duo clip verification needs only co-presence and approves the submission pair once', async t => {
   let calls = 0;
   const { connect, origin } = await setup(t, { photoVerifier: { configured: true, async verify(input) {
     calls++; assert.equal(input.participantCount, 2); return { verified: true, reason: 'A handshake is visible.' };
   } } });
   const a = await connect(); a.send({ type: 'create', name: 'A' }); const first = await welcome(a);
+  const soloAttempt = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    roomCode: first.roomCode, playerToken: first.playerToken, questId: 'dapHandshake', frames: Array(3).fill('data:image/png;base64,iVBORw0KGgo='), durationSeconds: 5,
+  }) });
+  assert.equal(soloAttempt.status, 409);
+  assert.equal(calls, 0, 'insufficient group must not reach the grader');
   const b = await connect(); b.send({ type: 'join', roomCode: first.roomCode, name: 'B' }); const second = await welcome(b);
-  a.send({ type: 'move', x: 0, z: 0 }); b.send({ type: 'move', x: 0, z: 0 });
-  await state(a, s => s.players.every(p => Math.abs(p.x) < 0.1));
-  a.send({ type: 'action', action: 'dap' }); await state(b, s => s.dap.pending.length === 1);
-  b.send({ type: 'action', action: 'dap' }); await state(a, s => s.quests[first.playerId].dapHandshakeReady);
   const c = await connect(); c.send({ type: 'join', roomCode: first.roomCode, name: 'C' }); const third = await welcome(c);
   const body = { roomCode: first.roomCode, playerToken: first.playerToken, questId: 'dapHandshake', frames: Array(3).fill('data:image/png;base64,iVBORw0KGgo='), durationSeconds: 5 };
   const post = value => fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
-  assert.equal((await post({ ...body, playerToken: third.playerToken })).status, 409);
   assert.equal((await post(body)).status, 200);
   const verified = await state(a, s => s.quests[first.playerId].photoVerification.dapHandshake === 'approved');
   assert.equal(verified.quests[second.playerId].photoVerification.dapHandshake, 'approved');
@@ -467,10 +463,6 @@ test('squad evidence checks all participants and marks only their group approved
   const a = await connect(); a.send({ type: 'create', name: 'A' }); const first = await welcome(a);
   const peers = [a]; const sessions = [first];
   for (const name of ['B', 'C']) { const peer = await connect(); peer.send({ type: 'join', roomCode: first.roomCode, name }); sessions.push(await welcome(peer)); peers.push(peer); }
-  for (const peer of peers) peer.send({ type: 'move', x: 0, z: 0 });
-  await state(a, s => s.players.every(p => Math.hypot(p.x, p.z) < 0.1));
-  for (const peer of peers) peer.send({ type: 'ready_squad_quest' });
-  await state(a, s => s.players.every(p => s.quests[p.id].squadCircle));
   const response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roomCode: first.roomCode, playerToken: first.playerToken, questId: 'squadCircle', photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=' }) });
   assert.equal(response.status, 200); assert.equal(people, 3);
   const verified = await state(a, s => s.players.every(p => s.quests[p.id].photoVerification.squadCircle === 'approved'));

@@ -71,13 +71,17 @@ export function createPlayServer(options = {}) {
     const room = rooms.get(roomCode);
     const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
     if (!room || !player) return writeJson(response, 401, { error: 'This quest session has expired.' });
-    if (!(questId === 'dapHandshake' ? player.quests.dapHandshakeReady : player.quests[questId])) return writeJson(response, 409, { error: 'Finish the in-game part of this quest before sending a photo.' });
+    if (!player.socket) return writeJson(response, 409, { error: 'Reconnect to the pen before submitting evidence.' });
     try { validateEvidence({ questId, photoDataUrl, frames, durationSeconds }); }
     catch (cause) { return writeJson(response, 400, { error: cause.message }); }
-    const group = player.evidenceGroups[questId] ?? [player.id];
-    const participants = group.map(id => room.players.get(id));
-    if (participants.some(peer => !peer?.socket || !(questId === 'dapHandshake' ? peer.quests.dapHandshakeReady : peer.quests[questId]))) return writeJson(response, 409, { error: 'Keep the original quest participants connected while submitting evidence.' });
-    if (participants.every(peer => peer.quests.photoVerification[questId] === 'approved')) return writeJson(response, 200, { verified: true, reason: 'This quest evidence was already approved.' });
+    if (player.quests.photoVerification[questId] === 'approved') return writeJson(response, 200, { verified: true, reason: 'This quest evidence was already approved.' });
+    const minimum = PHOTO_VERIFICATION_QUESTS[questId].minPeople;
+    const connected = [...room.players.values()].filter(peer => peer.socket);
+    if (connected.length < minimum) return writeJson(response, 409, { error: `Keep at least ${minimum} players connected in this pen while submitting evidence.` });
+    // Freeze the submission group, not a prior movement/action group. A duo
+    // uses the submitter and one connected partner; a squad uses the full pen.
+    const others = connected.filter(peer => peer.id !== player.id).sort((a, b) => a.slot - b.slot);
+    const participants = minimum === 1 ? [player] : minimum === 2 ? [player, others[0]] : [player, ...others];
     if (participants.some(peer => peer.quests.photoVerification[questId] === 'pending')) return writeJson(response, 409, { error: 'Your group already has evidence being checked.' });
     const now = Date.now();
     const attempts = player.verificationAttempts[questId] ??= { tokens: 3, at: now };
@@ -93,9 +97,13 @@ export function createPlayServer(options = {}) {
         return writeJson(response, 409, { error: 'The group changed during verification. Reconnect and submit again.' });
       }
       participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index] === 'approved' || result.verified ? 'approved' : 'rejected'; });
-      if (result.verified && questId === 'dapHandshake') {
-        participants.forEach(peer => { peer.quests.dapHandshake = true; });
-        room.bond += 1;
+      if (result.verified) {
+        participants.forEach(peer => {
+          peer.quests[questId] = true;
+          if (questId === 'dapHandshake') peer.quests.dapHandshakeReady = true;
+          peer.evidenceGroups[questId] = participants.map(member => member.id);
+        });
+        if (questId === 'dapHandshake') room.bond += 1;
       }
       room.notice = result.verified ? `Camera evidence approved for ${PHOTO_VERIFICATION_QUESTS[questId].label}.` : result.reason;
       broadcast(room);
