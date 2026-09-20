@@ -93,7 +93,6 @@ export class Playground {
   private renderedTilt = { pitch: 0, roll: 0 };
   private enabled = false;
   private happiness = 70;
-  private displayGrid: THREE.GridHelper | null = null;
   private disposed = false;
   private visible = true;
   private contextLost = false;
@@ -119,14 +118,10 @@ export class Playground {
     this.camera.lookAt(0, 0, 0);
 
     this.shadowTexture = this.makeShadowTexture();
-    if (!options.display) this.buildIsland();
-    else {
-      this.displayGrid = new THREE.GridHelper(80, 40, 0x9dbd88, 0x9dbd88);
-      const gridMaterial = this.displayGrid.material as THREE.LineBasicMaterial;
-      gridMaterial.transparent = true; gridMaterial.opacity = 0.22;
-      this.geometries.add(this.displayGrid.geometry); this.materials.add(gridMaterial);
-      this.scene.add(this.displayGrid);
-    }
+    // Display glasses share the phone's meadow and landmarks. The grass is a
+    // single textured plane and the plants are instanced; display mode saves
+    // work through its lower pixel ratio and disabled realtime shadows.
+    this.buildIsland();
     const paw = pawTexture(); this.textures.add(paw);
     const footprintGeometry = new THREE.PlaneGeometry(0.32, 0.38);
     for (let i = 0; i < 32; i++) {
@@ -182,14 +177,9 @@ export class Playground {
   }
 
   setWeather(kind: WeatherKind): void {
-    if (this.options.display) {
-      this.weatherParticles.visible = false;
-      for (const footprint of this.footprints) footprint.mesh.material.color.set(0xc5edac);
-      return;
-    }
     this.weatherKind = kind;
     this.flowers.visible = kind !== 'snow';
-    this.weatherParticles.visible = kind === 'rain' || kind === 'snow';
+    this.weatherParticles.visible = !this.options.display && (kind === 'rain' || kind === 'snow');
     this.groundMaterial.color.set(kind === 'snow' ? 0xe5efff : kind === 'rain' ? 0xa5bfba : kind === 'night' ? 0x9baac5 : 0xffffff);
     for (const footprint of this.footprints) footprint.mesh.material.color.set(kind === 'night' ? 0xf1dba9 : 0x455c35);
     for (const drop of this.weatherParticles.children) drop.scale.set(1, kind === 'rain' ? 9 : 1.8, 1);
@@ -654,7 +644,6 @@ export class Playground {
     const followedPet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
     if (followedPet?.root.visible) {
       const { x, z } = followedPet.root.position;
-      this.displayGrid?.position.set(Math.round(x / 20) * 20, 0, Math.round(z / 20) * 20);
       // Follow the smoothed walking heading. A play animation can turn the body
       // toward a friend without abruptly swinging the whole meadow around.
       const blend = reducedMotion ? 1 : 1 - Math.exp(-8 * delta);

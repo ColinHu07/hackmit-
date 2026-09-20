@@ -44,10 +44,10 @@ const messages: Record<GlassesMotionStatus, string> = {
   requesting: 'Allow head tracking and walking sensors.',
   waiting: 'Face forward. Waiting for orientation and motion data…',
   live: 'Head turns steer your pet. Rhythmic steps move it forward.',
-  stale: 'Sensor data stopped. Resume tracking to continue.',
+  stale: 'Head data paused. Tracking resumes when fresh readings return.',
   paused: 'Tracking paused while the app is hidden. Resume to continue.',
   denied: 'Motion permission was not granted. You can use the simulator.',
-  unavailable: 'Orientation and motion sensors are unavailable. You can use the simulator.',
+  unavailable: 'Waiting for head sensor data. You can also use Step forward.',
   simulated: 'Desktop simulator · no physical glasses tracking.',
 };
 
@@ -63,7 +63,11 @@ const messages: Record<GlassesMotionStatus, string> = {
  * (sin(yaw), cos(yaw)) in X/Z, yaw=PI faces -Z, and a right turn decreases yaw.
  * Orientation only changes yaw. Only confirmed acceleration rhythms translate.
  * Distance reuses the phone's deliberately exaggerated approximate step length.
- * A hidden page or stale sensor stream stops tracking until an explicit restart.
+ * Fresh heading and walking availability are independent. A foreground sensor
+ * gap freezes that input but retains authorized listeners for automatic recovery;
+ * missing accelerometer data must never disable live head steering. Walking only
+ * resumes from new rhythmic samples, with no catch-up steps. Hiding pauses both
+ * streams until an explicit restart.
  */
 export class GlassesMotion {
   private readonly host: GlassesSensorHost;
@@ -85,6 +89,9 @@ export class GlassesMotion {
   private timer?: ReturnType<typeof setInterval>;
   private sensorsAttached = false;
   private visibilityAttached = false;
+  private motionAllowed = false;
+  private sensorAuthorized = false;
+  private publishedState = '';
 
   constructor(private readonly options: GlassesMotionOptions = {}) {
     this.host = options.host ?? window;
@@ -121,7 +128,7 @@ export class GlassesMotion {
   /** This physical facing becomes forward (-Z), retaining the character's location. */
   recenter(yaw = Math.PI): boolean {
     this.checkFreshness();
-    if (!Number.isFinite(yaw) || this.lastAlpha === null || !this.acceptingSamples()) return false;
+    if (!Number.isFinite(yaw) || this.lastAlpha === null || !this.headingFresh()) return false;
     this.baselineAlpha = this.lastAlpha;
     this.setYaw(yaw);
     this.baselineYaw = this.walking.pose.yaw;
@@ -136,24 +143,24 @@ export class GlassesMotion {
     if (this.visibility.hidden) { this.setStatus('paused'); return false; }
     const orientation = this.host.DeviceOrientationEvent;
     const motion = this.host.DeviceMotionEvent;
-    if (!this.host.isSecureContext || !orientation || !motion) { this.setStatus('unavailable'); return false; }
+    if (!this.host.isSecureContext || !orientation) { this.setStatus('unavailable'); return false; }
     const generation = this.generation;
     this.setStatus('requesting');
     try {
       // Invoke both requests synchronously, before awaiting either permission.
-      const permissions = [orientation, motion].map(api => api.requestPermission?.() ?? Promise.resolve('granted'));
+      const request = (api: PermissionAPI | undefined): Promise<string> => {
+        if (!api) return Promise.resolve('unavailable');
+        try { return (api.requestPermission?.() ?? Promise.resolve('granted')).catch(() => 'denied'); }
+        catch { return Promise.resolve('denied'); }
+      };
+      const permissions = [request(orientation), request(motion)];
       const results = await Promise.all(permissions);
       if (generation !== this.generation) return false;
-      if (results.some(result => result !== 'granted')) { this.setStatus('denied'); return false; }
+      if (results[0] !== 'granted') { this.setStatus('denied'); return false; }
+      this.motionAllowed = results[1] === 'granted';
+      this.sensorAuthorized = true;
       if (this.visibility.hidden) { this.setStatus('paused'); return false; }
-      this.resetReadings();
-      this.startedAt = this.now();
-      this.host.addEventListener('deviceorientation', this.onOrientation);
-      this.host.addEventListener('devicemotion', this.onMotion);
-      this.sensorsAttached = true;
-      this.attachVisibility();
-      this.timer = setInterval(() => this.checkFreshness(), 250);
-      this.setStatus('waiting');
+      this.beginSensors();
       return true;
     } catch {
       if (generation === this.generation) this.setStatus('denied');
@@ -165,14 +172,35 @@ export class GlassesMotion {
     this.generation++;
     this.detach();
     this.resetReadings();
+    this.motionAllowed = false;
+    this.sensorAuthorized = false;
     this.source = null;
     this.setStatus('off');
   }
 
-  /** Pause lifecycle work, including an outstanding permission prompt, until start(). */
+  /** Pause lifecycle work, including an outstanding permission prompt, until resumed. */
   suspend(): void {
     this.generation++;
     if (this.currentStatus !== 'off') this.pause('paused');
+  }
+
+  /** Resume a suspended, already-authorized session without a permission prompt.
+   * The caller owns intent (for example a brief network reconnect); stop() clears
+   * this ability. A hidden page never resumes, and stale footfalls are discarded. */
+  resume(): boolean {
+    if (this.visibility.hidden || this.currentStatus !== 'paused') return false;
+    if (this.source === 'sensors' && this.sensorAuthorized) {
+      this.beginSensors();
+      return true;
+    }
+    if (this.source === 'simulator') {
+      this.detector.reset();
+      this.walking.setStepTracking(true);
+      this.attachVisibility();
+      this.setStatus('simulated');
+      return true;
+    }
+    return false;
   }
 
   /** Opt-in desktop mode never installs sensor listeners or requests permission. */
@@ -204,7 +232,6 @@ export class GlassesMotion {
     const alpha = (event as DeviceOrientationEvent).alpha;
     if (typeof alpha !== 'number' || !Number.isFinite(alpha)) return;
     this.acceptAlpha(alpha, this.now());
-    this.updateReadiness();
   };
 
   private onMotion: EventListener = event => {
@@ -215,6 +242,7 @@ export class GlassesMotion {
     if (vertical === null) return;
     const now = this.now();
     if (!Number.isFinite(now) || now < this.lastMotionAt) return;
+    if (!this.sampleFresh(this.lastMotionAt, now)) this.detector.reset();
     this.lastMotionAt = now;
     this.updateReadiness();
     if (this.currentStatus !== 'live') { this.detector.reset(); return; }
@@ -232,6 +260,8 @@ export class GlassesMotion {
     const clockwise = this.yawSign * signedDegrees(this.lastAlpha - this.baselineAlpha);
     const previous = this.walking.pose.yaw;
     this.setYaw(this.baselineYaw - clockwise * Math.PI / 180);
+    // Resume the UI/network gate before delivering the first returning heading.
+    if (this.source === 'sensors') this.updateReadiness();
     if (Math.abs(signedDegrees((this.walking.pose.yaw - previous) * 180 / Math.PI)) > 0.01) {
       this.options.onPose?.(this.pose, 'heading');
     }
@@ -241,7 +271,7 @@ export class GlassesMotion {
     if (!this.walking.steps(count)) return false;
     this.stepCount += count;
     this.options.onPose?.(this.pose, 'step');
-    this.options.onStatus?.(this.snapshot());
+    this.publishState();
     return true;
   }
 
@@ -250,28 +280,27 @@ export class GlassesMotion {
   }
 
   private acceptingSamples(): boolean {
-    return !this.visibility.hidden && ['waiting', 'live', 'simulated'].includes(this.currentStatus);
+    return !this.visibility.hidden && (this.currentStatus === 'simulated'
+      || this.sensorsAttached && ['waiting', 'live', 'stale', 'unavailable'].includes(this.currentStatus));
   }
 
   private updateReadiness(): void {
-    if (Number.isFinite(this.lastHeadingAt) && Number.isFinite(this.lastMotionAt)) this.setStatus('live');
+    const now = this.now();
+    if (this.sampleFresh(this.lastHeadingAt, now)) this.setStatus('live');
+    else if (Number.isFinite(this.lastHeadingAt)) this.setStatus('stale');
+    else this.setStatus(now - this.startedAt > START_TIMEOUT_MS ? 'unavailable' : 'waiting');
   }
 
   private checkFreshness(): void {
-    if (!['waiting', 'live', 'simulated'].includes(this.currentStatus)) return;
+    if (!(this.sensorsAttached || this.currentStatus === 'simulated')) return;
     if (this.visibility.hidden) { this.pause('paused'); return; }
     if (this.source === 'simulator') return;
     const now = this.now();
-    if (this.currentStatus === 'live' && (now - this.lastHeadingAt > SENSOR_FRESH_MS || now - this.lastMotionAt > SENSOR_FRESH_MS)) {
-      this.pause('stale');
-    } else if (this.currentStatus === 'waiting' && now - this.startedAt > START_TIMEOUT_MS) {
-      this.pause('unavailable');
-    } else if (this.currentStatus === 'waiting' && [this.lastHeadingAt, this.lastMotionAt].some(at => Number.isFinite(at) && now - at > SENSOR_FRESH_MS)) {
-      this.pause('stale');
-    }
+    if (!this.sampleFresh(this.lastHeadingAt, now) || !this.sampleFresh(this.lastMotionAt, now)) this.detector.reset();
+    this.updateReadiness();
   }
 
-  private pause(status: 'stale' | 'paused' | 'unavailable'): void {
+  private pause(status: 'paused'): void {
     this.detach();
     this.detector.reset();
     this.walking.setStepTracking(false);
@@ -285,6 +314,17 @@ export class GlassesMotion {
     this.baselineYaw = this.walking.pose.yaw;
     this.lastHeadingAt = this.lastMotionAt = -Infinity;
     this.stepCount = 0;
+  }
+
+  private beginSensors(): void {
+    this.resetReadings();
+    this.startedAt = this.now();
+    this.host.addEventListener('deviceorientation', this.onOrientation);
+    if (this.motionAllowed) this.host.addEventListener('devicemotion', this.onMotion);
+    this.sensorsAttached = true;
+    this.attachVisibility();
+    this.timer = setInterval(() => this.checkFreshness(), 250);
+    this.setStatus('waiting');
   }
 
   private attachVisibility(): void {
@@ -307,19 +347,39 @@ export class GlassesMotion {
   }
 
   private setStatus(status: GlassesMotionStatus): void {
-    if (this.currentStatus === status) return;
     this.currentStatus = status;
-    this.options.onStatus?.(this.snapshot());
+    this.publishState();
+  }
+
+  private publishState(): void {
+    const state = this.snapshot();
+    const signature = [state.status, state.source, state.headingReady, state.motionReady, state.steps, state.message].join(':');
+    if (signature === this.publishedState) return;
+    this.publishedState = signature;
+    this.options.onStatus?.(state);
+  }
+
+  private sampleFresh(at: number, now = this.now()): boolean {
+    return Number.isFinite(at) && now >= at && now - at <= SENSOR_FRESH_MS;
+  }
+
+  private headingFresh(): boolean {
+    return this.acceptingSamples() && (this.source === 'simulator' || this.sampleFresh(this.lastHeadingAt));
   }
 
   private snapshot(): GlassesMotionState {
+    const headingReady = this.headingFresh();
+    const motionReady = this.acceptingSamples() && this.source === 'sensors' && this.sampleFresh(this.lastMotionAt);
     return {
       status: this.currentStatus,
       source: this.source,
-      headingReady: this.acceptingSamples() && Number.isFinite(this.lastHeadingAt),
-      motionReady: this.acceptingSamples() && Number.isFinite(this.lastMotionAt),
+      headingReady,
+      motionReady,
       steps: this.stepCount,
-      message: messages[this.currentStatus],
+      message: this.currentStatus === 'live' && !motionReady
+        ? this.motionAllowed ? 'Head turns are live. Waiting for walking sensor data…'
+          : 'Head turns are live. Walking sensors unavailable; use Step forward.'
+        : messages[this.currentStatus],
     };
   }
 }

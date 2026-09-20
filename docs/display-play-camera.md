@@ -19,6 +19,8 @@ The display game uses a Meta Ray-Ban Display Web App. The phone camera app uses 
 
 Swipe/arrow to focus; pinch/Enter activates once. Walk enables motion from a user gesture; Pause stops it. Wave, Berry and Quests stay in the main rail. More includes Jump, Play, Dap, recenter, camera pairing and connection controls. When sensors are unavailable, Step forward is an explicit game action. Restart motion after returning from the background.
 
+The display uses the same grass, flowers and meadow landmarks as the phone, at 1× pixel resolution without realtime shadows or weather particles. Quest notices are brief, non-blocking hints; another player's walking milestone never asks you to submit a photo. Head steering stays live when only the accelerometer stream pauses. Foreground sensor gaps recover automatically as new samples arrive, with step detection reset so old motion cannot become catch-up steps. A brief network reconnection resumes previously enabled tracking only after the server position is resynchronized; explicit Pause and backgrounding still require Resume.
+
 The simulator is `?simulator`: select Walk, W advances a synthetic step, A/D turn; it never labels these as physical glasses measurements. Relative heading initially aligns to the server character. Recenter keeps position, and Reverse head-turn direction handles device mounting differences. Head-facing is explicitly locked on the server during walking so other clients see it too.
 
 ## Verified platform capabilities — September 20, 2026

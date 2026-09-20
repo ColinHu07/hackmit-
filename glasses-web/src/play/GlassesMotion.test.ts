@@ -139,9 +139,9 @@ describe('permission and foreground lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('fails closed for denied, insecure, missing, and silent sensors', async () => {
+  it('fails closed for denied or missing orientation, and recovers from delayed sensor startup', async () => {
     const denied = setup();
-    denied.host.DeviceMotionEvent = { requestPermission: async () => 'denied' };
+    denied.host.DeviceOrientationEvent = { requestPermission: async () => 'denied' };
     expect(await denied.controller.start()).toBe(false);
     denied.walk(0, 2000); expect(denied.controller.status).toBe('denied');
     expect(denied.onPose).not.toHaveBeenCalled();
@@ -153,7 +153,32 @@ describe('permission and foreground lifecycle', () => {
     const silent = setup(); await silent.controller.start();
     silent.at(5001); vi.advanceTimersByTime(250);
     expect(silent.controller.status).toBe('unavailable');
+    expect(silent.controller.state.headingReady).toBe(false);
+    silent.host.orientation(null);
+    expect(silent.controller.status).toBe('unavailable');
+    silent.host.orientation(0);
+    expect(silent.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: false });
+    expect(silent.controller.pose).toEqual({ x: 0, z: 0, yaw: Math.PI });
+    silent.controller.stop();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps head steering available when walking permission or API is unavailable', async () => {
+    for (const motion of [undefined, { requestPermission: async () => 'denied' },
+      { requestPermission: async () => { throw new Error('motion unsupported'); } }]) {
+      const t = setup();
+      t.host.DeviceMotionEvent = motion;
+      expect(await t.controller.start()).toBe(true);
+      t.host.orientation(0);
+      t.at(100); t.host.orientation(90);
+      expect(t.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: false });
+      expect(t.controller.state.message).toContain('Walking sensors unavailable');
+      expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI / 2);
+      t.walk(200, 2000, 90);
+      expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
+      expect(t.controller.state.steps).toBe(0);
+      t.controller.stop();
+    }
   });
 
   it('does not revive a pending permission request after backgrounding and returning', async () => {
@@ -171,7 +196,7 @@ describe('permission and foreground lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('stops on a stale heading even if accelerometer events keep arriving', async () => {
+  it('freezes walking on stale heading and recovers without replaying old footfalls', async () => {
     const t = setup(); await t.controller.start();
     t.host.orientation(0); t.host.motion(0);
     t.walk(25, 1100, null);
@@ -179,14 +204,18 @@ describe('permission and foreground lifecycle', () => {
     t.walk(1300, 2000, null);
     expect(t.controller.status).toBe('stale');
     expect(t.controller.pose).toEqual(before);
-    t.host.orientation(90); t.host.motion(0.24);
-    expect(t.controller.status).toBe('stale');
     expect(t.controller.recenter()).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-    await t.controller.start();
-    t.walk(3500, 500);
-    expect(t.controller.pose).toEqual(before);
-    expect(t.controller.state.steps).toBe(0);
+    const stepsBefore = t.controller.state.steps;
+    const callbackStates: string[] = [];
+    t.onPose.mockImplementation(() => { callbackStates.push(t.controller.status); });
+    t.host.orientation(90); t.host.motion(0.24);
+    expect(t.controller.status).toBe('live');
+    expect(callbackStates).toEqual(['live']);
+    t.walk(3500, 500, 90);
+    expect(t.controller.pose.x).toBe(before.x); expect(t.controller.pose.z).toBe(before.z);
+    expect(t.controller.state.steps).toBe(stepsBefore);
+    t.walk(4000, 500, 90);
+    expect(t.controller.state.steps).toBe(stepsBefore + 2);
     t.controller.stop();
   });
 
@@ -207,15 +236,53 @@ describe('permission and foreground lifecycle', () => {
     t.controller.stop();
   });
 
-  it('reports a dead motion stream through the watchdog even when head data continues', async () => {
+  it('keeps head steering live through accelerometer gaps and resumes only new rhythmic steps', async () => {
     const t = setup(); await t.controller.start();
     t.host.orientation(0); t.host.motion(0);
     for (let now = 100; now <= 1200; now += 100) {
       t.at(now); t.host.orientation(now / 100);
     }
     t.at(1300); vi.advanceTimersByTime(250);
-    expect(t.controller.state).toMatchObject({ status: 'stale', headingReady: false, motionReady: false });
-    expect(t.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'stale' }));
+    expect(t.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: false });
+    expect(t.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'live', motionReady: false }));
+    for (let now = 1400; now <= 20_000; now += 100) { t.at(now); t.host.orientation(now / 100); }
+    expect(t.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: false });
+    expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
+    expect(t.controller.pose.yaw).not.toBe(Math.PI);
+    t.walk(20_100, 500, 200);
+    expect(t.controller.state.steps).toBe(0);
+    t.walk(20_600, 500, 200);
+    expect(t.controller.state.steps).toBe(2);
+    expect(t.controller.state.motionReady).toBe(true);
+    t.controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('resumes a suspended grant without new permission requests or hidden steps', async () => {
+    const t = setup();
+    const orientation = vi.fn(async () => 'granted'), motion = vi.fn(async () => 'granted');
+    t.host.DeviceOrientationEvent = { requestPermission: orientation };
+    t.host.DeviceMotionEvent = { requestPermission: motion };
+    expect(t.controller.resume()).toBe(false);
+    await t.controller.start(); t.walk(0, 500);
+    t.controller.suspend();
+    t.visibility.hide(true);
+    expect(t.controller.resume()).toBe(false);
+    t.walk(500, 2000);
+    expect(t.controller.pose).toEqual({ x: 0, z: 0, yaw: Math.PI });
+    t.visibility.hide(false);
+    expect(t.controller.status).toBe('paused');
+    t.controller.syncPose({ x: 3, z: 4, yaw: Math.PI / 2 });
+    expect(t.controller.resume()).toBe(true);
+    t.walk(2500, 500);
+    expect(t.controller.pose).toEqual({ x: 3, z: 4, yaw: Math.PI / 2 });
+    expect(t.controller.state.steps).toBe(0);
+    t.walk(3000, 500);
+    expect(t.controller.state.steps).toBe(2);
+    expect(t.controller.pose.x).toBeCloseTo(3 + 2 * stepDistance);
+    expect(orientation).toHaveBeenCalledTimes(1); expect(motion).toHaveBeenCalledTimes(1);
+    t.controller.stop();
+    expect(t.controller.resume()).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

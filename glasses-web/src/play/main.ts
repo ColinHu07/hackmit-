@@ -38,6 +38,11 @@ let previousMember = '';
 let walkingRequest = 0;
 let headingSign: 1 | -1 = read('yaw-sign') === '1' ? 1 : -1;
 let simulatorHeading = 0;
+let lastRoomNotice = '';
+let grassQuestAvailable: boolean | undefined;
+let renderedHappiness: number | undefined;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+let resumeAfterReconnect = false;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="glass-header"><span class="brand">kith</span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
@@ -48,7 +53,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <section id="panel" class="glass-overlay" role="dialog" aria-modal="true" aria-labelledby="panel-title" hidden></section>`;
 
 let playground: Playground;
-function tell(message: string): void { el('notice').textContent = message; }
+function tell(message: string): void {
+  clearTimeout(noticeTimer);
+  el('notice').textContent = message;
+  if (message) noticeTimer = setTimeout(() => { el('notice').textContent = ''; }, 6000);
+}
 function panel(title: string, content: string, id: string): void {
   leaveCameraPanel(id);
   currentPanel = id;
@@ -79,6 +88,9 @@ function updateGameControls(): void {
 function join(): void {
   try {
     server = normalizeServerUrl(server); save('server', server); save('name', name);
+    resumeAfterReconnect = false;
+    motion.stop();
+    lastRoomNotice = ''; grassQuestAvailable = undefined;
     previousMember = ''; member = null; snapshot = null;
     let saved: Membership | null = null;
     try { saved = JSON.parse(read(tokenKey()) || 'null'); } catch { /* Fresh entry. */ }
@@ -125,8 +137,16 @@ const client = new RoomClient({
     updateGameControls();
     if (state !== 'connected') {
       suspendCameraWork();
-      walkingRequest++; previousMember = ''; posePublisher.clear(); motion.stop();
-      motionEnabled = false; playground?.setWalkingPose(null); el('walk').textContent = 'Walk';
+      walkingRequest++; previousMember = ''; posePublisher.clear();
+      if (state === 'reconnecting' && !document.hidden) {
+        resumeAfterReconnect ||= ['waiting', 'live', 'stale', 'simulated'].includes(motion.status);
+        motion.suspend();
+      } else {
+        resumeAfterReconnect = false;
+        motion.stop();
+      }
+      motionEnabled = false; playground?.setWalkingPose(null);
+      if (resumeAfterReconnect && ready) el('tracking-status').textContent = 'Reconnecting… tracking will resume when you’re back.';
     }
   },
   snapshot: (next, membership) => {
@@ -136,19 +156,36 @@ const client = new RoomClient({
     if (local && previousMember !== member.playerId) {
       previousMember = member.playerId;
       motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
+      if (resumeAfterReconnect && !document.hidden) {
+        resumeAfterReconnect = false;
+        motion.resume();
+      }
     }
     motion.setWorldLimit(next.worldLimit ?? 3);
     if (motionEnabled) playground?.setWalkingPose(motion.pose);
     const happiness = local?.survival?.happiness ?? 70;
     playground?.setHappiness(happiness);
-    el('mood-face').innerHTML = beaverMoodFace(happiness);
-    el('mood-value').textContent = `${Math.round(happiness)}%`;
-    el('mood-fill').style.width = `${happiness}%`;
+    const roundedHappiness = Math.round(happiness);
+    if (renderedHappiness !== roundedHappiness) {
+      renderedHappiness = roundedHappiness;
+      el('mood-face').innerHTML = beaverMoodFace(roundedHappiness);
+      el('mood-value').textContent = `${roundedHappiness}%`;
+      el('mood-fill').style.width = `${roundedHappiness}%`;
+    }
     el('connection').textContent = `${next.players.filter(player => player.connected).length}/4 here`;
     const cooldown = local?.survival?.treatCooldownMs ?? 0;
     el<HTMLButtonElement>('feed').disabled = !ready || cooldown > 0 || (local?.survival?.inventory.berry ?? 1) < 1;
     el('feed').textContent = cooldown > 0 ? `${Math.ceil(cooldown / 1000)}s` : 'Berry';
-    if (!currentPanel && next.notice) tell(next.notice);
+    // Room notices are shared and repeated in every snapshot. Never turn one
+    // player's walking milestone into a sticky upload prompt for everyone.
+    const grassAvailable = !!next.quests[member.playerId]?.touchGrass;
+    const grassJustAvailable = grassQuestAvailable === false && grassAvailable;
+    grassQuestAvailable = grassAvailable;
+    if (next.notice !== lastRoomNotice) {
+      lastRoomNotice = next.notice;
+      if (!currentPanel && !next.notice.endsWith(' touched grass! Add a photo to verify this quest.')) tell(next.notice);
+    }
+    if (grassJustAvailable && !currentPanel) tell('Touch grass quest ready. Open Quests whenever you like.');
   },
   error: (message, terminal) => {
     tell(message);
@@ -164,6 +201,7 @@ function settings(message = ''): void {
 }
 
 async function enableWalking(): Promise<void> {
+  resumeAfterReconnect = false;
   if (motionEnabled || motion.status === 'requesting') { walkingRequest++; motion.stop(); return; }
   if (connection !== 'connected' || document.hidden) return;
   const local = snapshot?.players.find(player => player.id === member?.playerId);
@@ -468,12 +506,13 @@ document.addEventListener('visibilitychange', () => {
     if (connection === 'connected') tell('Welcome back. Select Walk to resume motion.');
     resumeCameraPanel();
   } else {
+    resumeAfterReconnect = false;
     walkingRequest++; posePublisher.clear();
     motion.suspend();
     suspendCameraWork();
   }
 });
-window.addEventListener('pagehide', () => { suspendCameraWork(); walkingRequest++; posePublisher.clear(); client.stop(false); motion.stop(); clearTimeout(cameraPoll); playground?.dispose(); });
+window.addEventListener('pagehide', () => { suspendCameraWork(); walkingRequest++; posePublisher.clear(); client.stop(false); motion.stop(); clearTimeout(cameraPoll); clearTimeout(noticeTimer); playground?.dispose(); });
 
 // Connecting is independent of the 3D download: an unavailable server must not
 // look like a stuck beaver, and users can fix the connection while assets load.
