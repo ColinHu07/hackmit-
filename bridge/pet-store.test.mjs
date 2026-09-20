@@ -149,3 +149,47 @@ test('offline catch-up splits elapsed time at the end of the boost', () => {
   assert.equal(store.profile(token).happiness, 32);
   store.close();
 });
+
+test('quest rewards and cooldowns persist and are atomic for the whole group', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'kith-quest-'));
+  const file = join(directory, 'pets.sqlite');
+  let clock = 1_800_000_000_000;
+  let store = createPetStore(file, () => clock);
+  const tokens = ['2', '3', '4'].map(char => char.repeat(48));
+  tokens.forEach((token, index) => store.ensure(token, `Pet ${index}`));
+  const receipts = store.completeQuest(tokens.slice(0, 2), 'meetFriend');
+  for (const [index, token] of tokens.slice(0, 2).entries()) {
+    const pet = store.profile(token);
+    assert.equal(pet.happiness, 82); assert.equal(pet.inventory.berry, 5); assert.equal(pet.points, 10);
+    assert.equal(pet.questCooldowns.meetFriend, 60_000);
+    assert.deepEqual(pet.lastQuestReward, receipts[index]);
+  }
+  assert.throws(() => store.completeQuest([tokens[2], tokens[0]], 'meetFriend'), error => error.code === 'quest_cooldown');
+  assert.equal(store.profile(tokens[2]).inventory.berry, 3, 'no partial reward for the eligible group member');
+  store.close(); store = createPetStore(file, () => clock);
+  assert.deepEqual(store.profile(tokens[0]).lastQuestReward, receipts[0]);
+  clock += 59_999;
+  assert.equal(store.questCooldown(tokens[0], 'meetFriend'), 1);
+  assert.throws(() => store.completeQuest(tokens.slice(0, 2), 'meetFriend'), error => error.code === 'quest_cooldown');
+  clock++;
+  const next = store.completeQuest(tokens.slice(0, 2), 'meetFriend');
+  assert.notEqual(next[0].eventId, receipts[0].eventId);
+  assert.equal(store.profile(tokens[0]).inventory.berry, 7);
+  assert.equal(store.profile(tokens[0]).points, 20);
+  assert.equal(store.profile(tokens[0]).happiness, 93);
+  store.close(); rmSync(directory, { recursive: true, force: true });
+});
+
+test('each quest has its own cooldown and capped happiness still awards all berries', () => {
+  const store = createPetStore(':memory:', () => 1_800_000_000_000);
+  const token = '5'.repeat(48); store.ensure(token, 'Happy');
+  store.completeQuest([token], 'touchGrass');
+  store.completeQuest([token], 'meetFriend');
+  const [receipt] = store.completeQuest([token], 'dapHandshake');
+  assert.equal(receipt.happiness, 6);
+  const pet = store.profile(token);
+  assert.equal(pet.happiness, 100); assert.equal(pet.inventory.berry, 9); assert.equal(pet.points, 30);
+  assert.throws(() => store.completeQuest([token, token], 'squadCircle'));
+  assert.throws(() => store.completeQuest([token], 'unknown'));
+  store.close();
+});

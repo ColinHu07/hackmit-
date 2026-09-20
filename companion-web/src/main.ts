@@ -2,7 +2,7 @@ import '@fontsource-variable/dm-sans';
 import '@fontsource-variable/manrope';
 import './style.css';
 import { LocalWeather } from './LocalWeather';
-import { readMood, moodValue, rewardMood } from './PetMood';
+import { readMood, moodValue } from './PetMood';
 import { Playground } from './Playground';
 import { RoomClient, normalizeServerUrl } from './RoomClient';
 import { NearbyClient } from './NearbyClient';
@@ -14,13 +14,14 @@ import { BrowserCompass } from './BrowserCompass';
 import { BrowserWalking } from './BrowserWalking';
 import { StepDetector } from './StepDetector';
 import { DeviceView } from './DeviceView';
+import { QUEST_REWARD, QUEST_COOLDOWN_MS } from '../../shared/quest-rewards.mjs';
 import { evidenceReadiness } from './EvidenceReadiness';
 import { TreatCooldown, formatTreatTime } from './TreatCooldown';
 import { createInviteUrl, defaultPlayServerUrl, nativeServerSelection } from './WebConnection';
 import type { LocationFix } from './LocationDiscovery';
 import type { NearbyPet, MeetRequest } from '../../shared/nearby-protocol';
 import type { ConnectionState, Membership, CompatibleSnapshot } from './RoomClient';
-import { PLAY_WORLD_LIMIT, type EvidenceQuestId, type PetActionKind, type PlayerQuests } from '../../shared/play-protocol';
+import { PLAY_WORLD_LIMIT, type QuestReward, type EvidenceQuestId, type PetActionKind, type PlayerQuests } from '../../shared/play-protocol';
 
 const paths: Record<string, string> = {
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
@@ -39,6 +40,7 @@ const paths: Record<string, string> = {
   link: '<path d="m10 14 4-4M8 15l-2 2a3 3 0 0 1-4-4l5-5a3 3 0 0 1 4 0m2 8a3 3 0 0 0 4 0l5-5a3 3 0 0 0-4-4l-2 2"/>',
 };
 const icon = (name: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.leaf}</svg>`;
+
 function beaverFace(state: 'low' | 'uneasy' | 'okay' | 'happy' | 'joyful'): string {
   const mouth = { low: 'M18 35c-3-4-9-4-12 0', uneasy: 'M17 34c-2-2-6-2-8 0', okay: 'M9 34h6', happy: 'M8 32c2 5 6 5 8 0', joyful: 'M7 31c3 7 7 7 10 0' }[state];
   const brows = { low: 'M7 21l3 1M14 22l3-1', uneasy: 'M7 22l3-1M14 21l3 1', okay: '', happy: '', joyful: '' }[state];
@@ -102,7 +104,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div class="scene-topline-actions"><button id="zoom-out-button" class="zoom-out-button" type="button" hidden>Zoom out</button><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div></div>
       <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><aside class="status-effects" aria-label="Pet status effects"><span class="status-effects-title">PET STATUS</span><div class="status-effect"><span class="status-effect-icon">${icon('heart')}</span><span><strong>Happiness</strong><small id="effect-mood">70% · Content</small></span></div><div class="status-effect"><span class="status-effect-icon">${icon('leaf')}</span><span><strong>Local sky</strong><small id="effect-weather">Weather unavailable</small></span></div><div class="status-effect" id="effect-bond-row" hidden><span class="status-effect-icon">${icon('people')}</span><span><strong>Bond</strong><small id="effect-bond">0 shared moments</small></span></div></aside><div id="treat-timer" class="treat-timer" role="img" aria-label="Treat cooldown" hidden><svg class="treat-timer-donut" viewBox="0 0 48 48" aria-hidden="true"><circle class="treat-timer-track" cx="24" cy="24" r="20"/><circle class="treat-timer-ring" cx="24" cy="24" r="20" pathLength="100"/></svg><span class="treat-timer-berry" aria-hidden="true">🫐</span><span class="treat-timer-count" aria-hidden="true"></span></div><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
       <div class="mood-card" id="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div class="mood-face-scale" role="img" aria-label="Beaver happiness states"><span data-mood-face="low">${beaverFace('low')}</span><span data-mood-face="uneasy">${beaverFace('uneasy')}</span><span data-mood-face="okay">${beaverFace('okay')}</span><span data-mood-face="happy">${beaverFace('happy')}</span><span data-mood-face="joyful">${beaverFace('joyful')}</span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-note"><span class="mood-fill"></span></div><p id="mood-note">Berries add 3% happiness over three bites. Normally, happiness drops 1% every minute.</p></div>
-      <div class="survival-card" id="survival-card"><div><strong>Pet care</strong><span id="survival-points">0 points</span></div><meter id="health-meter" min="0" max="100" value="100" aria-label="Pet health"></meter><p id="survival-stats">Connect to the server to load your pet’s health.</p><p id="food-inventory">Food: loading…</p><button id="health-treat" class="health-treat" data-action="feed" type="button">Give a treat</button><p id="treat-boost-notice" role="status" hidden></p><small id="treat-cooldown" class="treat-cooldown" role="status"></small></div>
+      <section class="berry-bag" id="survival-card" aria-label="Your treats">
+        <div class="berry-bag-heading"><div class="berry-balance"><span class="berry-bag-icon" aria-hidden="true">🫐</span><div><span class="small-label">YOUR TREATS</span><strong><span id="berry-count">—</span> <span class="berry-unit">berries</span></strong></div></div><button id="health-treat" class="health-treat" data-action="feed" type="button">Give a berry</button></div>
+        <p id="treat-cooldown" class="treat-cooldown" role="status"></p>
+        <p class="quest-reward-preview">Verified quest: +${QUEST_REWARD.happiness}% happiness · +${QUEST_REWARD.berries} berries · +${QUEST_REWARD.points} points</p>
+        <p id="quest-reward-notice" class="quest-reward-notice" role="status" hidden></p>
+        <p id="treat-boost-notice" role="status" hidden></p>
+        <details class="pet-stats"><summary>Pet stats · <span id="survival-points">0 points</span></summary><meter id="health-meter" min="0" max="100" value="100" aria-label="Pet health"></meter><p id="survival-stats">Connect to load your pet’s stats.</p><p id="food-inventory"></p></details>
+      </section>
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
         <div class="moment-line"><span id="scene-hint">Tap the ground to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
@@ -139,7 +148,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div id="quest-catalog" class="quest-catalog" aria-label="Available quests"></div>
     <section id="quest-detail" class="quest-detail" hidden>
       <button type="button" id="quest-back" class="text-button">${icon('arrow')} All quests</button>
-      <p id="quest-detail-requirements"></p>
+      <p id="quest-detail-requirements"></p><p class="quest-reward-preview">Reward: +${QUEST_REWARD.happiness}% happiness · +${QUEST_REWARD.berries} berries · +${QUEST_REWARD.points} points. Repeat after ${QUEST_COOLDOWN_MS / 1000}s for this demo.</p>
       <p id="quest-detail-status" class="photo-verification-status" role="status">Record or submit a saved clip when your group is in the pen.</p>
     </section>
     </div>
@@ -288,6 +297,21 @@ function resumeAutomaticNearby(): void {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { resumeAutomaticNearby(); startWalking(); } else stopWalking(); });
 
+let lastRewardEvent = '';
+function questRewardText(reward: QuestReward): string {
+  return `Rewards received: +${Math.round(reward.happiness * 100) / 100}% happiness · +${reward.berries} berries · +${reward.points} points${reward.happiness < QUEST_REWARD.happiness ? ' (happiness capped at 100%)' : ''}.`;
+}
+function renderQuestReward(reward: QuestReward | null | undefined, serverTime: number): void {
+  const notice = el('quest-reward-notice');
+  notice.hidden = !reward;
+  if (!reward) return;
+  const message = questRewardText(reward);
+  if (notice.textContent !== message) notice.textContent = message;
+  if (lastRewardEvent !== reward.eventId) {
+    lastRewardEvent = reward.eventId;
+    if (serverTime - reward.completedAt < 15_000) toast(message);
+  }
+}
 function toast(message: string): void {
   clearTimeout(toastTimer);
   const notice = el('toast');
@@ -510,13 +534,6 @@ const client = new RoomClient({
       : 'A gentle guardian’s vine magic has tangled up. A completed squad can gather close and calm it together.';
     el<HTMLButtonElement>('ready-raid').textContent = quests.raidBoss || raid.state === 'defeated' ? 'Mossback calmed ✓'
       : raidActive ? 'Mossback is awake!' : raidReady ? 'Ready · waiting for squad…' : 'Call Mossback →';
-    const previousMood = mood;
-    for (const key of ['touchGrass', 'meetFriend', 'dapHandshake', 'squadCircle', 'raidBoss'] as const) {
-      if (quests[key] && photoQuestComplete(quests, key)) {
-        mood = rewardMood(mood, `${member.playerToken}:${key}`);
-      }
-    }
-    if (mood !== previousMood) save('bondimals:mood', JSON.stringify(mood));
     renderMood();
     el('bond-count').textContent = String(next.bond);
     const survivalPlayer = next.players.find(player => player.id === member.playerId);
@@ -526,6 +543,8 @@ const client = new RoomClient({
       el<HTMLMeterElement>('health-meter').value = survival.health;
       el('survival-points').textContent = `${survival.points} points · ${survival.survivalHours}h alive`;
       el('survival-stats').textContent = `Health ${survival.health}% · Hunger ${survival.hunger}% · Happiness ${survival.happiness}%`;
+      el('berry-count').textContent = String(survival.inventory.berry ?? 0);
+      renderQuestReward(survival.lastQuestReward, next.serverTime);
       el('food-inventory').textContent = `Food: ${Object.entries(survival.inventory).map(([food, quantity]) => `${food} ${quantity}`).join(' · ')}`;
       const cooldown = survival.treatCooldownMs;
       const cooldownLabel = formatTreatTime(cooldown);
@@ -535,7 +554,7 @@ const client = new RoomClient({
       if (boostNotice.textContent !== boostText) boostNotice.textContent = boostText;
       const berries = survival.inventory.berry ?? 0;
       el('treat-cooldown').textContent = cooldown > 0 ? `Treat ready in ${cooldownLabel}` : berries > 0 ? 'Treat ready' : 'Out of berries';
-      el<HTMLButtonElement>('health-treat').textContent = cooldown > 0 ? `Treat · ${cooldownLabel}` : 'Give a treat';
+      el<HTMLButtonElement>('health-treat').textContent = cooldown > 0 ? `Ready in ${cooldownLabel}` : 'Give a berry';
     }
     el('effect-bond').textContent = `${next.bond} shared ${next.bond === 1 ? 'moment' : 'moments'}`;
     el('effect-bond-row').hidden = false;
@@ -913,7 +932,6 @@ function questProgress(id: EvidenceQuestId): string {
   const local = membership && snapshot?.quests[membership.playerId];
   if (!local) return 'Join a shared pen to begin.';
   if (connection !== 'connected') return 'Reconnect to continue this quest.';
-  if (local.photoVerification[id] === 'approved') return 'Quest complete ✓';
   if (local.photoVerification[id] === 'pending') return 'Grading your clip…';
   if (local.photoVerification[id] === 'rejected') return 'Evidence needs another try.';
   return evidenceReadiness(id, snapshot, membership?.playerId, connection === 'connected').message;
@@ -991,15 +1009,15 @@ function evidenceSession() {
 }
 async function submitEvidence(session: ReturnType<typeof evidenceSession>, evidence: object): Promise<void> {
   if (membership?.playerToken !== session.playerToken) throw new Error('Your quest session changed. Select the quest again.');
-  el('evidence-status').textContent = 'Uploading evidence to the server for Meta grading…';
+  el('evidence-status').textContent = 'Uploading your clip for grading…';
   const response = await fetch(verificationEndpoint(), {
     method: 'POST', signal: AbortSignal.timeout(40_000), headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ...session, ...evidence }),
   });
-  const result = await response.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string };
+  const result = await response.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string; reward?: QuestReward };
   if (!response.ok) throw new Error(result.error || 'Verification is unavailable.');
-  el('evidence-status').textContent = result.verified ? `Verified: ${result.reason ?? 'Quest complete!'}` : `Try again: ${result.reason ?? 'The action was not clear enough.'}`;
-  toast(result.verified ? 'Quest verified! Your group’s progress updated.' : 'Evidence was inconclusive. Review the instructions and try again.');
+  el('evidence-status').textContent = result.verified ? `Verified: ${result.reason ?? 'Quest complete!'}${result.reward ? ` ${questRewardText(result.reward)}` : ''}` : `Try again: ${result.reason ?? 'The action was not clear enough.'}`;
+  toast(result.verified ? result.reward ? questRewardText(result.reward) : 'Quest verified! Your group’s progress updated.' : 'Evidence was inconclusive. Review the instructions and try again.');
 }
 function setEvidenceBusy(busy: boolean): void {
   photoVerificationPending = busy;

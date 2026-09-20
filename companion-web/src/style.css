@@ -176,3 +176,7 @@ input,.quest-tools select{border:0;border-radius:18px;background:#edf1e5bd;box-s
 .evidence-prerequisite{padding:12px 14px;border-radius:14px;background:#e9efdf;margin:12px 0}.evidence-prerequisite p{margin:0 0 8px;color:#486443}.evidence-prerequisite button:disabled{opacity:.55}
 
 .toast.dialog-toast{position:relative;bottom:auto;left:auto;transform:none;width:auto;max-width:none;margin:12px 20px 0;flex-shrink:0;text-align:left;border-radius:14px;z-index:auto}
+
+.berry-bag{margin:0 20px 18px;padding:18px;border-radius:22px;background:#f9fbf0;border:1px solid #dce6cb;color:#36553b}
+.berry-bag-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.berry-balance{display:flex;align-items:center;gap:12px}.berry-bag-icon{font-size:36px}.berry-balance strong{display:block;font-size:30px;line-height:1.2;margin-top:4px}.berry-unit{font-size:14px;font-weight:500}.berry-bag .health-treat{font-size:13px;padding:12px 15px;border-radius:16px;background:#466940;color:white;border:0;margin:0}.berry-bag .treat-cooldown{font-size:12px;margin:10px 0}
+.quest-reward-preview{font-size:12px;line-height:1.6;color:#60754b}.quest-reward-notice{padding:12px;border-radius:14px;background:#dfeecb;color:#35562d;font-size:13px;line-height:1.6}.pet-stats{border-top:1px solid #e2e8d6;padding-top:10px;font-size:11px;color:#7b896a}.pet-stats summary{cursor:pointer}.pet-stats meter{width:100%;margin-top:10px}.pet-stats p{font-size:11px;line-height:1.5}

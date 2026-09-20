@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { QUEST_COOLDOWN_MS, QUEST_REWARD, REWARD_QUEST_IDS } from '../shared/quest-rewards.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 
 const HOUR = 3_600_000;
@@ -26,6 +27,11 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
     CREATE TABLE IF NOT EXISTS point_events (
       event_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL REFERENCES pets(token_hash), points INTEGER NOT NULL,
       reason TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS quest_rewards (
+      token_hash TEXT NOT NULL REFERENCES pets(token_hash), quest_id TEXT NOT NULL,
+      event_id TEXT NOT NULL, completed_at INTEGER NOT NULL, happiness REAL NOT NULL,
+      PRIMARY KEY(token_hash, quest_id)
     );
     CREATE INDEX IF NOT EXISTS point_events_player ON point_events(token_hash, created_at);
   `);
@@ -85,11 +91,45 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
     if (earned) run('INSERT INTO point_events VALUES (?, ?, ?, ?, ?)', randomUUID(), hash, earned, 'survival_hour', current);
     return get('SELECT * FROM pets WHERE token_hash = ?', hash);
   }
+  function questCooldown(token, questId) {
+    const row = get('SELECT completed_at FROM quest_rewards WHERE token_hash = ? AND quest_id = ?', tokenHash(token), questId);
+    return row ? Math.max(0, row.completed_at + QUEST_COOLDOWN_MS - now()) : 0;
+  }
+  function completeQuest(tokens, questId) {
+    if (!REWARD_QUEST_IDS.includes(questId) || !tokens.length || new Set(tokens).size !== tokens.length) throw invalid('Invalid quest reward group.');
+    return db.transaction(() => {
+      // The entire group either receives rewards or receives nothing.
+      for (const token of tokens) {
+        if (!get('SELECT 1 FROM pets WHERE token_hash = ?', tokenHash(token))) throw invalid('Pet profile not found.');
+        const remaining = questCooldown(token, questId);
+        if (remaining > 0) {
+          const error = new Error(`Quest ready again in ${Math.ceil(remaining / 1000)}s.`);
+          error.code = 'quest_cooldown'; error.retryAfterMs = remaining; throw error;
+        }
+      }
+      const completedAt = now();
+      return tokens.map(token => {
+        const row = advance(token, true);
+        const happiness = Math.min(QUEST_REWARD.happiness, 100 - row.happiness);
+        const eventId = randomUUID();
+        run('UPDATE pets SET happiness = MIN(100, happiness + ?), points = points + ? WHERE token_hash = ?', happiness, QUEST_REWARD.points, row.token_hash);
+        run('INSERT INTO food_inventory (token_hash, food, quantity) VALUES (?, ?, ?) ON CONFLICT(token_hash, food) DO UPDATE SET quantity = quantity + excluded.quantity', row.token_hash, 'berry', QUEST_REWARD.berries);
+        run('INSERT INTO point_events VALUES (?, ?, ?, ?, ?)', eventId, row.token_hash, QUEST_REWARD.points, `quest_${questId}`, completedAt);
+        run('INSERT INTO quest_rewards VALUES (?, ?, ?, ?, ?) ON CONFLICT(token_hash, quest_id) DO UPDATE SET event_id = excluded.event_id, completed_at = excluded.completed_at, happiness = excluded.happiness', row.token_hash, questId, eventId, completedAt, happiness);
+        return { eventId, questId, completedAt, happiness, berries: QUEST_REWARD.berries, points: QUEST_REWARD.points };
+      });
+    })();
+  }
   function profile(token) {
     const row = advance(token);
     if (!row) return null;
     const inventory = Object.fromEntries(foodTypes.map(food => [food, get('SELECT quantity FROM food_inventory WHERE token_hash = ? AND food = ?', row.token_hash, food)?.quantity ?? 0]));
-    return { points: row.points, health: Math.round(row.health), hunger: Math.round(row.hunger), happiness: Math.round(row.happiness * 100) / 100, survivalHours: row.survival_hours, inventory, treatCooldownMs: row.last_feed_at > 0 ? Math.max(0, TREAT_COOLDOWN_MS - (now() - row.last_feed_at)) : 0, updatedAt: row.updated_at };
+    const rewards = db.prepare('SELECT * FROM quest_rewards WHERE token_hash = ? ORDER BY completed_at DESC, rowid DESC').all(row.token_hash);
+    const questCooldowns = Object.fromEntries(rewards.map(reward => [reward.quest_id, Math.max(0, reward.completed_at + QUEST_COOLDOWN_MS - now())]));
+    const latest = rewards[0];
+    const lastQuestReward = latest ? { eventId: latest.event_id, questId: latest.quest_id, completedAt: latest.completed_at,
+      happiness: latest.happiness, berries: QUEST_REWARD.berries, points: QUEST_REWARD.points } : null;
+    return { questCooldowns, lastQuestReward, points: row.points, health: Math.round(row.health), hunger: Math.round(row.hunger), happiness: Math.round(row.happiness * 100) / 100, survivalHours: row.survival_hours, inventory, treatCooldownMs: row.last_feed_at > 0 ? Math.max(0, TREAT_COOLDOWN_MS - (now() - row.last_feed_at)) : 0, updatedAt: row.updated_at };
   }
   function ensure(token, name) {
     if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) throw invalid('Invalid pet credential.');
@@ -135,5 +175,5 @@ export function createPetStore(filename = process.env.BONDIMALS_DB_PATH || '.bon
       return profile(token);
     })();
   }
-  return { profile, ensure, award, feed, close: () => db.close() };
+  return { profile, ensure, award, feed, questCooldown, completeQuest, close: () => db.close() };
 }

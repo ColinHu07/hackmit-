@@ -7,6 +7,7 @@ The phone playground stores survival state in SQLite. Each room player token map
 | Event | Points | Effect |
 | --- | ---: | --- |
 | Stay alive for one elapsed hour | +1 | Hunger and happiness decay first; health drops only after hunger reaches zero |
+| Camera-verified quest | +10 per participant | Adds 12 happiness (capped at 100) and 2 berries |
 | Wave | +1 | Social action |
 | Jump | +1 | Movement action |
 | Dap | +2 | Mutual social action |
@@ -40,3 +41,10 @@ Feeding consumes one item immediately, then grants happiness across the three vi
 A known saved pet can rejoin the public lobby after its room expires or the server restarts, retaining food, points, and any unfinished bite reward. Private room admission still requires that room's live session.
 
 Feeding slows happiness decay by 1.5× during that hour: one point is lost every 90 seconds instead of every 60 seconds. Feeding again (including via HTTP or after reconnecting) is refused until the cooldown ends. The interface shows a persistent boost notice and a minutes/seconds countdown. Decay keeps fractional progress across feeding and restarts, splits offline elapsed time at boost expiry, and never drops below zero. Existing profiles begin the faster decay clock at migration time, without a retroactive charge.
+
+
+## Quest rewards and demo cooldown
+
+An approved solo, duo, or squad camera quest grants every submission participant 12 happiness points, 2 berries, and 10 points. One database transaction awards the entire group and saves each pet’s completion time, reward receipt, and cooldown. Duplicate submissions during cooldown receive HTTP 409 before reaching the grader; rejection and provider errors award nothing. Each quest has its own cooldown, and the group must be eligible to repeat it.
+
+`shared/quest-rewards.mjs` sets the active demo cooldown to 60 seconds and defines the intended 24-hour duration for later. Saved cooldowns survive reconnects and server restarts. After expiry, the same quest can be verified and rewarded again; prior completion still counts toward progression. Snapshots include `questCooldowns` and `lastQuestReward`. The phone shows a countdown, an explicit reward receipt, the updated happiness meter, and a prominent berry balance in Your treats. Remaining health and hunger details are collapsed under Pet stats.

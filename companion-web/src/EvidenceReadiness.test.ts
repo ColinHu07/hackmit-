@@ -30,10 +30,26 @@ it('allows solo evidence without walking and squad evidence without readying up'
 it('shows server receipt during grading and permits retry after rejection', () => {
   const snapshot = fixture();
   snapshot.quests.a!.photoVerification.dapHandshake = 'pending';
-  expect(evidenceReadiness('dapHandshake', snapshot, 'a', true).message).toContain('Server received');
+  expect(evidenceReadiness('dapHandshake', snapshot, 'a', true).message).toContain('Grading your submission');
   expect(evidenceReadiness('dapHandshake', snapshot, 'a', true).ready).toBe(false);
   snapshot.quests.a!.photoVerification.dapHandshake = 'rejected';
   expect(evidenceReadiness('dapHandshake', snapshot, 'a', true).ready).toBe(true);
   snapshot.quests.a!.photoVerification.dapHandshake = 'approved';
-  expect(evidenceReadiness('dapHandshake', snapshot, 'a', true).message).toBe('This quest is already verified.');
+  expect(evidenceReadiness('dapHandshake', snapshot, 'a', true).ready).toBe(true);
+});
+
+it('counts down server cooldowns and permits another completion at zero', () => {
+  const snapshot = fixture();
+  snapshot.quests.a!.photoVerification.meetFriend = 'approved';
+  snapshot.players[0]!.survival = { questCooldowns: { meetFriend: 59_001 } } as PlayPlayer['survival'];
+  expect(evidenceReadiness('meetFriend', snapshot, 'a', true)).toEqual({ ready: false, message: 'Quest complete ✓ Play again in 60s (demo cooldown).' });
+  snapshot.players[0]!.survival!.questCooldowns!.meetFriend = 0;
+  expect(evidenceReadiness('meetFriend', snapshot, 'a', true).ready).toBe(true);
+});
+it('waits for a partner cooldown but can use another available partner', () => {
+  const snapshot = fixture();
+  snapshot.players[1]!.survival = { questCooldowns: { meetFriend: 30_000 } } as PlayPlayer['survival'];
+  expect(evidenceReadiness('meetFriend', snapshot, 'a', true).message).toContain('30s');
+  snapshot.players.push({ id: 'c', connected: true } as PlayPlayer);
+  expect(evidenceReadiness('meetFriend', snapshot, 'a', true).ready).toBe(true);
 });

@@ -8,6 +8,7 @@ import { attachNearbyDiscovery } from './nearby-discovery.mjs';
 import { createStaticWebHandler } from './static-web.mjs';
 import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
 import { createPetStore } from './pet-store.mjs';
+import { QUEST_REWARD } from '../shared/quest-rewards.mjs';
 import {
   PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES, PLAY_WORLD_LIMIT,
   PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
@@ -74,20 +75,23 @@ export function createPlayServer(options = {}) {
     if (!player.socket) return writeJson(response, 409, { error: 'Reconnect to the pen before submitting evidence.' });
     try { validateEvidence({ questId, photoDataUrl, frames, durationSeconds }); }
     catch (cause) { return writeJson(response, 400, { error: cause.message }); }
-    if (player.quests.photoVerification[questId] === 'approved') return writeJson(response, 200, { verified: true, reason: 'This quest evidence was already approved.' });
+    const remaining = petStore.questCooldown(player.token, questId);
+    if (remaining > 0) return writeJson(response, 409, { error: `Quest ready again in ${Math.ceil(remaining / 1000)}s.`, retryAfterMs: remaining });
     const minimum = PHOTO_VERIFICATION_QUESTS[questId].minPeople;
     const connected = [...room.players.values()].filter(peer => peer.socket);
     if (connected.length < minimum) return writeJson(response, 409, { error: `Keep at least ${minimum} players connected in this pen while submitting evidence.` });
     // Freeze the submission group, not a prior movement/action group. A duo
     // uses the submitter and one connected partner; a squad uses the full pen.
-    const others = connected.filter(peer => peer.id !== player.id).sort((a, b) => a.slot - b.slot);
+    const others = connected.filter(peer => peer.id !== player.id).sort((a, b) => petStore.questCooldown(a.token, questId) - petStore.questCooldown(b.token, questId) || a.slot - b.slot);
     const participants = minimum === 1 ? [player] : minimum === 2 ? [player, others[0]] : [player, ...others];
+    const groupCooldown = Math.max(...participants.map(peer => petStore.questCooldown(peer.token, questId)));
+    if (groupCooldown > 0) return writeJson(response, 409, { error: `Your group can repeat this quest in ${Math.ceil(groupCooldown / 1000)}s.`, retryAfterMs: groupCooldown });
     if (participants.some(peer => peer.quests.photoVerification[questId] === 'pending')) return writeJson(response, 409, { error: 'Your group already has evidence being checked.' });
     const now = Date.now();
     const attempts = player.verificationAttempts[questId] ??= { tokens: 3, at: now };
     if (!consume(attempts, 3, 0.05, now)) return writeJson(response, 429, { error: 'Please wait a moment before submitting more evidence.' });
     const previous = participants.map(peer => peer.quests.photoVerification[questId] ?? 'required');
-    participants.forEach((peer, index) => { if (previous[index] !== 'approved') peer.quests.photoVerification[questId] = 'pending'; });
+    participants.forEach(peer => { peer.quests.photoVerification[questId] = 'pending'; });
     broadcast(room);
     try {
       const result = await photoVerifier.verify({ questId, ...(photoDataUrl ? { photoDataUrl } : { frames, durationSeconds }), participantCount: participants.length });
@@ -96,7 +100,8 @@ export function createPlayServer(options = {}) {
         participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index]; });
         return writeJson(response, 409, { error: 'The group changed during verification. Reconnect and submit again.' });
       }
-      participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index] === 'approved' || result.verified ? 'approved' : 'rejected'; });
+      const rewards = result.verified ? petStore.completeQuest(participants.map(peer => peer.token), questId) : [];
+      participants.forEach(peer => { peer.quests.photoVerification[questId] = result.verified ? 'approved' : 'rejected'; });
       if (result.verified) {
         participants.forEach(peer => {
           peer.quests[questId] = true;
@@ -105,13 +110,13 @@ export function createPlayServer(options = {}) {
         });
         if (questId === 'dapHandshake') room.bond += 1;
       }
-      room.notice = result.verified ? `Camera evidence approved for ${PHOTO_VERIFICATION_QUESTS[questId].label}.` : result.reason;
+      room.notice = result.verified ? `Quest complete! Each pet earned +${QUEST_REWARD.happiness} happiness, +${QUEST_REWARD.berries} berries and +${QUEST_REWARD.points} points.` : result.reason;
       broadcast(room);
-      return writeJson(response, 200, result);
+      return writeJson(response, 200, { ...result, ...(result.verified ? { reward: rewards[0] } : {}) });
     } catch (cause) {
       participants.forEach((peer, index) => { peer.quests.photoVerification[questId] = previous[index]; });
       broadcast(room);
-      return writeJson(response, photoVerifier.configured ? 502 : 503, { error: cause instanceof Error ? cause.message : 'Verification is unavailable.' });
+      return writeJson(response, cause.code === 'quest_cooldown' ? 409 : photoVerifier.configured ? 502 : 503, { error: cause instanceof Error ? cause.message : 'Verification is unavailable.', ...(cause.retryAfterMs ? { retryAfterMs: cause.retryAfterMs } : {}) });
     }
   }
 

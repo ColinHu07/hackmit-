@@ -23,6 +23,14 @@ export interface PlayPlayer {
   action: PetAction | null;
   survival?: PetSurvival;
 }
+export interface QuestReward {
+  eventId: string;
+  questId: EvidenceQuestId;
+  completedAt: number;
+  happiness: number;
+  berries: number;
+  points: number;
+}
 export interface PetSurvival {
   points: number;
   health: number;
@@ -32,6 +40,8 @@ export interface PetSurvival {
   inventory: Record<string, number>;
   updatedAt: number;
   treatCooldownMs: number;
+  questCooldowns?: Partial<Record<EvidenceQuestId, number>>;
+  lastQuestReward?: QuestReward | null;
 }
 
 /** Progress belongs to a player, not to the browser that happens to be open. */

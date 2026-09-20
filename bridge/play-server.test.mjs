@@ -217,7 +217,11 @@ test('solo evidence can be graded without movement and stores only its decision'
     photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
   };
   const response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  assert.deepEqual(await response.json(), { verified: true, reason: 'Grass is clearly visible.' });
+  const result = await response.json();
+  assert.equal(result.verified, true);
+  assert.equal(result.reason, 'Grass is clearly visible.');
+  assert.equal(result.reward.happiness, 12);
+  assert.equal(result.reward.berries, 2);
   const verified = await state(a, snapshot => snapshot.quests[session.playerId].photoVerification.touchGrass === 'approved');
   assert.equal(verified.quests[session.playerId].photoVerification.touchGrass, 'approved');
   assert.deepEqual(checks, [{ questId: 'touchGrass', photoDataUrl: body.photoDataUrl, participantCount: 1 }]);
@@ -429,7 +433,13 @@ test('duo clip verification needs only co-presence and approves the submission p
   const verified = await state(a, s => s.quests[first.playerId].photoVerification.dapHandshake === 'approved');
   assert.equal(verified.quests[second.playerId].photoVerification.dapHandshake, 'approved');
   assert.equal(verified.quests[third.playerId].photoVerification.dapHandshake, undefined);
-  assert.equal((await post(body)).status, 200); assert.equal(calls, 1);
+  assert.equal((await post(body)).status, 409); assert.equal(calls, 1);
+  for (const id of [first.playerId, second.playerId]) {
+    const pet = verified.players.find(p => p.id === id).survival;
+    assert.equal(pet.happiness, 82); assert.equal(pet.inventory.berry, 5); assert.equal(pet.points, 10);
+    assert.ok(pet.questCooldowns.dapHandshake > 59_000);
+  }
+  assert.equal(verified.players.find(p => p.id === third.playerId).survival.inventory.berry, 3);
   assert.equal(JSON.stringify(verified).includes('base64'), false);
 });
 
@@ -452,7 +462,9 @@ test('provider failure restores quest state for retry instead of leaving it pend
   assert.equal((await post()).status, 502);
   await state(a, s => s.quests[session.playerId].photoVerification.touchGrass === 'required');
   assert.equal((await post()).status, 200);
-  await state(a, s => s.quests[session.playerId].photoVerification.touchGrass === 'rejected');
+  const rejected = await state(a, s => s.quests[session.playerId].photoVerification.touchGrass === 'rejected');
+  assert.equal(rejected.players[0].survival.lastQuestReward, null);
+  assert.equal(rejected.players[0].survival.inventory.berry, 3);
 });
 
 test('squad evidence checks all participants and marks only their group approved', async t => {
@@ -489,4 +501,32 @@ test('a saved lobby pet retains inventory, bite progress, and cooldown after the
   const stranger = await connect();
   stranger.send({ type: 'lobby', name: 'Unknown', playerToken: 'e'.repeat(48) });
   await error(stranger, 'invalid_token');
+});
+
+
+test('verified quests can reward the same pair again only after the demo cooldown', async t => {
+  let clock = 1_800_000_000_000;
+  let calls = 0;
+  const { connect, origin } = await setup(t, { now: () => clock, photoVerifier: { configured: true,
+    async verify() { calls++; return { verified: true, reason: 'A wave is visible.' }; },
+  } });
+  const a = await connect(); a.send({ type: 'lobby', name: 'A' }); const first = await welcome(a);
+  const b = await connect(); b.send({ type: 'lobby', name: 'B' }); const second = await welcome(b);
+  const post = token => fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    roomCode: first.roomCode, playerToken: token, questId: 'meetFriend', photoDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+  }) });
+  const original = await (await post(first.playerToken)).json();
+  clock += 59_999;
+  assert.equal((await post(second.playerToken)).status, 409);
+  assert.equal(calls, 1);
+  clock++;
+  const repeated = await (await post(second.playerToken)).json();
+  assert.equal(repeated.verified, true); assert.equal(calls, 2);
+  assert.notEqual(repeated.reward.eventId, original.reward.eventId);
+  const updated = await state(a, s => s.players.every(p => p.survival.inventory.berry === 7));
+  for (const player of updated.players) {
+    assert.equal(player.survival.happiness, 93); // 70 + 12 - one minute of decay + 12
+    assert.equal(player.survival.points, 20);
+    assert.equal(player.survival.questCooldowns.meetFriend, 60_000);
+  }
 });
