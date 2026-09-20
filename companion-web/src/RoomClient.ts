@@ -2,9 +2,18 @@ import type { PlaySnapshot, PetActionKind, ServerMessage } from '../../shared/pl
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 export interface Membership { roomCode: string; playerId: string; playerToken: string; name: string }
+export type CompatibleSnapshot = PlaySnapshot & { legacyServer?: true };
+/** Older team servers omit quest objects. Preserve their world without inventing rewards. */
+export function compatibleSnapshot(snapshot: PlaySnapshot): CompatibleSnapshot {
+  if (snapshot.quests && snapshot.squad && snapshot.raid && snapshot.dap) return snapshot;
+  return {
+    ...snapshot, legacyServer: true, quests: {}, squad: { ready: [], minPlayers: 3 }, dap: { pending: [] },
+    raid: { state: 'waiting', ready: [], participants: [], minPlayers: 3, health: 0, maxHealth: 0, endsAt: null },
+  };
+}
 interface Callbacks {
   state: (state: ConnectionState) => void;
-  snapshot: (snapshot: PlaySnapshot, membership: Membership) => void;
+  snapshot: (snapshot: CompatibleSnapshot, membership: Membership) => void;
   error: (message: string, terminal?: boolean) => void;
 }
 type Entry = { type: 'create'; name: string } | { type: 'join'; name: string; roomCode: string; playerToken?: string };
@@ -36,6 +45,7 @@ export class RoomClient {
   private lastMove = 0;
   private lastSnapshotTime = 0;
   private watchdog: ReturnType<typeof setInterval> | undefined;
+  private legacyServer = false;
 
   constructor(private readonly callbacks: Callbacks) {}
 
@@ -81,6 +91,8 @@ export class RoomClient {
         return;
       }
       if (message.type === 'welcome') {
+        const snapshot = compatibleSnapshot(message.snapshot);
+        this.legacyServer = !!snapshot.legacyServer;
         clearTimeout(this.timeout);
         this.membership = {
           roomCode: message.roomCode, playerId: message.playerId,
@@ -94,10 +106,12 @@ export class RoomClient {
         this.watchdog = setInterval(() => {
           if (performance.now() - this.lastSnapshotTime > 8000) socket.close();
         }, 2000);
-        this.callbacks.snapshot(message.snapshot, this.membership);
+        this.callbacks.snapshot(snapshot, this.membership);
       } else if (message.type === 'snapshot' && this.membership && this.connected) {
         this.lastSnapshotTime = performance.now();
-        this.callbacks.snapshot(message.snapshot, this.membership);
+        const snapshot = compatibleSnapshot(message.snapshot);
+        this.legacyServer = !!snapshot.legacyServer;
+        this.callbacks.snapshot(snapshot, this.membership);
       }
     };
     socket.onerror = () => { /* onclose owns error/retry so there is only one path. */ };
@@ -128,11 +142,11 @@ export class RoomClient {
     this.lastMove = performance.now();
     this.send({ type: 'move', x, z });
   }
-  heading(yaw: number): void { if (Number.isFinite(yaw)) this.send({ type: 'heading', yaw }); }
-  action(action: PetActionKind): void { this.send({ type: 'action', action }); }
+  heading(yaw: number): void { if (!this.legacyServer && Number.isFinite(yaw)) this.send({ type: 'heading', yaw }); }
+  action(action: PetActionKind): void { if (action !== 'dap' || !this.legacyServer) this.send({ type: 'action', action }); }
   confirmDap(): void { this.send({ type: 'confirm_dap' }); }
-  readySquadQuest(): void { this.send({ type: 'ready_squad_quest' }); }
-  readyRaid(): void { this.send({ type: 'ready_raid' }); }
+  readySquadQuest(): void { if (!this.legacyServer) this.send({ type: 'ready_squad_quest' }); }
+  readyRaid(): void { if (!this.legacyServer) this.send({ type: 'ready_raid' }); }
   private send(message: object): void {
     if (this.connected && this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
   }

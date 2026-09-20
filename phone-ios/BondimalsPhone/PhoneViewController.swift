@@ -1,6 +1,7 @@
 import UIKit
 import WebKit
 import CoreLocation
+import CoreMotion
 import AVFoundation
 import AVKit
 import UniformTypeIdentifiers
@@ -9,6 +10,9 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private var webView: WKWebView!
     private let loadingLabel = UILabel()
     private let locationManager = CLLocationManager()
+    private let motionManager = CMMotionManager()
+    private var motionGeneration = 0
+    private var receivedMotion = false
     private var locationPurposes = Set<String>()
     private var isTracking = false
     private var preparingEvidence = false
@@ -37,7 +41,8 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         configuration.setURLSchemeHandler(BundledSite(), forURLScheme: "bondimals")
         configuration.userContentController.add(self, name: "bondimals")
         let server = (Bundle.main.object(forInfoDictionaryKey: "BondimalsServerURL") as? String) ?? ""
-        let data = try! JSONSerialization.data(withJSONObject: ["version": 1, "serverURL": server])
+        let web = (Bundle.main.object(forInfoDictionaryKey: "BondimalsWebURL") as? String) ?? ""
+        let data = try! JSONSerialization.data(withJSONObject: ["version": 1, "serverURL": server, "webURL": web])
         let json = String(data: data, encoding: .utf8)!
         configuration.userContentController.addUserScript(WKUserScript(source: "window.bondimalsNative = \(json);", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController.addUserScript(WKUserScript(source: """
@@ -93,6 +98,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             authorizeLocation()
         case "stopLocation":
             if let purpose = body["purpose"] as? String { locationPurposes.remove(purpose) }
+            if !locationPurposes.contains("walking") { stopWalkingMotion() }
             if locationPurposes.isEmpty { stopSensors() }
         case "recordClip": recordClip()
         case "prepareQuestClip":
@@ -122,6 +128,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
                 if CLLocationManager.headingAvailable() { locationManager.startUpdatingHeading() }
             }
             if let heading = locationManager.heading { publishHeading(heading) }
+            if locationPurposes.contains("walking") { startWalkingMotion() }
             if let fix = lastFix, abs(fix.timestamp.timeIntervalSinceNow) < 15 { publish(fix) }
             if locationManager.accuracyAuthorization == .reducedAccuracy {
                 emit(["type": "status", "message": "Enable Precise Location in iPhone Settings for nearby pets and walking."])
@@ -160,6 +167,42 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     private func stopSensors() {
         isTracking = false; lastFix = nil; lastHeadingTime = .distantPast
         locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
+        stopWalkingMotion()
+    }
+    private func startWalkingMotion() {
+        guard !motionManager.isDeviceMotionActive, UIApplication.shared.applicationState == .active else { return }
+        guard motionManager.isDeviceMotionAvailable else {
+            emit(["type": "motionStatus", "available": false, "message": "Step sensor unavailable. Walking is using GPS."])
+            return
+        }
+        motionGeneration += 1
+        let generation = motionGeneration
+        receivedMotion = false
+        motionManager.deviceMotionUpdateInterval = 1.0 / 40.0
+        motionManager.startDeviceMotionUpdates(to: .main) { [weak self] motion, error in
+            guard let self, self.motionGeneration == generation, self.locationPurposes.contains("walking"),
+                  UIApplication.shared.applicationState == .active else { return }
+            guard let motion, error == nil else {
+                self.stopWalkingMotion()
+                self.emit(["type": "motionStatus", "available": false, "message": "Step sensor unavailable. Walking is using GPS."])
+                return
+            }
+            if !self.receivedMotion {
+                self.receivedMotion = true
+                self.emit(["type": "motionStatus", "available": true, "message": "Step tracking ready · hold your phone facing the way you walk."])
+            }
+            let a = motion.userAcceleration
+            let g = motion.gravity
+            // Gravity is separated by Core Motion. Turning the phone alone
+            // produces no vertical walking impulse. Samples stay on this device.
+            let vertical = -(a.x * g.x + a.y * g.y + a.z * g.z)
+            self.emit(["type": "motion", "verticalG": vertical, "timestamp": motion.timestamp * 1000])
+        }
+    }
+    private func stopWalkingMotion() {
+        motionGeneration += 1
+        receivedMotion = false
+        motionManager.stopDeviceMotionUpdates()
     }
     @objc private func becameActive() {
         authorizeLocation()

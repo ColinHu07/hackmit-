@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { attachNearbyDiscovery } from './nearby-discovery.mjs';
+import { createStaticWebHandler } from './static-web.mjs';
 import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
 import {
   PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES,
@@ -17,6 +18,7 @@ export function createPlayServer(options = {}) {
   const heartbeatMs = options.heartbeatMs ?? 20_000;
   const maxRooms = options.maxRooms ?? 500;
   const maxConnections = options.maxConnections ?? 1200;
+  const serveWeb = options.webRoot ? createStaticWebHandler(options.webRoot) : null;
   const origins = new Set(options.allowedOrigins ?? []);
   const rooms = new Map();
   const connections = new Set();
@@ -107,9 +109,21 @@ export function createPlayServer(options = {}) {
       response.writeHead(204); response.end(); return;
     }
     if (path === '/verify' && request.method === 'POST') { void verifyQuestPhoto(request, response); return; }
-    if (request.method === 'GET' && request.url === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ ok: true, service: 'bondimals-play', rooms: rooms.size }));
+    if (request.method === 'GET' && path === '/health') {
+      let players = 0;
+      let activeRooms = 0;
+      for (const room of rooms.values()) {
+        const active = [...room.players.values()].filter(player => player.socket?.readyState === WebSocket.OPEN).length;
+        players += active;
+        if (active) activeRooms++;
+      }
+      writeJson(response, 200, {
+        ok: true, service: 'bondimals-play', rooms: rooms.size, activeRooms,
+        players, connections: connections.size,
+        maxPlayersPerRoom: PLAY_MAX_PLAYERS, maxRooms, maxConnections,
+      });
+    } else if (serveWeb) {
+      void serveWeb(request, response);
     } else {
       response.writeHead(404, { 'content-type': 'text/plain' });
       response.end('Not found');
@@ -592,10 +606,11 @@ export function createPlayServer(options = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT || 8788);
-  const host = process.env.HOST || '127.0.0.1';
+  const webRoot = process.env.WEB_ROOT || (process.argv.includes('--web') ? fileURLToPath(new URL('../companion-web/dist/', import.meta.url)) : undefined);
+  const host = process.env.HOST || (webRoot ? '0.0.0.0' : '127.0.0.1');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
-  const app = createPlayServer({ allowedOrigins });
-  app.server.listen(port, host, () => console.log(`Bondimals playground listening on ${host}:${port}`));
+  const app = createPlayServer({ allowedOrigins, webRoot });
+  app.server.listen(port, host, () => console.log(`Bondimals ${webRoot ? 'web game and playground' : 'playground'} listening on http://${host}:${port}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void app.close().then(() => process.exit(0)); });
 }

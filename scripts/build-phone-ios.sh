@@ -13,5 +13,5 @@ else
   : "${BONDIMALS_DEVELOPMENT_TEAM:?Set BONDIMALS_DEVELOPMENT_TEAM to your Apple development team ID}"
   build_args+=(-destination 'generic/platform=iOS' -allowProvisioningUpdates "DEVELOPMENT_TEAM=$BONDIMALS_DEVELOPMENT_TEAM")
 fi
-build_args+=("BONDIMALS_SERVER_URL=${BONDIMALS_SERVER_URL:-}" build)
+build_args+=("BONDIMALS_SERVER_URL=${BONDIMALS_SERVER_URL:-}" "BONDIMALS_WEB_URL=${BONDIMALS_WEB_URL:-}" build)
 xcodebuild "${build_args[@]}"

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { startingCamera } from './WalkingView';
+import { followingCamera, screenMovement } from './WalkingView';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
@@ -147,10 +147,17 @@ export class Playground {
     if (pose && initialHeading) {
       const pet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
       if (pet) { pet.yaw = pose.yaw; pet.body.rotation.y = pose.yaw; }
-      this.camera.position.set(...startingCamera(pose.yaw));
     }
     if (!pose) this.camera.position.set(0, 13, 10);
     this.camera.lookAt(0, 0, 0);
+  }
+
+  moveByScreen(right: number, down: number): void {
+    const local = this.snapshot?.players.find(player => player.id === this.localPlayerId);
+    const pet = this.pets.find(pet => pet.playerId === this.localPlayerId);
+    if (!local || !pet || !this.enabled) return;
+    const [x, z] = screenMovement(pet.body.rotation.y, right, down);
+    this.onMove(THREE.MathUtils.clamp(local.targetX + x, -WORLD_LIMIT, WORLD_LIMIT), THREE.MathUtils.clamp(local.targetZ + z, -WORLD_LIMIT, WORLD_LIMIT));
   }
 
   async load(): Promise<void> {
@@ -250,8 +257,10 @@ export class Playground {
       }
       if (index === 0) pet.ring.material.opacity = 0.82;
       pet.ring.scale.setScalar(index === 0 ? 1.08 : 1);
-      pet.distance = 0;
-      pet.gaitStrength = 0;
+      if (index !== 0 || !this.walkingPose) {
+        pet.distance = 0;
+        pet.gaitStrength = 0;
+      }
     }
     this.refreshAnimation();
   }
@@ -599,6 +608,14 @@ export class Playground {
         };
       }
       this.animatePet(pet, player, delta, now / 1000, serverTime, reducedMotion);
+    }
+    const followedPet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
+    if (followedPet?.root.visible) {
+      const { x, z } = followedPet.root.position;
+      // Follow the rendered heading (including its smoothing), not a stale
+      // compass target, so the pet never swings sideways relative to the view.
+      this.camera.position.set(...followingCamera(followedPet.body.rotation.y, x, z));
+      this.camera.lookAt(x, 0, z);
     }
     const local = this.snapshot?.players.find((player) => player.id === this.localPlayerId);
     this.target.visible = this.enabled && Boolean(local?.connected)

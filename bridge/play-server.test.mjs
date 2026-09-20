@@ -45,7 +45,10 @@ const state = (client, match) => client.next(message => message.type === 'snapsh
 
 test('two phones share authoritative movement, quests, and one cooperative bond reward', async t => {
   const { origin, connect } = await setup(t);
-  assert.deepEqual(await (await fetch(origin + '/health')).json(), { ok: true, service: 'bondimals-play', rooms: 0 });
+  assert.deepEqual(await (await fetch(origin + '/health')).json(), {
+    ok: true, service: 'bondimals-play', rooms: 0, activeRooms: 0,
+    players: 0, connections: 0, maxPlayersPerRoom: 4, maxRooms: 500, maxConnections: 1200,
+  });
   const a = await connect('/');
   a.send({ type: 'create', name: 'Alex' });
   const first = await welcome(a);

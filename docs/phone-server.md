@@ -1,22 +1,69 @@
 # Phone playground server
 
-The phone playground uses a separate Node WebSocket service from the glasses landmark relay. It supports nearby pet discovery and two real players per encounter; there is no simulated second player. Room and presence state live in memory and disappear on restart. The current playground shares a virtual space, not physical AR anchors.
+The phone playground uses a separate Node WebSocket service from the glasses landmark relay. It supports up to four real players per room, many rooms at once, and two-player nearby discovery encounters; there is no simulated second player. Room and presence state live in memory and disappear on restart. The current playground shares a virtual space, not physical AR anchors.
+
+## Share a phone-browser link
+
+To connect everyone to an **existing team server**, run:
+
+```sh
+npm run web:share -- --provider serveo --server ws://10.189.108.228:8788/play
+```
+
+This serves the built web app and proxies `/play`, `/nearby`, `/verify`, and `/health` to that exact server through the HTTPS link. It starts no local game server and never falls back to one. The host Mac must remain able to reach the team server. The upstream server's origin rules still apply; allow the printed public origin there if restricted. `/health` reports the upstream server's own fields, which may omit player counts on older versions. Native clients on the same network can connect directly to the original address and join the same room codes.
+
+### Start a separate test server
+
+From the repository root, install dependencies with `npm ci`. With `cloudflared` installed (`brew install cloudflared` on macOS), run:
+
+```sh
+npm run web:share
+```
+
+If event Wi-Fi blocks Cloudflare, run `npm run web:share -- --provider serveo`. This uses SSH on port 443 with a pinned, verified Serveo host key and no personal SSH identities. Friends may need to continue through [Serveo’s browser warning](https://serveo.net/docs/#browser-warning).
+
+This builds the phone app, runs one server for both the website and multiplayer endpoints, and prints a temporary public HTTPS URL after verifying `/health` responds. Friends can open it in Safari or Chrome from any network. One friend creates a playground and shares the room invite link or code; up to four players can join that room. Additional groups create their own rooms on the same server.
+
+The Mac must stay awake and online, and the launcher must stay running. Press **Ctrl+C** to stop its server and tunnel. Each run starts fresh in-memory rooms; share the link printed by the new run. This is a temporary testing setup; use persistent hosting for a lasting address.
+
+The launcher binds its game server to `127.0.0.1`, chooses the first free port starting at 8790, and leaves existing servers alone. Override the starting port with `npm run web:share -- --port 8890` or `WEB_PORT=8890 npm run web:share`. It builds with same-origin multiplayer configuration and allows all request origins only for its own temporary server, because the tunnel hostname changes every run. It does not modify `.env` or the normal server's origin policy.
+
+The public `/health` endpoint reports aggregate `rooms`, `activeRooms`, `players`, and `connections`, plus `maxPlayersPerRoom`, `maxRooms`, and `maxConnections`. It does not include player identities or private room tokens. Refresh it while friends join to check that they are reaching the same server. `players` counts currently connected players; disconnected players can still reserve a room slot during the reconnect grace period.
+
+For an automated concurrent-player check:
+
+```sh
+npm run test:multiplayer
+# Run against an already-running shared or hosted server instead:
+npm run test:multiplayer -- --url https://YOUR-LINK.trycloudflare.com
+```
+
+The test creates separate rooms and verifies live multiplayer behavior. Its results are a functional concurrency check, not a production capacity guarantee.
 
 ## Run locally
 
-From the repository root, install dependencies with `npm install`, then run:
+To serve the website and game from one process:
+
+```sh
+npm run build:phone
+npm run web:start
+```
+
+`web:start` serves `companion-web/dist`, defaults to `HOST=0.0.0.0` and `PORT=8788`, and can accept phones on the same Wi-Fi at `http://YOUR_MAC_LAN_IP:8788`. `HOST`, `PORT`, and optional `WEB_ROOT` override these values. Build again and restart after updating the phone client. Browser location and camera access on physical phones need HTTPS; room-code multiplayer works over local HTTP.
+
+For a backend-only process (for the native app or a separately hosted web client):
 
 ```sh
 npm run play:server
 ```
 
-Defaults: `HOST=127.0.0.1`, `PORT=8788`. For phones on the same Wi-Fi, bind to the LAN and use your computer's LAN address in the client:
+Backend-only defaults are `HOST=127.0.0.1`, `PORT=8788`. To allow LAN clients:
 
 ```sh
 HOST=0.0.0.0 PORT=8788 npm run play:server
 ```
 
-WebSocket endpoints `/`, `/play`, and `/ws` are equivalent. `GET /health` returns JSON with `ok`, `service`, and the number of rooms. A local HTTP client can use `ws://YOUR_LAN_IP:8788`; a client served over HTTPS must use `wss://`.
+WebSocket endpoints `/`, `/play`, and `/ws` are equivalent. The same server also handles `/nearby` and `/verify`. `GET /health` returns JSON with `ok`, `service`, and the activity counters above. A local HTTP client can use `ws://YOUR_LAN_IP:8788`; a client served over HTTPS must use `wss://`.
 
 ## Meta quest verification
 
@@ -36,9 +83,9 @@ The server holds uploaded evidence only while processing the request and does no
 
 ## Host it
 
-Use a persistent Node 22+ process/container with WebSocket support. Static hosting alone cannot run this service. Set `HOST=0.0.0.0` where your hosting platform requires it, and let the platform supply `PORT`. Start command from the repo root: `npm run play:server`.
+Use a persistent Node 22+ process/container with WebSocket support. Static hosting alone cannot run this service. Set `HOST=0.0.0.0` where your hosting platform requires it, and let the platform supply `PORT`. Build with `npm ci && npm run build:phone`, then start from the repo root with `npm run web:start` to serve both the website and backend. Use `npm run play:server` only when serving the client separately.
 
-Put HTTPS/WSS in front of the process and serve the phone app itself over HTTPS for browser location permission. The phone client's production default is the same site's `wss://YOUR_SITE/play`; proxy **both `/play` and `/nearby`** to the Node service, forwarding WebSocket upgrade headers. The client derives `/nearby` from the configured `/play` address. If the UI and backend use separate domains, configure the client's server URL to the backend's public WSS URL. Use at least a 60-second reverse proxy idle timeout; the backend sends a ping every 20 seconds. Set `ALLOWED_ORIGINS` to comma-separated exact browser origins:
+Put HTTPS/WSS in front of the process for browser location and camera permissions. With `web:start`, forward the whole site to this one process, including WebSocket upgrades. The phone client's production default is the same site's `wss://YOUR_SITE/play`; proxy **both `/play` and `/nearby`** to the Node service, forwarding WebSocket upgrade headers. The client derives `/nearby` from the configured `/play` address. If the UI and backend use separate domains, configure the client's server URL to the backend's public WSS URL. Use at least a 60-second reverse proxy idle timeout; the backend sends a ping every 20 seconds. Set `ALLOWED_ORIGINS` to comma-separated exact browser origins:
 
 ```sh
 ALLOWED_ORIGINS=https://your-site.example,https://preview.example HOST=0.0.0.0 PORT=8788 npm run play:server
@@ -59,7 +106,7 @@ location ~ ^/(play|nearby|verify)$ {
 }
 ```
 
-Run one server instance for this prototype. Multiple replicas need shared discovery/room state or compatible routing. A restart or deploy loses rooms; clients should start discovery or create a fresh room if the previous one no longer exists. No database, AI key, camera, microphone, or recording service is required for multiplayer.
+Run one server instance for this prototype. The current defaults permit 500 rooms and 1,200 simultaneous play connections; these are admission limits, not measured capacity. Multiple replicas need shared discovery/room state or compatible routing. A restart or deploy loses rooms; clients should start discovery or create a fresh room if the previous one no longer exists. No database, AI key, camera, microphone, or recording service is required for multiplayer.
 
 ## Nearby discovery and real-world quests
 

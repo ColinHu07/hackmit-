@@ -20,9 +20,13 @@
     "dev:phone": "npm run dev --workspace @bondimals/companion-web",
     "build:phone": "npm run build --workspace @bondimals/companion-web",
     "preview:phone": "npm run preview --workspace @bondimals/companion-web",
+    "web:start": "node --import ./scripts/load-env.mjs bridge/play-server.mjs --web",
+    "web:share": "node scripts/share-phone-web.mjs",
+    "test:multiplayer": "node scripts/test-phone-multiplayer.mjs",
+    "test:web-proxy": "node --test scripts/phone-web-proxy.test.mjs",
     "typecheck:phone": "npm run typecheck --workspace @bondimals/companion-web",
     "play:server": "node --import ./scripts/load-env.mjs bridge/play-server.mjs",
-    "test:phone": "node --test bridge/play-server.test.mjs bridge/nearby-discovery.test.mjs bridge/quest-verification.test.mjs && npm run test --workspace @bondimals/companion-web",
+    "test:phone": "node --test bridge/play-server.test.mjs bridge/nearby-discovery.test.mjs bridge/quest-verification.test.mjs bridge/static-web.test.mjs && npm run test --workspace @bondimals/companion-web",
     "check:meta": "node --import ./scripts/load-env.mjs scripts/check-meta.mjs"
   }
 }

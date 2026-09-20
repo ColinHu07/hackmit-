@@ -216,3 +216,25 @@ describe('RoomClient session lifecycle', () => {
     client.stop();
   });
 });
+
+it('renders the older team server without quest objects and does not send unsupported commands', () => {
+  const { client, callbacks, first } = setup();
+  first.open();
+  const { quests: _quests, squad: _squad, raid: _raid, dap: _dap, ...legacy } = snapshot;
+  first.receive({ ...welcome, snapshot: legacy } as ServerMessage);
+  const rendered = callbacks.snapshot.mock.calls.at(-1)![0];
+  expect(rendered.legacyServer).toBe(true);
+  expect(rendered.players).toEqual(legacy.players);
+  expect(rendered.quests).toEqual({});
+  expect(rendered.squad.ready).toEqual([]);
+  expect(rendered.raid.state).toBe('waiting');
+  first.send.mockClear();
+  client.heading(0.8); client.action('dap'); client.readySquadQuest(); client.readyRaid();
+  expect(first.commands()).toEqual([]);
+  vi.advanceTimersByTime(100);
+  client.move(1, 1); client.action('wave');
+  expect(first.commands()).toEqual([{ type: 'move', x: 1, z: 1 }, { type: 'action', action: 'wave' }]);
+  first.receive({ type: 'snapshot', snapshot });
+  first.send.mockClear(); client.heading(0.8);
+  expect(first.commands()).toEqual([{ type: 'heading', yaw: 0.8 }]);
+});

@@ -42,10 +42,28 @@ An unsigned simulator build is available with `BONDIMALS_SERVER_URL=ws://127.0.0
 
 ## Native controls
 
+### Play with a friend on a laptop
+
+Use `ws://10.189.108.228:8788/play` in the native app's **Server settings** while on
+the team's Wi-Fi. The browser-sharing command must use the same upstream:
+`npm run web:share -- --provider serveo --server ws://10.189.108.228:8788/play`.
+Give the printed HTTPS link to your laptop friend. One player creates a room and
+the other enters its code; sharing a server alone does not put everyone in one
+room. On the phone, **Start a squad quest room** opens a room from the nearby
+screen, or stop discovery and select **Use a room code instead** to join.
+Room-code play works even when the laptop cannot obtain precise location.
+
+For a preconfigured build, set `BONDIMALS_SERVER_URL` to the LAN address and
+`BONDIMALS_WEB_URL` to the printed HTTPS link when running the build script. The
+phone's **Invite friends** button then opens the hosted browser app in the same
+room. A new bundled server address replaces the old saved address once, clears
+the old room session, and respects later manual changes in Server settings.
+The server computer and web-sharing Mac must stay awake and reachable.
+
 - **Nearby discovery starts automatically** on launch and foreground return after native While Using the App location permission. Enable **Precise Location**. It uses the approximate 10-meter discovery protocol. **Stop nearby discovery** persists your choice; use **Find nearby pets** to turn it back on. New players start as Explorer and can edit their name after stopping discovery.
-- **Walking starts automatically** once the pet loads and location access is allowed. The camera aligns behind the first valid compass reading, so the pet initially faces screen-top regardless of compass direction; subsequent turns rotate the pet within that fixed view. World coordinates still use geographic north as negative Z and east as positive X. Translation uses changes in GPS, while the phone's heading changes the pet's facing. Turning in place does not move the pet. True north is preferred; magnetic fallback is labeled. Heading updates with more than 25° reported error are ignored.
-- GPS movement requires accuracy of 10 meters or better and displacement greater than the larger of 2 meters or the reported accuracy of either fix. Samples older than 20 seconds, out-of-order samples, and movement above 4 m/s are rejected. Poor signals and long gaps reanchor without teleporting. This reduces jitter but cannot guarantee that GPS drift is eliminated. Indoors, small steps may not be resolved.
-- Movement is scaled: 1 real meter equals 0.2 world units. The existing board spans -3 to +3 in X/Z. The view automatically rebases the pet to the center at its edge, preserving heading and the latest GPS anchor so subsequent steps keep working. This is a miniature world aligned to your starting direction, not AR world anchoring or measured placement of other pets. Nearby visitors still use the explicitly illustrative arrangement.
+- **Walking starts automatically** once the pet loads and location access is allowed. The camera stays centered behind the pet’s rendered heading: the pet faces screen-top on entry and as you turn, while the meadow rotates around it. World coordinates still use geographic north as negative Z and east as positive X. Foreground Core Motion detects rhythmic footfalls: two footfalls confirm a new walk, then each detected step advances the pet. Each step uses an approximate 0.7-meter stride (0.14 world units); hold the phone facing your walking direction. This is gameplay motion estimation, not a fitness counter. The phone’s heading changes the pet’s facing. Turning in place does not move the pet. True north is preferred; magnetic fallback is labeled. Heading updates with more than 25° reported error are ignored.
+- **GPS is a fallback only** when motion data is unavailable; it never adds duplicate movement while step tracking is active. GPS movement requires accuracy of 10 meters or better and displacement greater than the larger of 2 meters or the reported accuracy of either fix. Samples older than 20 seconds, out-of-order samples, and movement above 4 m/s are rejected. Poor signals and long gaps reanchor without teleporting. This reduces jitter but cannot guarantee that GPS drift is eliminated. Indoors, small steps may not be resolved.
+- Movement is scaled: 1 estimated meter equals 0.2 world units. The existing board spans -3 to +3 in X/Z. The view automatically rebases the pet to the center at its edge, preserving heading and the latest GPS anchor so subsequent steps keep working. This is a miniature world aligned to your starting direction, not AR world anchoring or measured placement of other pets. Nearby visitors still use the explicitly illustrative arrangement.
 - Native walking also works with the preview pet before joining a room. In a shared room, walking destinations and stationary compass facing are synchronized through the game server. Entering or leaving a room automatically resets the GPS baseline and continues walking. Manual movement is disabled while walking.
 - **Record quest clip** asks for camera and microphone access and opens the iPhone camera recorder, capped at 10 seconds. The separate **Quest clips** section contains recording, review, and deletion. Recording pauses walking/discovery; dismissing the recorder resumes walking and any enabled discovery. **Review clip** opens the native video player; **Delete clip** removes it. Only the latest accepted clip is retained, locally under `Documents/QuestClips`. Nothing is uploaded automatically. Select a quest, review the clip, check participant consent, and tap **Submit clip to Meta**. The app sends 12 sampled frames to the game server for Muse Spark verification; audio stays local.
 - **Quest board:** each player has their own progress: walk one world-unit for the solo **Touch grass** quest, meet a nearby pet for the duo quest, and complete **Circle up** only when three or more connected pets are close together in the pen. A completed three- or four-pet squad can jointly ready and calm **Mossback, Keeper of the Pen**. The server owns quest gates, raid state, rewards, and reconnect-safe progress for the life of that room.

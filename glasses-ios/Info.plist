@@ -67,8 +67,13 @@
 	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>external-accessory</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+	</array>
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array>
+		<string>com.meta.ar.wearable</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

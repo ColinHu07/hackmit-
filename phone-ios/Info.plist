@@ -4,6 +4,8 @@
 <dict>
 	<key>BondimalsServerURL</key>
 	<string>$(BONDIMALS_SERVER_URL)</string>
+	<key>BondimalsWebURL</key>
+	<string>$(BONDIMALS_WEB_URL)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Bondimals</string>
 	<key>CFBundleExecutable</key>
@@ -37,6 +39,8 @@
 	<string>Find nearby players and move your pet with you while walking. Location is used only while you choose to play.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Include sound in the quest clips you choose to record.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Detect your walking steps so your pet moves with you while the game is open.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

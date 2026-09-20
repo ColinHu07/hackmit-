@@ -1,5 +1,13 @@
 # Bondimals
 
+## Play with friends in a browser
+
+**For the team's running server:** use `npm run web:share -- --provider serveo --server ws://10.189.108.228:8788/play`. This shares the browser app and forwards all gameplay to that server. Keep this Mac on the same reachable network. Without `--server`, the command creates a separate test server.
+
+Friends can play on iPhone Safari or Android Chrome without installing Xcode or the native app. On the host Mac, run `npm run web:share` (requires Node 22+, installed dependencies, and `cloudflared`). If event Wi-Fi blocks Cloudflare, use `npm run web:share -- --provider serveo` instead (uses the Mac’s SSH client; friends may see a browser warning to continue through). Share the HTTPS link it prints, select **Start a playground**, enter your name, tap **Let’s play together**, then tap **Invite friends** to put everyone in the same room. Keep the Mac awake and the command running. Each room holds four players; larger groups can create more rooms on the same server.
+
+The browser game includes tap-to-move controls, shared pet actions, quests, and the squad raid. Expand **Multiplayer server** to see live connected-player and active-room counts. `npm run test:multiplayer` runs an isolated multi-room WebSocket test. See the [browser guide](companion-web/README.md) for sharing and the [server guide](docs/phone-server.md) for permanent hosting. To join the same server from the native app, enter the shared HTTPS address in its Server settings.
+
 ## iPhone app — start here
 
 **The installable iPhone app is in [`phone-ios/`](phone-ios/README.md).** It includes native camera recording, location-based nearby discovery, compass facing, and walking-driven pet movement.

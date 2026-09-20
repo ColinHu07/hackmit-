@@ -2,7 +2,7 @@ import type { LocationFix } from './LocationDiscovery';
 
 declare global {
   interface Window {
-    bondimalsNative?: { version: number; serverURL: string };
+    bondimalsNative?: { version: number; serverURL: string; webURL?: string };
     webkit?: { messageHandlers?: { bondimals?: { postMessage(message: object): void } } };
   }
 }
@@ -11,7 +11,8 @@ export function nativeCommand(command: string, extra: object = {}): void {
   window.webkit?.messageHandlers?.bondimals?.postMessage({ command, ...extra });
 }
 export interface NativeEvent {
-  type: 'evidence' | 'active' | 'location' | 'heading' | 'paused' | 'unavailable' | 'status' | 'recording';
+  type: 'evidence' | 'active' | 'location' | 'heading' | 'motion' | 'motionStatus' | 'paused' | 'unavailable' | 'status' | 'recording';
+  verticalG?: number; available?: boolean;
   requestId?: string; frames?: string[]; durationSeconds?: number;
   latitude?: number; longitude?: number; accuracy?: number; timestamp?: number;
   degrees?: number; reference?: 'true' | 'magnetic'; message?: string;

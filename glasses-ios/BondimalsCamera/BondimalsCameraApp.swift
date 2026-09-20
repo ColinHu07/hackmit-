@@ -19,12 +19,16 @@ struct BondimalsCameraApp: App {
                         Text("See the glasses camera and tracked hands here. No relay or pairing link is needed for this preview. Nothing is recorded.")
                         Text(bridge.status).accessibilityIdentifier("bridge-status")
                         Text(bridge.handStatus).font(.caption.monospaced())
+                        Text(bridge.sessionStatus).font(.caption.monospaced())
                     }
                     Section("Camera setup") {
+                        Text(bridge.deviceStatus).font(.caption)
+                        Button("Refresh glasses connection") { bridge.refreshDevices() }
                         Picker("Camera image rotation", selection: $bridge.rotation) {
                             ForEach([0, 90, 180, 270], id: \.self) { Text("\($0)°").tag($0) }
                         }.disabled(bridge.running)
                         Button("Register with Meta AI") { bridge.register() }.disabled(bridge.running)
+                        Button("Update Meta glasses app") { bridge.updateGlassesApp() }.disabled(bridge.running)
                     }
                     Section {
                         DisclosureGroup("Optional web connection") {

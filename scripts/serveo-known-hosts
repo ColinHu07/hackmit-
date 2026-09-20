@@ -1,0 +1,3 @@
+# Ed25519 fingerprint verified against https://serveo.net/docs/ in September 2026.
+# SHA256:GnmVK+70U6GqbupoV+gg7LnHHUsW1IjrK0cLqvDJxIk
+[serveo.net]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGX8CMtRKSA58fmA3I6oat6+7Z6VUwGbzYUE5FVrA3g1
