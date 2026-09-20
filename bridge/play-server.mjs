@@ -64,7 +64,8 @@ export function createPlayServer(options = {}) {
     const room = rooms.get(roomCode);
     const player = room && [...room.players.values()].find(candidate => sameToken(candidate.token, playerToken));
     if (!room || !player) return writeJson(response, 401, { error: 'This quest session has expired.' });
-    if (!player.quests[questId]) return writeJson(response, 409, { error: 'Finish the in-game part of this quest before sending a photo.' });
+    const evidenceReady = questId === 'dapHandshake' ? player.quests.dapHandshakeReady : player.quests[questId];
+    if (!evidenceReady) return writeJson(response, 409, { error: 'Finish the in-game part of this quest before sending a photo.' });
     const current = player.quests.photoVerification[questId];
     if (current === 'approved') return writeJson(response, 200, { verified: true, reason: 'This quest photo was already approved.' });
     if (current === 'pending') return writeJson(response, 409, { error: 'That photo is already being checked.' });
@@ -77,7 +78,9 @@ export function createPlayServer(options = {}) {
     try {
       const result = await photoVerifier.verify({ questId, photoDataUrl });
       player.quests.photoVerification[questId] = result.verified ? 'approved' : 'rejected';
-      room.notice = result.verified ? `${player.name}'s photo verified the ${PHOTO_VERIFICATION_QUESTS[questId].label} quest.` : `That photo did not clearly verify ${player.name}'s quest. Try another photo.`;
+      if (result.verified && questId === 'dapHandshake') {
+        if (!completeDapIfVerified(room, player)) room.notice = `${player.name}'s dap clip verified. Waiting for their partner's clip.`;
+      } else room.notice = result.verified ? `${player.name}'s photo verified the ${PHOTO_VERIFICATION_QUESTS[questId].label} quest.` : `That photo did not clearly verify ${player.name}'s quest. Try another photo.`;
       broadcast(room);
       return writeJson(response, 200, result);
     } catch (cause) {
@@ -199,7 +202,7 @@ export function createPlayServer(options = {}) {
     do { code = Array.from({ length: 6 }, () => PLAY_ROOM_ALPHABET[randomInt(PLAY_ROOM_ALPHABET.length)]).join(''); }
     while (rooms.has(code));
     const room = {
-      code, players: new Map(), bond: 0, quest: { met: false, waved: false, played: false }, squadReady: new Set(), raidReady: new Set(), raid: null, dapRequests: new Map(),
+      code, players: new Map(), bond: 0, quest: { met: false, waved: false, played: false }, squadReady: new Set(), raidReady: new Set(), raid: null, dapRequests: new Map(), dapPartners: new Map(),
       notice: 'Invite a friend with your room code.', lastActivity: Date.now(), lastPlayAt: 0,
     };
     rooms.set(code, room);
@@ -221,7 +224,7 @@ export function createPlayServer(options = {}) {
       id: randomUUID(), token: randomBytes(24).toString('hex'), name, slot,
       x, z, targetX: x, targetZ: z, yaw: Math.atan2(-x, -z),
       action: null, socket: null, disconnectedAt: null, lastActionAt: 0,
-      movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, photoVerification: {} },
+      movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, dapHandshakeReady: false, photoVerification: {} },
     };
     room.players.set(player.id, player);
     return player;
@@ -249,6 +252,19 @@ export function createPlayServer(options = {}) {
   function clearDapsFor(room, playerId) {
     room.dapRequests.delete(playerId);
     for (const [from, offer] of room.dapRequests) if (offer.to === playerId) room.dapRequests.delete(from);
+    const partner = room.dapPartners.get(playerId);
+    room.dapPartners.delete(playerId);
+    if (partner) room.dapPartners.delete(partner);
+  }
+  function completeDapIfVerified(room, player) {
+    const partnerId = room.dapPartners.get(player.id);
+    const partner = partnerId ? room.players.get(partnerId) : null;
+    if (!partner || player.quests.photoVerification.dapHandshake !== 'approved' || partner.quests.photoVerification.dapHandshake !== 'approved') return false;
+    player.quests.dapHandshake = true;
+    partner.quests.dapHandshake = true;
+    room.bond += 1;
+    room.notice = `${player.name} and ${partner.name}'s real-world dap was verified! Both pets completed the duo quest.`;
+    return true;
   }
   function reapDaps(room, now) {
     for (const [from, offer] of room.dapRequests) {
@@ -393,6 +409,7 @@ export function createPlayServer(options = {}) {
     reapDaps(room, now);
     if (message.action === 'dap') {
       if (player.quests.dapHandshake) return fail(ws, 'dap_complete', 'You already completed the Dap up quest in this pen.');
+      if (player.quests.dapHandshakeReady) return fail(ws, 'dap_needs_camera', 'Your dap is ready for camera verification. Record a short clip before trying again.');
       const partner = neighboringPlayers(player, connectedPlayers)
         .filter(candidate => !candidate.quests.dapHandshake)
         .sort((a, b) => Math.hypot(player.x - a.x, player.z - a.z) - Math.hypot(player.x - b.x, player.z - b.z))[0];
@@ -401,14 +418,17 @@ export function createPlayServer(options = {}) {
       if (reciprocal?.to === player.id && reciprocal.expiresAt > now) {
         room.dapRequests.delete(partner.id);
         room.dapRequests.delete(player.id);
-        player.quests.dapHandshake = true;
-        partner.quests.dapHandshake = true;
+        player.quests.dapHandshakeReady = true;
+        partner.quests.dapHandshakeReady = true;
+        player.quests.photoVerification.dapHandshake = 'required';
+        partner.quests.photoVerification.dapHandshake = 'required';
+        room.dapPartners.set(player.id, partner.id);
+        room.dapPartners.set(partner.id, player.id);
         player.yaw = Math.atan2(partner.x - player.x, partner.z - player.z);
         partner.yaw = Math.atan2(player.x - partner.x, player.z - partner.z);
         setAction(player, 'dap', now);
         setAction(partner, 'dap', now);
-        room.bond += 1;
-        room.notice = `${player.name} and ${partner.name} dapped up! Both pets completed the duo quest.`;
+        room.notice = `${player.name} and ${partner.name} dapped up! Each person should record a short clip for camera verification.`;
       } else {
         room.dapRequests.set(player.id, { to: partner.id, expiresAt: now + 8_000 });
         room.notice = `${player.name} offered a dap to ${partner.name}. They have a few seconds to dap back.`;

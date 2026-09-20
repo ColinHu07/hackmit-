@@ -94,6 +94,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             if let purpose = body["purpose"] as? String { locationPurposes.remove(purpose) }
             if locationPurposes.isEmpty { stopSensors() }
         case "recordClip": recordClip()
+        case "verifyDapClip": verifyDapClip()
         case "reviewClip": reviewClip()
         case "deleteClip": deleteClip()
         case "loadError":
@@ -216,6 +217,28 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         let controller = AVPlayerViewController()
         controller.player = AVPlayer(url: clip)
         present(controller, animated: true) { controller.player?.play() }
+    }
+    private func verifyDapClip() {
+        guard !cameraBusy, let clip = latestClip else { emit(["type": "recording", "message": "Record a short dap clip first."]); return }
+        cameraBusy = true
+        Task { @MainActor in
+            defer { cameraBusy = false }
+            let asset = AVURLAsset(url: clip)
+            let duration = try? await asset.load(.duration)
+            let seconds = max(0.1, (duration?.seconds ?? 0.2) / 2)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 1280, height: 1280)
+            do {
+                let image = try generator.copyCGImage(at: CMTime(seconds: seconds, preferredTimescale: 600), actualTime: nil)
+                guard let jpeg = UIImage(cgImage: image).jpegData(compressionQuality: 0.72), jpeg.count <= 4 * 1024 * 1024 else {
+                    emit(["type": "recording", "message": "That clip frame is too large. Record a shorter clip and try again."]); return
+                }
+                let photo = "data:image/jpeg;base64,\(jpeg.base64EncodedString())"
+                emit(["type": "questPhoto", "questId": "dapHandshake", "photoDataUrl": photo])
+                emit(["type": "recording", "message": "Checking a frame from your dap clip…"])
+            } catch { emit(["type": "recording", "message": "Could not read that dap clip. Record another short clip."]) }
+        }
     }
     private func deleteClip() {
         guard !cameraBusy else { return }

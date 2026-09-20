@@ -126,8 +126,11 @@ test('photo verification is gated by earned quest progress and stores only its d
   assert.equal(JSON.stringify(verified).includes(body.photoDataUrl), false, 'snapshots never contain uploaded image data');
 });
 
-test('two nearby players must both dap up to finish the individual handshake quest', async t => {
-  const { connect } = await setup(t);
+test('two nearby players must both dap up and pass camera checks to finish the handshake quest', async t => {
+  const { origin, connect } = await setup(t, { photoVerifier: {
+    configured: true,
+    async verify() { return { verified: true, reason: 'Two people are dapping.' }; },
+  } });
   const a = await connect(); a.send({ type: 'create', name: 'Alex' }); const first = await welcome(a);
   const b = await connect(); b.send({ type: 'join', roomCode: first.roomCode, name: 'Blair' }); const second = await welcome(b);
   a.send({ type: 'action', action: 'dap' });
@@ -138,11 +141,18 @@ test('two nearby players must both dap up to finish the individual handshake que
   const offered = await state(b, snapshot => snapshot.dap.pending.length === 1);
   assert.deepEqual(offered.dap.pending[0]?.from, first.playerId);
   b.send({ type: 'action', action: 'dap' });
+  const paired = await state(a, snapshot => snapshot.quests[first.playerId].dapHandshakeReady && snapshot.quests[second.playerId].dapHandshakeReady);
+  assert.equal(paired.dap.pending.length, 0);
+  assert.equal(paired.bond, 0, 'the virtual dap alone is not a completion');
+  assert.equal(paired.players[0]?.action?.kind, 'dap');
+  assert.equal(paired.players[1]?.action?.kind, 'dap');
+  const photo = 'data:image/png;base64,iVBORw0KGgo=';
+  for (const session of [first, second]) {
+    const response = await fetch(origin + '/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roomCode: first.roomCode, playerToken: session.playerToken, questId: 'dapHandshake', photoDataUrl: photo }) });
+    assert.equal(response.status, 200);
+  }
   const complete = await state(a, snapshot => snapshot.quests[first.playerId].dapHandshake && snapshot.quests[second.playerId].dapHandshake);
-  assert.equal(complete.dap.pending.length, 0);
   assert.equal(complete.bond, 1);
-  assert.equal(complete.players[0]?.action?.kind, 'dap');
-  assert.equal(complete.players[1]?.action?.kind, 'dap');
 });
 
 test('a completed squad can start and finish the Mossback raid with per-player rewards', async t => {

@@ -6,6 +6,10 @@ export const PHOTO_VERIFICATION_QUESTS = Object.freeze({
     label: 'touch grass',
     evidence: 'natural grass or other outdoor ground-level vegetation',
   },
+  dapHandshake: {
+    label: 'dap up',
+    evidence: 'two people visibly making hand-to-hand contact in a dap, handshake, fist bump, or high five',
+  },
 });
 
 function safeReason(value, fallback) {

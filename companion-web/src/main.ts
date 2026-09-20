@@ -75,7 +75,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div class="quest-card">
           <div class="quest-header"><span class="quest-symbol">${icon('play')}</span><div><span class="small-label">YOUR QUEST BOARD</span><h2>Grow your little world</h2></div><span class="quest-count" id="quest-count">0/5</span></div>
           <ol class="quest-list"><li id="quest-touch-grass"><span class="quest-tick">${icon('check')}</span><span><strong>Solo · touch grass <em class="verification-tag" id="touch-grass-tag">PHOTO CHECK</em></strong><small>Walk your pet one world-unit, then share a photo of grass to finish it.</small></span></li><li id="quest-meet-friend"><span class="quest-tick">${icon('check')}</span><span><strong>Duo · meet another user</strong><small id="duo-status">Bring a second pet into the pen, then meet nearby.</small></span></li><li id="quest-dap-handshake"><span class="quest-tick">${icon('check')}</span><span><strong>Duo · dap up</strong><small id="dap-handshake-status">Stand close to a pet and both tap Dap up within a few seconds.</small></span></li><li id="quest-squad-circle"><span class="quest-tick">${icon('check')}</span><span><strong>Squad · circle up</strong><small id="squad-status">Needs three connected pets in the pen.</small></span></li><li id="quest-raid-boss"><span class="quest-tick">${icon('check')}</span><span><strong>Raid · calm Mossback</strong><small id="raid-quest-status">Complete the squad circle to call the meadow’s tangled guardian.</small></span></li></ol>
-          <button id="meet-button" class="text-button" disabled>Meet in the middle ${icon('arrow')}</button><button id="ready-squad" class="text-button" disabled>Ready for squad circle ${icon('arrow')}</button><button id="verify-touch-grass" class="text-button" hidden>Verify touch grass photo ${icon('arrow')}</button><input id="touch-grass-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden /><p id="photo-verification-status" class="photo-verification-status" role="status" hidden></p>
+          <button id="meet-button" class="text-button" disabled>Meet in the middle ${icon('arrow')}</button><button id="ready-squad" class="text-button" disabled>Ready for squad circle ${icon('arrow')}</button><button id="verify-touch-grass" class="text-button" hidden>Verify touch grass photo ${icon('arrow')}</button><input id="touch-grass-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden /><button id="verify-dap" class="text-button" hidden>Verify real-world dap ${icon('arrow')}</button><input id="dap-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden /><p id="photo-verification-status" class="photo-verification-status" role="status" hidden></p>
         </div>
         <div class="quest-card raid-card" id="raid-card"><div class="quest-header"><span class="quest-symbol">✦</span><div><span class="small-label">SQUAD RAID · 3–4 PETS</span><h2>Mossback, Keeper of the Pen</h2></div></div><p id="raid-description">A gentle guardian’s vine magic has tangled up. Gather a completed squad close together, then calm it with your pets’ actions.</p><div class="raid-health"><span id="raid-health-label">Mossback is resting</span><meter id="raid-health-meter" min="0" max="1" value="0"></meter></div><button id="ready-raid" class="primary-button" disabled>Call Mossback ${icon('arrow')}</button></div>
         <button id="leave-button" class="leave-button">Leave playground</button>
@@ -187,8 +187,21 @@ function verificationEndpoint(): string {
   url.hash = '';
   return url.href;
 }
-function photoQuestComplete(quests: { touchGrass: boolean; photoVerification: Partial<Record<'touchGrass', 'required' | 'pending' | 'approved' | 'rejected'>> }, key: 'touchGrass' | 'meetFriend' | 'dapHandshake' | 'squadCircle' | 'raidBoss'): boolean {
-  return key !== 'touchGrass' || quests.photoVerification.touchGrass === 'approved';
+function submitQuestPhoto(questId: 'touchGrass' | 'dapHandshake', photoDataUrl: string): void {
+  if (!membership) return;
+  photoVerificationPending = true;
+  void fetch(verificationEndpoint(), {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ roomCode: membership.roomCode, playerToken: membership.playerToken, questId, photoDataUrl }),
+  }).then(async response => {
+    const result = await response.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string };
+    if (!response.ok) throw new Error(result.error || 'Photo verification is unavailable.');
+    toast(result.verified ? `${questId === 'dapHandshake' ? 'Dap clip' : 'Photo'} verified!` : result.reason || 'That image did not clearly verify the quest. Try another one.');
+  }).catch(cause => toast(cause instanceof Error ? cause.message : 'Photo verification is unavailable.'))
+    .finally(() => { photoVerificationPending = false; updateControls(); });
+}
+function photoQuestComplete(quests: { touchGrass: boolean; photoVerification: Partial<Record<'touchGrass' | 'dapHandshake', 'required' | 'pending' | 'approved' | 'rejected'>> }, key: 'touchGrass' | 'meetFriend' | 'dapHandshake' | 'squadCircle' | 'raidBoss'): boolean {
+  return key === 'touchGrass' ? quests.photoVerification.touchGrass === 'approved' : key === 'dapHandshake' ? quests.photoVerification.dapHandshake === 'approved' : true;
 }
 function error(message: string, terminal = false): void {
   if (terminal) clearResume();
@@ -320,7 +333,7 @@ const client = new RoomClient({
       el('confirm-dap').textContent = next.encounter.dapComplete ? 'Hello completed ✓' : confirmed ? 'Waiting for your friend…' : 'We said hello';
     }
     renderRoster();
-    const quests = next.quests[member.playerId] ?? { touchGrass: false, meetFriend: false, dapHandshake: false, squadCircle: false, raidBoss: false, photoVerification: {} };
+    const quests = next.quests[member.playerId] ?? { touchGrass: false, meetFriend: false, dapHandshake: false, dapHandshakeReady: false, squadCircle: false, raidBoss: false, photoVerification: {} };
     let done = 0;
     for (const [key, doneId] of [['touchGrass', 'touch-grass'], ['meetFriend', 'meet-friend'], ['dapHandshake', 'dap-handshake'], ['squadCircle', 'squad-circle'], ['raidBoss', 'raid-boss']] as const) {
       const complete = quests[key] && photoQuestComplete(quests, key);
@@ -333,7 +346,16 @@ const client = new RoomClient({
     el('duo-status').textContent = quests.meetFriend ? 'Completed with a nearby pet.' : connectedCount < 2 ? 'Locked until another user enters the pen.' : 'Bring your pets close together to complete it.';
     const dapOffer = next.dap.pending.find(offer => offer.from === member.playerId || offer.to === member.playerId);
     const dapPartner = dapOffer && next.players.find(player => player.id === (dapOffer.from === member.playerId ? dapOffer.to : dapOffer.from));
-    el('dap-handshake-status').textContent = quests.dapHandshake ? 'You and a nearby pet completed your handshake.'
+    const dapPhotoStatus = quests.photoVerification.dapHandshake;
+    const dapButton = el<HTMLButtonElement>('verify-dap');
+    dapButton.hidden = !quests.dapHandshakeReady || quests.dapHandshake;
+    dapButton.disabled = photoVerificationPending || dapPhotoStatus === 'pending';
+    dapButton.textContent = isNativePhone() ? dapPhotoStatus === 'approved' ? 'Your clip verified · waiting for friend…' : 'Verify recorded dap clip →' : 'Upload dap photo →';
+    el('dap-handshake-status').textContent = quests.dapHandshake ? 'Your real-world dap was verified for both players.'
+      : quests.dapHandshakeReady && dapPhotoStatus === 'approved' ? 'Your dap clip verified. Waiting for your friend’s clip.'
+        : quests.dapHandshakeReady && dapPhotoStatus === 'pending' ? 'Checking your dap clip…'
+          : quests.dapHandshakeReady && dapPhotoStatus === 'rejected' ? 'That clip did not clearly show a dap. Record another short clip.'
+            : quests.dapHandshakeReady ? 'Both pets dapped. Record a short clip, then verify it.'
       : !nearbyFriend ? 'Locked until another user enters the pen.'
         : !nearFriend ? 'Bring your pets close together, then tap Dap up.'
           : dapOffer?.from === member.playerId ? `Dap offered to ${dapPartner?.name ?? 'your friend'} — tap Dap up on their phone.`
@@ -629,18 +651,22 @@ touchGrassPhotoInput.addEventListener('change', () => {
   reader.onerror = () => toast('That photo could not be read. Please try another one.');
   reader.onload = () => {
     if (typeof reader.result !== 'string' || !membership || !snapshot) return;
-    photoVerificationPending = true;
-    updateControls();
-    void fetch(verificationEndpoint(), {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ roomCode: membership.roomCode, playerToken: membership.playerToken, questId: 'touchGrass', photoDataUrl: reader.result }),
-    }).then(async response => {
-      const result = await response.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string };
-      if (!response.ok) throw new Error(result.error || 'Photo verification is unavailable.');
-      toast(result.verified ? 'Photo verified — touch grass is complete!' : result.reason || 'That photo did not clearly show grass. Try another one.');
-    }).catch(cause => toast(cause instanceof Error ? cause.message : 'Photo verification is unavailable.'))
-      .finally(() => { photoVerificationPending = false; updateControls(); });
+    submitQuestPhoto('touchGrass', reader.result);
   };
+  reader.readAsDataURL(file);
+});
+const dapPhotoInput = el<HTMLInputElement>('dap-photo');
+el('verify-dap').addEventListener('click', () => {
+  if (isNativePhone()) nativeCommand('verifyDapClip');
+  else dapPhotoInput.click();
+});
+dapPhotoInput.addEventListener('change', () => {
+  const file = (dapPhotoInput.files ?? [])[0];
+  dapPhotoInput.value = '';
+  if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) { toast('Choose a JPEG, PNG, or WebP photo smaller than 4 MB.'); return; }
+  const reader = new FileReader();
+  reader.onerror = () => toast('That photo could not be read. Please try another one.');
+  reader.onload = () => { if (typeof reader.result === 'string') submitQuestPhoto('dapHandshake', reader.result); };
   reader.readAsDataURL(file);
 });
 canvas.addEventListener('keydown', event => {
@@ -773,6 +799,7 @@ if (isNativePhone()) {
     const weatherFix = nativeFix(event);
     if (weatherFix) void weather.update(weatherFix);
     if (event.type === 'recording') el('recording-status').textContent = event.message ?? '';
+    if (event.type === 'questPhoto' && event.questId === 'dapHandshake' && event.photoDataUrl) submitQuestPhoto('dapHandshake', event.photoDataUrl);
     if (event.type === 'paused' || event.type === 'unavailable') {
       stopWalking();
       if (event.message) el('walking-status').textContent = event.message;

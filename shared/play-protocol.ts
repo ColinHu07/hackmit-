@@ -31,7 +31,9 @@ export interface PlayerQuests {
   raidBoss: boolean;
   dapHandshake: boolean;
   /** Photo checks are opt-in uploads and are only kept as a decision, never as image data. */
-  photoVerification: Partial<Record<'touchGrass', PhotoVerificationStatus>>;
+  photoVerification: Partial<Record<'touchGrass' | 'dapHandshake', PhotoVerificationStatus>>;
+  /** Both pets performed the paired dap; camera evidence is still required for completion. */
+  dapHandshakeReady: boolean;
 }
 
 export interface RaidBossState {
