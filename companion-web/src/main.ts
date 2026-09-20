@@ -13,12 +13,11 @@ import { WalkingTracker, headingToYaw } from './WalkingTracker';
 import { BrowserCompass } from './BrowserCompass';
 import { BrowserWalking } from './BrowserWalking';
 import { StepDetector } from './StepDetector';
-import { DeviceView } from './DeviceView';
 import { createInviteUrl, defaultPlayServerUrl, nativeServerSelection } from './WebConnection';
 import type { LocationFix } from './LocationDiscovery';
 import type { NearbyPet, MeetRequest } from '../../shared/nearby-protocol';
 import type { ConnectionState, Membership, CompatibleSnapshot } from './RoomClient';
-import { PLAY_WORLD_LIMIT, type EvidenceQuestId, type PetActionKind, type PlayerQuests } from '../../shared/play-protocol';
+import type { EvidenceQuestId, PetActionKind, PlayerQuests } from '../../shared/play-protocol';
 
 const paths: Record<string, string> = {
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
@@ -39,7 +38,7 @@ const icon = (name: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="cur
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="site-header">
-    <a class="brand" href="${import.meta.env.BASE_URL}" aria-label="Kith home"><span class="brand-mark">${icon('leaf')}</span>kith</a>
+    <a class="brand" href="${import.meta.env.BASE_URL}" aria-label="Bondimals home"><span class="brand-mark">${icon('leaf')}</span>bondimals</a>
     <div class="header-right"><span class="edition">A LITTLE CLOSER, TOGETHER</span><button class="icon-button" id="server-settings" aria-label="Server settings" title="Server settings">${icon('settings')}</button></div>
   </header>
   <main class="layout">
@@ -76,7 +75,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h1>A very good<br><em>place to meet.</em></h1>
         <div class="invite-card" id="room-invite"><div><span class="small-label">ROOM CODE</span><button id="copy-code" class="room-code" title="Copy room code"><span id="room-code">------</span>${icon('copy')}</button></div><button id="invite-button" class="share-button" title="Share a link to this room">${icon('link')} Invite friends</button></div>
         <p id="invite-note" class="room-description">Share your room code. Your friend's pet will appear here.</p>
-        <p id="walking-compatibility" class="room-description" role="status" hidden>Long-distance walking needs a server update. Until then, pets stop at the edge of the small playground.</p>
         <div class="roster" id="roster" aria-label="Players"></div>
         <div id="dap-quest" class="quest-card dap-card" hidden><div class="quest-header"><span class="quest-symbol">${icon('wave')}</span><div><span class="small-label">MEET IN REAL LIFE</span><h2>Dap them up</h2></div></div><p>Walk over, introduce yourselves, and share a dap, high-five, or wave.</p><button class="primary-button" id="confirm-dap">We said hello ${icon('check')}</button><p id="dap-status" role="status">Both players confirm after meeting in person.</p></div>
         <p id="server-compatibility" class="room-description" role="status" hidden>This server runs an older game version. You can meet, move, wave, feed, jump, and play together. New quests and sharing compass turns need a server update.</p><button id="meet-button" class="text-button" disabled>Meet in the middle ${icon('arrow')}</button><div class="quest-card" id="modern-quests">
@@ -92,8 +90,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </section>
     <section class="playground-panel" aria-label="Your local world">
       <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
-      <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
-      <div class="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-note"><span class="mood-fill"></span></div><p id="mood-note">A little happier with every adventure. Complete a quest together for +12.</p></div>
+      <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><aside class="status-effects" aria-label="Pet status effects"><span class="status-effects-title">PET STATUS</span><div class="status-effect"><span class="status-effect-icon">${icon('heart')}</span><span><strong>Happiness</strong><small id="effect-mood">70% · Content</small></span></div><div class="status-effect"><span class="status-effect-icon">${icon('leaf')}</span><span><strong>Local sky</strong><small id="effect-weather">Weather unavailable</small></span></div><div class="status-effect" id="effect-bond-row" hidden><span class="status-effect-icon">${icon('people')}</span><span><strong>Bond</strong><small id="effect-bond">0 shared moments</small></span></div></aside><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
+      <div class="mood-card"><div><strong>Your pet’s happiness</strong><span id="mood-label"></span></div><meter id="mood-meter" min="0" max="100" value="70" aria-label="Pet happiness"></meter><p id="mood-note">Complete a quest together for +12 happiness. Slowly drifts down between adventures.</p></div>
+      <div class="survival-card" id="survival-card"><div><strong>Pet care</strong><span id="survival-points">0 points</span></div><p id="survival-stats">Connect to the server to load your pet’s health.</p><p id="food-inventory">Food: loading…</p></div>
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
         <div class="moment-line"><span id="scene-hint">Tap the ground to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
@@ -102,8 +101,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <div id="native-tools" class="native-tools" hidden>
         <div class="native-walking-heading"><strong id="view-title">Walk with your pet</strong><span id="compass-reading">Compass off</span></div>
-        <p id="walking-status" role="status">Your pet follows your steps. Turn or tilt your device to look around, or tap to move.</p>
-        <div class="movement-controls" aria-label="Move your pet"><button data-move="forward" aria-label="Move forward">↑</button><button data-move="left" aria-label="Move left">←</button><button data-move="back" aria-label="Move backward">↓</button><button data-move="right" aria-label="Move right">→</button><button id="recenter-view">Recenter view</button></div>
+        <p id="walking-status" role="status">Your pet follows your steps and the direction you face automatically.</p>
       </div>
       <div id="browser-view-tools" class="native-tools" hidden><div class="native-walking-heading"><strong>Your pet’s view</strong><span id="browser-compass-status">Facing forward</span></div><p>Your pet stays in the middle, facing the top of the screen. Tap the ground or use arrow keys to move. On a phone, enable walking to move with your steps, and the compass to turn together. Hold the phone facing the way you walk.</p><p id="browser-walking-status" role="status">Walking is off · tap to move, or enable walking on your phone.</p><div class="native-buttons"><button id="enable-compass">Enable phone compass</button><button id="enable-walking">Enable walking</button></div></div>
       <section id="quest-tools" class="native-tools quest-tools" aria-label="Quest clips" hidden>
@@ -120,10 +118,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="meadow-footer"><span>01 / THE FIRST HELLO</span><span>A WORLD WE MAKE TOGETHER</span></div>
     </section>
   </main>
-  <footer class="site-footer"><span>More play. More connection.</span><span>PHONE EDITION <span class="tiny-star">✳</span> KITH</span></footer>
+  <footer class="site-footer"><span>More play. More connection.</span><span>PHONE EDITION <span class="tiny-star">✳</span> BONDIMALS</span></footer>
   <details class="app-credits"><summary>Credits</summary><p>Weather data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></p></details>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both devices connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
+  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Server settings</h2><button class="icon-button" type="button" id="close-settings" aria-label="Close settings">${icon('close')}</button></div><p>Both phones connect to the same multiplayer server. Use the address from your host.</p><label for="server-url">Multiplayer server URL</label><input id="server-url" type="url" spellcheck="false" autocapitalize="off" placeholder="wss://your-server.example/play" required /><p class="settings-note">On the same Wi-Fi, use your computer's network address and port 8788. A hosted HTTPS app needs a secure wss:// server.</p><p class="error-message" id="settings-error" hidden></p><button class="primary-button" type="submit">Save server ${icon('check')}</button></form></dialog>
 `;
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -153,13 +151,11 @@ let lobbyPaused = false;
 let walking = false;
 const walkingTracker = new WalkingTracker();
 const stepDetector = new StepDetector();
-const deviceView = new DeviceView();
 let stepSensorAvailable = false;
 let browserWalkingEnabled = false;
 let walkingSteps = 0;
 let ready = false;
 let connection: ConnectionState = 'idle';
-let syncWalkingOnSnapshot = false;
 let membership: Membership | null = null;
 let snapshot: CompatibleSnapshot | null = null;
 let playground: Playground | null = null;
@@ -183,11 +179,9 @@ let mood = readMood(stored('bondimals:mood'));
 save('bondimals:mood', JSON.stringify(mood));
 function renderMood(): void {
   const value = Math.round(moodValue(mood));
-  const meter = el('mood-meter');
-  meter.style.setProperty('--happiness', `${value}%`);
-  meter.setAttribute('aria-valuenow', String(value));
-  meter.setAttribute('aria-valuetext', `${value}% · ${value >= 80 ? 'Joyful' : value >= 50 ? 'Content' : 'Ready for company'}`);
+  el<HTMLMeterElement>('mood-meter').value = value;
   el('mood-label').textContent = `${value}% · ${value >= 80 ? 'Joyful' : value >= 50 ? 'Content' : 'Ready for company'}`;
+  el('effect-mood').textContent = el('mood-label').textContent;
 }
 renderMood();
 setInterval(renderMood, 60_000);
@@ -221,6 +215,7 @@ serverPulse.addEventListener('toggle', () => { if (serverPulse.open) void refres
 setInterval(() => { void refreshServerPulse(); }, 5000);
 const weather = new LocalWeather(value => {
   el('weather-status').textContent = value.label;
+  el('effect-weather').textContent = value.label;
   document.querySelector<HTMLElement>('.playground-panel')!.dataset.weather = value.kind;
   playground?.setWeather(value.kind);
   el('local-weather').hidden = isNativePhone() || value.kind !== 'unknown';
@@ -301,7 +296,7 @@ function updateEntry(): void {
   el<HTMLButtonElement>('nearby-mode').disabled = busy;
   if (mode === 'lobby') {
     el('home-title').innerHTML = 'Little pets.<br><em>Better together.</em>';
-    el('home-intro').textContent = 'Use the same server on both devices. Your pets appear together automatically.';
+    el('home-intro').textContent = 'Use the same server on both phones. Your pets appear together automatically.';
     el('entry-note').textContent = 'One shared playground · up to 4 players · no room code needed';
     el('enter-label').textContent = !ready ? 'Loading your pet…' : busy ? 'Connecting to your server…' : 'Connect to shared playground';
   }
@@ -318,7 +313,6 @@ function updateControls(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     button.disabled = !connected || !!local?.action || ((button.dataset.action === 'play' || button.dataset.action === 'dap') && !near);
   });
-  document.querySelectorAll<HTMLButtonElement>('[data-move]').forEach(button => { button.disabled = !connected || !local; });
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
   el<HTMLButtonElement>('ready-squad').disabled = !connected || !local || (snapshot?.players.filter(p => p.connected).every(p => snapshot?.quests[p.id]?.squadCircle) ?? false) || (snapshot?.players.filter(player => player.connected).length ?? 0) < 3;
   const raid = snapshot?.raid;
@@ -334,7 +328,6 @@ function updateControls(): void {
 }
 function setConnection(state: ConnectionState): void {
   connection = state;
-  syncWalkingOnSnapshot = state === 'connected';
   const labels: Record<ConnectionState, string> = { idle: 'Pet preview', connecting: 'Connecting', connected: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
   el('connection-status').dataset.state = state;
   el('connection-label').textContent = labels[state];
@@ -344,7 +337,6 @@ function setConnection(state: ConnectionState): void {
   // Local sensors and the preview keep working even when a server rejects a
   // join or disconnects. Only visibility/permission/user actions pause walking.
   startWalking();
-  if (walking) playground?.setWalkingPose(walkingTracker.pose, false, state !== 'connected');
 }
 function renderRoster(): void {
   if (!snapshot || !membership) return;
@@ -385,8 +377,6 @@ const client = new RoomClient({
     const entering = membership?.playerId !== member.playerId;
     membership = member;
     snapshot = next;
-    walkingTracker.setWorldLimit(next.worldLimit ?? 3);
-    el('walking-compatibility').hidden = (next.worldLimit ?? 3) >= PLAY_WORLD_LIMIT;
     el('server-compatibility').hidden = !next.legacyServer;
     for (const id of ['modern-quests', 'raid-card', 'quest-tools']) el(id).hidden = !!next.legacyServer;
     document.querySelector<HTMLButtonElement>('[data-action="dap"]')!.hidden = !!next.legacyServer;
@@ -475,17 +465,21 @@ const client = new RoomClient({
     if (mood !== previousMood) save('bondimals:mood', JSON.stringify(mood));
     renderMood();
     el('bond-count').textContent = String(next.bond);
+    const survivalPlayer = next.players.find(player => player.id === member.playerId);
+    const survival = survivalPlayer?.survival;
+    if (survival) {
+      el('survival-points').textContent = `${survival.points} points · ${survival.survivalHours}h alive`;
+      el('survival-stats').textContent = `Health ${survival.health}% · Hunger ${survival.hunger}% · Happiness ${survival.happiness}%`;
+      el('food-inventory').textContent = `Food: ${Object.entries(survival.inventory).map(([food, quantity]) => `${food} ${quantity}`).join(' · ')}`;
+    }
+    el('effect-bond').textContent = `${next.bond} shared ${next.bond === 1 ? 'moment' : 'moments'}`;
+    el('effect-bond-row').hidden = false;
     if (next.notice && next.notice !== lastNotice) {
       lastNotice = next.notice;
       el('action-notice').textContent = next.notice;
     }
     playground?.update(next, member.playerId);
-    if (walking) playground?.setWalkingPose(walkingTracker.pose, false, connection !== 'connected');
     if (entering) startWalking();
-    // Send offline steps only after welcome confirms this is the same pet.
-    // An expired session must start from its newly assigned spawn instead.
-    if (syncWalkingOnSnapshot && !entering) publishWalking(true);
-    syncWalkingOnSnapshot = false;
     updateControls();
     if (entering) {
       el('error-message').hidden = true;
@@ -507,7 +501,7 @@ function renderNearby(): void {
     empty.className = 'nearby-empty';
     empty.innerHTML = `${icon('leaf')}<strong></strong><p></p>`;
     empty.querySelector('strong')!.textContent = locationActive ? 'A little space for a new friend.' : 'Your pet is off the nearby map.';
-    empty.querySelector('p')!.textContent = locationActive ? 'Nearby players will appear here automatically. Both devices need nearby mode on and a fresh location.' : 'Resume when you’re ready to be discoverable again.';
+    empty.querySelector('p')!.textContent = locationActive ? 'Nearby players will appear here automatically. Both phones need nearby mode on and a fresh location.' : 'Resume when you’re ready to be discoverable again.';
     list.append(empty);
   }
   for (const pet of nearbyPeers) {
@@ -696,6 +690,7 @@ function leavePlayground(): void {
   if (snapshot?.publicLobby) save(lobbyTokenKey(), '');
   membership = null;
   snapshot = null;
+  el('effect-bond-row').hidden = true;
   lastRoster = '';
   lastNotice = '';
   client.stop();
@@ -725,7 +720,7 @@ el('meet-button').addEventListener('click', () => {
   if (local) {
     const x = local.slot === 0 ? -0.4 : local.slot === 1 ? 0.4 : 0;
     const z = local.slot === 2 ? -0.4 : local.slot === 3 ? 0.4 : 0;
-    if (walking) walkingTracker.moveTo(x, z);
+    if (walking) { const aligned = walkingTracker.hasHeading; walkingTracker.reset(x, z); walkingTracker.hasHeading = aligned; }
     client.move(x, z);
   }
 });
@@ -876,7 +871,7 @@ canvas.addEventListener('keydown', event => {
   const direction: Record<string, [number, number]> = { ArrowUp: [0, -0.5], ArrowDown: [0, 0.5], ArrowLeft: [-0.5, 0], ArrowRight: [0.5, 0] };
   const delta = direction[event.key];
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
-  if (delta && local && connection === 'connected') {
+  if (delta && local && connection === 'connected' && !walking) {
     event.preventDefault();
     playground?.moveByScreen(delta[0], delta[1]);
   }
@@ -902,7 +897,7 @@ el('invite-button').addEventListener('click', () => {
   if (!membership) return;
   const nativeWebUrl = serverUrl === window.bondimalsNative?.serverURL ? window.bondimalsNative?.webURL : undefined;
   const url = createInviteUrl(location.href, serverUrl, membership.roomCode, nativeWebUrl);
-  const share = { title: 'Come play in my Kith world', text: `Bring your pet! Room ${membership.roomCode}`, url };
+  const share = { title: 'Come play in my Bondimals world', text: `Bring your pet! Room ${membership.roomCode}`, url };
   if (navigator.share) void navigator.share(share).catch(cause => { if (cause.name !== 'AbortError') toast('Share the room code shown on screen.'); });
   else void copy(url).then(() => toast('Invite link copied. Send it to your friend.')).catch(cause => toast(String(cause.message)));
 });
@@ -940,9 +935,9 @@ window.addEventListener('pageshow', event => {
 updateEntry();
 try {
   playground = new Playground(canvas, (x, z) => {
+    if (walking) return;
     el('error-message').hidden = true;
-    if (walking) { walkingTracker.moveTo(x, z); publishWalking(true); }
-    else client.move(x, z);
+    client.move(x, z);
   });
   await playground.load();
   ready = true;
@@ -970,8 +965,6 @@ function stopWalking(): void {
   stepSensorAvailable = false; stepDetector.reset(); walkingTracker.setStepTracking(false);
   nativeCommand('stopLocation', { purpose: 'walking' });
   playground?.setWalkingPose(null);
-  playground?.setViewTilt();
-  deviceView.reset();
   el('walking-status').textContent = 'Walking pauses while you’re away and resumes when you return.';
   el('compass-reading').textContent = 'Compass off';
   updateControls();
@@ -980,12 +973,11 @@ function startWalking(): void {
   if ((!isNativePhone() && !browserWalkingEnabled) || !ready || walking || document.hidden) return;
   walking = true;
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
-  walkingTracker.reset(local?.targetX ?? walkingTracker.pose.x, local?.targetZ ?? walkingTracker.pose.z);
+  walkingTracker.reset(local?.x ?? 0, local?.z ?? 0);
   stepDetector.reset(); walkingSteps = 0;
-  deviceView.reset((Math.PI - walkingTracker.pose.yaw) * 180 / Math.PI);
   stepSensorAvailable = browserWalkingEnabled;
   walkingTracker.setStepTracking(stepSensorAvailable);
-  el('walking-status').textContent = 'Aligning your pet with your device…';
+  el('walking-status').textContent = 'Aligning your pet with your phone…';
   el('compass-reading').textContent = 'Reading your starting direction…';
   publishWalking();
   updateControls();
@@ -993,7 +985,7 @@ function startWalking(): void {
 }
 function publishWalking(moved = false, initialHeading = false): void {
   if (!walking) return;
-  playground?.setWalkingPose(walkingTracker.pose, initialHeading, connection !== 'connected');
+  playground?.setWalkingPose(walkingTracker.pose, initialHeading, true);
   if (membership && connection === 'connected') {
     if (moved) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
     client.heading(walkingTracker.pose.yaw);
@@ -1007,17 +999,6 @@ function receiveWalkingMotion(verticalG: number, timestamp: number): void {
   el(isNativePhone() ? 'walking-status' : 'browser-walking-status').textContent = `Walking with you · ${walkingSteps} steps detected`;
   publishWalking(true);
 }
-document.querySelectorAll<HTMLButtonElement>('[data-move]').forEach(button => {
-  button.addEventListener('click', () => {
-    const directions: Record<string, [number, number]> = { forward: [0, -0.7], back: [0, 0.7], left: [-0.7, 0], right: [0.7, 0] };
-    const delta = directions[button.dataset.move!];
-    if (delta && connection === 'connected') playground?.moveByScreen(...delta);
-  });
-});
-el('recenter-view').addEventListener('click', () => {
-  deviceView.reset((Math.PI - walkingTracker.pose.yaw) * 180 / Math.PI);
-  playground?.setViewTilt();
-});
 if (isNativePhone()) {
   el('native-tools').hidden = false;
   el('quest-tools').hidden = false;
@@ -1029,12 +1010,11 @@ if (isNativePhone()) {
     const weatherFix = nativeFix(event);
     if (weatherFix) void weather.update(weatherFix);
     if (event.type === 'recording') el('recording-status').textContent = event.message ?? '';
-    if (event.type === 'paused') {
+    if (event.type === 'paused' || event.type === 'unavailable') {
       stopWalking();
       if (event.message) el('walking-status').textContent = event.message;
     }
     if (!walking) return;
-    if (event.type === 'unavailable' && event.message) el('walking-status').textContent = event.message;
     if (event.type === 'motionStatus') {
       stepSensorAvailable = event.available === true;
       stepDetector.reset(); walkingTracker.setStepTracking(stepSensorAvailable);
@@ -1042,25 +1022,12 @@ if (isNativePhone()) {
     }
     if (event.type === 'motion') receiveWalkingMotion(event.verticalG ?? NaN, event.timestamp ?? NaN);
     if (event.type === 'status' && !stepSensorAvailable) el('walking-status').textContent = event.message ?? '';
-    if (event.type === 'attitude') {
-      const view = deviceView.sample({ yaw: event.yaw ?? NaN, gravityX: event.gravityX ?? NaN,
-        gravityY: event.gravityY ?? NaN, gravityZ: event.gravityZ ?? NaN,
-        screenAngle: event.screenAngle ?? NaN, timestamp: event.timestamp ?? NaN });
-      if (view) {
-        const initialHeading = !walkingTracker.hasHeading;
-        walkingTracker.heading(view.degrees, 0);
-        playground?.setViewTilt(view.pitch, view.roll);
-        el('compass-reading').textContent = `Facing ${Math.round(view.degrees)}°`;
-        publishWalking(false, initialHeading);
-      }
-    }
     if (event.type === 'heading') {
       const initialHeading = !walkingTracker.hasHeading;
       if (walkingTracker.heading(event.degrees ?? -1, event.accuracy ?? -1)) {
-        deviceView.alignHeading(event.degrees!);
         el('compass-reading').textContent = `Facing ${Math.round(event.degrees!)}° ${event.reference === 'true' ? 'true' : 'magnetic'}`;
         publishWalking(false, initialHeading);
-      } else if (!walkingTracker.hasHeading) el('compass-reading').textContent = 'Waiting for motion or compass…';
+      } else el('compass-reading').textContent = 'Compass uncertain · move away from metal';
     }
     const fix = nativeFix(event);
     if (fix && !stepSensorAvailable) {

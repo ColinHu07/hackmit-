@@ -35,7 +35,7 @@ A little creature for Meta Ray-Ban Display. This demo loads the supplied **GLB0 
 - [Desktop simulator](https://colinhu07.github.io/bondimals-display/?simulator)
 - [Full source repository](https://github.com/ColinHu07/hackmit-)
 
-The original Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, and an optional desktop camera preview are implemented; follow the [camera setup guide](docs/hand-camera-bridge.md). Physical camera/display concurrency still needs a device test. Supabase and visual object anchors remain future work.
+The original Milestone 1 simulator has been extended at the user's request. An iPhone glasses-camera bridge, calibrated hand petting, an optional desktop camera preview, and a persistent multiplayer server are implemented. The server tracks pet survival points and a transactional food inventory; see the [pet survival guide](docs/pet-survival.md). Follow the [camera setup guide](docs/hand-camera-bridge.md). Physical camera/display concurrency still needs a device test. Supabase and visual object anchors remain future work.
 
 ## Run the glasses prototype locally
 

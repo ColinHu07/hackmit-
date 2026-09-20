@@ -1,13 +1,16 @@
 import { createServer } from 'node:http';
 import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { attachNearbyDiscovery } from './nearby-discovery.mjs';
 import { createStaticWebHandler } from './static-web.mjs';
 import { createQuestPhotoVerifier, PHOTO_VERIFICATION_QUESTS, validateEvidence } from './quest-verification.mjs';
+import { createPetStore } from './pet-store.mjs';
 import {
   PLAY_ACTION_DURATION, PLAY_FRIEND_DISTANCE, PLAY_MAX_MESSAGE_BYTES,
-  PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, PLAY_WORLD_LIMIT, parsePlayMessage,
+  PLAY_MAX_PLAYERS, PLAY_ROOM_ALPHABET, PLAY_TICK_MS, parsePlayMessage,
 } from '../shared/play-protocol.mjs';
 
 /** Ephemeral, server-authoritative four-person playground; no account or camera data. */
@@ -25,6 +28,7 @@ export function createPlayServer(options = {}) {
   const connections = new Set();
   const addresses = new Map();
   const photoVerifier = options.photoVerifier ?? createQuestPhotoVerifier(options.meta);
+  const petStore = options.petStore ?? createPetStore(options.database ?? ':memory:', options.now);
   let closing = false;
 
   function writeJson(response, status, body) {
@@ -105,6 +109,23 @@ export function createPlayServer(options = {}) {
 
   const server = createServer((request, response) => {
     const path = request.url?.split('?')[0];
+    if (path === '/api/pet' && request.method === 'GET') {
+      const url = new URL(request.url, 'http://localhost');
+      const token = url.searchParams.get('playerToken');
+      if (!token || !/^[a-f0-9]{48}$/.test(token)) return writeJson(response, 401, { error: 'Valid player token required.' });
+      const profile = petStore.profile(token);
+      return profile ? writeJson(response, 200, profile) : writeJson(response, 404, { error: 'Pet profile not found.' });
+    }
+    if (path === '/api/inventory/feed' && request.method === 'POST') {
+      void (async () => {
+        try {
+          if (!cors(request, response)) return writeJson(response, 403, { error: 'Inventory access is not allowed from this site.' });
+          const input = await readJson(request, 20_000);
+          return writeJson(response, 200, petStore.feed(input?.playerToken, input?.food));
+        } catch (cause) { return writeJson(response, cause.code === 'food_empty' ? 409 : 400, { error: cause.message }); }
+      })();
+      return;
+    }
     if (path === '/verify' && request.method === 'OPTIONS') {
       if (!cors(request, response)) return writeJson(response, 403, { error: 'Photo verification is not allowed from this site.' });
       response.writeHead(204); response.end(); return;
@@ -169,11 +190,12 @@ export function createPlayServer(options = {}) {
   function fail(ws, code, message) { send(ws, { type: 'error', code, message }); }
   function snapshot(room, now = Date.now()) {
     return {
-      roomCode: room.code, serverTime: now, worldLimit: PLAY_WORLD_LIMIT,
+      roomCode: room.code, serverTime: now,
       players: [...room.players.values()].sort((a, b) => a.slot - b.slot).map(player => ({
         id: player.id, name: player.name, slot: player.slot,
         x: player.x, z: player.z, targetX: player.targetX, targetZ: player.targetZ,
         yaw: player.yaw, connected: Boolean(player.socket), action: player.action,
+        survival: petStore.profile(player.token),
       })),
       bond: room.bond,
       quests: Object.fromEntries([...room.players.values()].map(player => [player.id, { ...player.quests }])),
@@ -255,6 +277,7 @@ export function createPlayServer(options = {}) {
       action: null, socket: null, disconnectedAt: null, lastActionAt: 0,
       evidenceGroups: {}, verificationAttempts: {}, movedForGrass: 0, quests: { touchGrass: false, meetFriend: false, squadCircle: false, raidBoss: false, dapHandshake: false, dapHandshakeReady: false, photoVerification: {} },
     };
+    petStore.ensure(player.token, name);
     room.players.set(player.id, player);
     return player;
   }
@@ -312,6 +335,10 @@ export function createPlayServer(options = {}) {
     player.lastActionAt = now;
     player.targetX = player.x;
     player.targetZ = player.z;
+  }
+  function awardAction(player, action) {
+    const points = { wave: 1, feed: 4, jump: 1, play: 3, dap: 2 }[action] ?? 0;
+    if (points) petStore.award(player.token, `action:${player.id}:${randomUUID()}`, points, `action_${action}`);
   }
   function startRaid(room, players, now) {
     const maxHealth = 8 + players.length * 2;
@@ -486,9 +513,15 @@ export function createPlayServer(options = {}) {
         friend.yaw = Math.atan2(other.x - friend.x, other.z - friend.z);
         setAction(friend, 'play', now);
       }
+      playmates.forEach(peer => awardAction(peer, 'play'));
       if (!damageRaid(room, player, message.action, now)) room.notice = 'Your pets played together! Friendship grew.';
     } else {
+      if (message.action === 'feed') {
+        try { petStore.feed(player.token, 'berry'); }
+        catch (cause) { return fail(ws, cause.code ?? 'feed_failed', cause.message); }
+      }
       setAction(player, message.action, now);
+      awardAction(player, message.action);
       if (message.action === 'wave' && neighboringPlayers(player, connectedPlayers).length) {
         room.quest.met = true;
         room.quest.waved = true;
@@ -613,6 +646,7 @@ export function createPlayServer(options = {}) {
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       rooms.clear();
       addresses.clear();
+      if (!options.petStore) petStore.close();
     },
   };
 }
@@ -623,7 +657,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const host = process.env.HOST || (webRoot ? '0.0.0.0' : '127.0.0.1');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
-  const app = createPlayServer({ allowedOrigins, webRoot });
-  app.server.listen(port, host, () => console.log(`Kith ${webRoot ? 'web game and playground' : 'playground'} listening on http://${host}:${port}`));
+  const database = resolve(process.env.BONDIMALS_DB_PATH || '.bondimals-data/game.sqlite');
+  mkdirSync(dirname(database), { recursive: true });
+  const app = createPlayServer({ allowedOrigins, webRoot, database });
+  app.server.listen(port, host, () => console.log(`Bondimals ${webRoot ? 'web game and playground' : 'playground'} listening on http://${host}:${port}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void app.close().then(() => process.exit(0)); });
 }

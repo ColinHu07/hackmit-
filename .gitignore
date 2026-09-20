@@ -8,3 +8,4 @@ coverage/
 *.log
 test-results/
 .bondimals-bridge/
+.bondimals-data/

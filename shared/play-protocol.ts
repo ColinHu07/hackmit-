@@ -21,6 +21,16 @@ export interface PlayPlayer {
   yaw: number;
   connected: boolean;
   action: PetAction | null;
+  survival?: PetSurvival;
+}
+export interface PetSurvival {
+  points: number;
+  health: number;
+  hunger: number;
+  happiness: number;
+  survivalHours: number;
+  inventory: Record<string, number>;
+  updatedAt: number;
 }
 
 /** Progress belongs to a player, not to the browser that happens to be open. */
