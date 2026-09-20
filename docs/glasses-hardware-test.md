@@ -37,10 +37,12 @@ From the monorepo, with the deployment repo checked out at `/tmp/bondimals-pages
 ```sh
 npm run typecheck
 npm test
-npm exec --workspace @bondimals/glasses-web -- vite build --base=/bondimals-display/ --outDir=/tmp/bondimals-pages-preview
+npm run build --workspace @bondimals/glasses-web -- --base=/bondimals-display/
+node scripts/stage-display-release.mjs glasses-web/dist /tmp/bondimals-pages-preview
+node --test scripts/stage-display-release.test.mjs
 ```
 
-Keep `.nojekyll` in the deployment checkout. Commit and push the generated `index.html`, `favicon.svg`, `models/`, and `assets/` to `codex/display`. Remove obsolete hashed assets from the deployment checkout after reviewing the generated diff. Never include credentials, dependencies, or `.env` files. Verify GitHub Pages build success and the published GLB/JS URLs.
+Keep `.nojekyll` in the deployment checkout. Commit and push the staged static files to `codex/display`. **Retain prior hashed assets and their imported chunks.** GitHub Pages caches HTML for ten minutes, and the glasses may retain an older entrypoint across launches. Deleting that entrypoint's JS/CSS can leave the display black before the game starts. Use the staging script above instead of building directly into the checkout or using `rsync --delete`. Never include credentials, dependencies, or `.env` files. Verify GitHub Pages build success and both current and prior published JS URLs.
 
 Hardware result: awaiting user test. Software validation is recorded in the README; the Milestone 1 verification document is a historical record of the earlier procedural demo.
 

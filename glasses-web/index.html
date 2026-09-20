@@ -9,8 +9,37 @@
     <link rel="icon" type="image/png" href="/icon.png" />
     <title>Kith — Nova's little world</title>
   </head>
-  <body>
-    <div id="app"></div>
+  <body style="margin:0;background:#000;color:#f3ffe9">
+    <div id="app">
+      <section id="launch-state" style="position:fixed;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:24px;padding:40px;background:#10190f;color:#f3ffe9;text-align:center;font:24px system-ui,sans-serif">
+        <h1 style="margin:0;font-size:42px">kith</h1>
+        <p id="launch-message" role="status" style="margin:0">Opening your meadow…</p>
+        <button id="launch-retry" type="button" hidden style="padding:18px 32px;border:3px solid #d4ffac;border-radius:16px;background:#d4ffac;color:#192815;font:700 24px system-ui,sans-serif">Reload Kith</button>
+        <noscript>Kith needs JavaScript to open. Restart it from the glasses app menu.</noscript>
+      </section>
+    </div>
+    <script>
+      // Keep a usable screen even if a cached launch page loses a module or
+      // the glasses cannot finish loading it. The app replaces this whole shell.
+      (function () {
+        function failed() {
+          var message = document.getElementById('launch-message');
+          var retry = document.getElementById('launch-retry');
+          if (!message || !retry) return;
+          message.textContent = 'Kith could not finish opening. Select Reload to try again.';
+          retry.hidden = false;
+          retry.focus();
+        }
+        document.getElementById('launch-retry').onclick = function () {
+          var url = new URL(location.href);
+          url.searchParams.set('v', String(Date.now()));
+          location.replace(url.href);
+        };
+        window.addEventListener('error', failed, true);
+        window.addEventListener('unhandledrejection', failed);
+        setTimeout(failed, 12000);
+      })();
+    </script>
     <script type="module" src="/src/play/main.ts"></script>
   </body>
 </html>
