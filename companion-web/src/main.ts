@@ -14,6 +14,7 @@ import { BrowserCompass } from './BrowserCompass';
 import { BrowserWalking } from './BrowserWalking';
 import { StepDetector } from './StepDetector';
 import { DeviceView } from './DeviceView';
+import { evidenceReadiness } from './EvidenceReadiness';
 import { TreatCooldown, formatTreatTime } from './TreatCooldown';
 import { createInviteUrl, defaultPlayServerUrl, nativeServerSelection } from './WebConnection';
 import type { LocationFix } from './LocationDiscovery';
@@ -117,6 +118,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <section id="quest-tools" class="native-tools quest-tools" aria-label="Quest clips" hidden>
         <div class="native-walking-heading evidence-heading"><strong>Quest clip</strong></div>
         <div class="evidence-selector"><label for="evidence-quest">Quest to verify</label><select id="evidence-quest"><option value="touchGrass">Solo · touch grass</option><option value="meetFriend">Duo · say hello</option><option value="dapHandshake">Duo · handshake / dap</option><option value="squadCircle">Squad · circle and cheer</option></select></div>
+        <div class="evidence-prerequisite"><p id="evidence-prerequisite-status" role="status"></p><button id="evidence-start" class="native-buttons-button" type="button" hidden>Start in-game step</button></div>
         <p id="evidence-instructions">Show your hand touching natural grass outdoors.</p>
         <div class="native-buttons"><button id="record-clip">Record clip</button><button id="retake-clip">Retake</button></div>
         <p id="recording-status" role="status">Record a 1–10 second clip.</p>
@@ -375,6 +377,7 @@ function updateControls(): void {
     : !friend ? snapshot?.publicLobby ? 'Your friend appears automatically when they open the app on this server.' : snapshot?.legacyServer ? 'Invite a friend using this room code.' : 'Touch grass to finish your solo quest, or invite a friend.'
     : near ? 'You’re close! Wave hello or play together.' : 'Tap to move, or meet in the middle.';
   updateQuestDetail();
+  updateEvidenceReadiness();
 }
 function setConnection(state: ConnectionState): void {
   connection = state;
@@ -893,6 +896,7 @@ function updateEvidenceChoice(): void {
     ? 'Use the phone app to record and submit a handshake clip. A still photo cannot verify the motion.'
     : isNativePhone() ? 'Submit clip for grading' : 'Submit photo for grading';
   evidenceConsent.checked = false;
+  updateEvidenceReadiness();
 }
 evidenceChoice.addEventListener('change', () => {
   updateEvidenceChoice();
@@ -991,15 +995,35 @@ el('quest-start').addEventListener('click', () => {
   if (selectedQuest === 'dapHandshake') client.action('dap');
   else if (selectedQuest === 'squadCircle') client.readySquadQuest();
 });
+function currentEvidenceReadiness() {
+  return evidenceReadiness(el<HTMLSelectElement>('evidence-quest').value as EvidenceQuestId,
+    snapshot, membership?.playerId, connection === 'connected');
+}
+function updateEvidenceReadiness(): void {
+  const state = currentEvidenceReadiness();
+  const status = el('evidence-prerequisite-status');
+  if (status.textContent !== state.message) status.textContent = state.message;
+  const start = el<HTMLButtonElement>('evidence-start');
+  start.hidden = !state.action;
+  start.textContent = state.label;
+  start.disabled = photoVerificationPending || !state.canStart;
+  el<HTMLButtonElement>('submit-clip').disabled = photoVerificationPending || !state.ready;
+  el<HTMLButtonElement>('submit-photo').disabled = photoVerificationPending || !state.ready
+    || el<HTMLSelectElement>('evidence-quest').value === 'dapHandshake';
+}
+el('evidence-start').addEventListener('click', () => {
+  const state = currentEvidenceReadiness();
+  if (!state.canStart || photoVerificationPending) return;
+  if (state.action === 'dap') client.action('dap');
+  else if (state.action === 'squad') client.readySquadQuest();
+  else if (state.action === 'meet') el<HTMLButtonElement>('meet-button').click();
+});
 function evidenceSession() {
-  const questId = selectedEvidence();
-  if (!membership || connection !== 'connected') throw new Error('Join a quest room with your friends first.');
-  const quests = snapshot?.quests[membership.playerId];
-  if (!(questId === 'dapHandshake' ? quests?.dapHandshakeReady : quests?.[questId])) throw new Error('Complete this quest’s in-game step first.');
-  if (quests?.photoVerification[questId] === 'approved') throw new Error('This quest is already verified.');
+  const state = currentEvidenceReadiness();
+  if (!membership || !state.ready) throw new Error(`Not submitted: ${state.message}`);
   if (!evidenceConsent.checked) throw new Error('Ask everyone shown to agree, then check the consent box before submitting.');
   if (photoVerificationPending) throw new Error('Please wait for the current evidence check.');
-  return { roomCode: membership.roomCode, playerToken: membership.playerToken, questId };
+  return { roomCode: membership.roomCode, playerToken: membership.playerToken, questId: selectedEvidence() };
 }
 async function submitEvidence(session: ReturnType<typeof evidenceSession>, evidence: object): Promise<void> {
   if (membership?.playerToken !== session.playerToken) throw new Error('Your quest session changed. Select the quest again.');
@@ -1017,8 +1041,7 @@ function setEvidenceBusy(busy: boolean): void {
   photoVerificationPending = busy;
   evidenceChoice.disabled = busy;
   evidenceConsent.disabled = busy;
-  el<HTMLButtonElement>('submit-clip').disabled = busy;
-  el<HTMLButtonElement>('submit-photo').disabled = busy || selectedEvidence() === 'dapHandshake';
+  updateEvidenceReadiness();
 }
 function evidenceError(cause: unknown): void {
   const message = cause instanceof Error ? cause.message : 'Evidence verification is unavailable.';
