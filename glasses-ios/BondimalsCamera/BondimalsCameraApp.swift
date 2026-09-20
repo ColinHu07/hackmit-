@@ -22,7 +22,7 @@ struct BondimalsCameraApp: App {
                     }
                     Section("Live glasses view") {
                         PhoneCameraPreview(frame: bridge.phoneFrame, running: bridge.running)
-                        Text("The live glasses preview stays on this phone unless you enable optional desktop preview. Quest captures are shared only when you request them from your paired game.")
+                        Text("The live glasses preview stays on this phone unless you enable optional desktop preview. During a requested quest clip, your paired game also shows the live recording. Quest captures are shared only when you request them.")
                         Text(bridge.handStatus).font(.caption.monospaced())
                         Text(bridge.sessionStatus).font(.caption.monospaced())
                     }
@@ -77,9 +77,10 @@ private struct QuestSetupSummary: View {
     var body: some View {
         if quests.enabled || quests.connecting || quests.paired {
             VStack(alignment: .leading, spacing: 4) {
-                Text(quests.paired ? "Game camera connected" : quests.connecting ? "Connecting game camera…" : "Game camera setup")
+                Text(quests.cameraReady && quests.paired ? "Glasses camera live" : quests.paired ? "Game linked · camera \(quests.cameraState.rawValue)" : quests.connecting ? "Connecting game camera…" : "Game camera setup")
                     .font(.caption.bold())
                 Text(quests.status).font(.callout)
+                if quests.paired { Text(quests.cameraMessage).font(.callout) }
             }.accessibilityIdentifier("quest-setup-summary")
         }
     }

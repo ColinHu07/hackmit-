@@ -5,6 +5,10 @@ export interface CaptureStatus {
   paired: boolean;
   /** The phone bridge is polling; this does not prove the glasses camera is live. */
   connected: boolean;
+  /** A fresh heartbeat reports actual glasses frames, not just a paired phone. */
+  cameraReady?: boolean;
+  cameraState?: 'ready' | 'starting' | 'permission' | 'paused' | 'error' | 'idle';
+  cameraMessage?: string;
   status: 'idle' | 'capturing' | 'ready' | 'error';
   requestId: string | null;
   questId?: EvidenceQuestId;
@@ -12,6 +16,10 @@ export interface CaptureStatus {
   photoDataUrl?: string;
   frames?: string[];
   durationSeconds?: number;
+  previewDataUrl?: string;
+  previewAt?: number;
+  sequence?: number;
+  elapsedSeconds?: number;
 }
 interface Pairing { code: string; expiresAt: number }
 

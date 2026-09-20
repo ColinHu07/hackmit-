@@ -76,6 +76,12 @@ final class CameraBridge: ObservableObject {
             return camera.stream.capturePhoto(format: .jpeg)
         }
         quests.onUnpaired = { [weak self] in self?.questCameraStartRequested = false }
+        quests.onPaired = { [weak self] in
+            guard let self else { return }
+            self.setupEvent = "camera-claim-succeeded"
+            self.questCameraStartRequested = true
+            self.continueQuestCameraSetup()
+        }
         // Coalesce lifecycle/setup changes; frame receipt is sampled at most
         // once every ten seconds, without retaining or serializing its image.
         Publishers.MergeMany([
@@ -86,6 +92,9 @@ final class CameraBridge: ObservableObject {
             quests.$status.map { _ in () }.eraseToAnyPublisher(),
             quests.$paired.map { _ in () }.eraseToAnyPublisher(),
             quests.$serverURL.map { _ in () }.eraseToAnyPublisher(),
+            quests.$cameraReady.map { _ in () }.eraseToAnyPublisher(),
+            quests.$cameraState.map { _ in () }.eraseToAnyPublisher(),
+            quests.$cameraMessage.map { _ in () }.eraseToAnyPublisher(),
         ]).debounce(for: .milliseconds(100), scheduler: RunLoop.main)
             .sink { [weak self] in self?.writeDiagnostics() }.store(in: &diagnosticObservers)
         $phoneFrame.map { $0 != nil }.filter { $0 }
@@ -105,7 +114,7 @@ final class CameraBridge: ObservableObject {
     }
 
     private func waitForCameraDevice() async throws {
-        status = "Waiting for glasses to become ready. Wear them and keep them connected in Meta AI."
+        updateCameraStatus(.starting, "Waiting for glasses to become ready. Wear them and keep them connected in Meta AI.")
         for _ in 0..<25 {
             try Task.checkCancellation()
             refreshDevices()
@@ -131,12 +140,7 @@ final class CameraBridge: ObservableObject {
             setupEvent = "setup-link-received"
             do {
                 status = "Connecting your glasses game to its camera…"
-                try quests.openSetupLink(url) { [weak self] in
-                    guard let self else { return }
-                    self.setupEvent = "camera-claim-succeeded"
-                    self.questCameraStartRequested = true
-                    self.continueQuestCameraSetup()
-                }
+                try quests.openSetupLink(url)
             } catch { setupEvent = "setup-link-rejected"; status = error.localizedDescription }
             return
         }
@@ -151,21 +155,29 @@ final class CameraBridge: ObservableObject {
         }
     }
     func resumeForeground() {
+        // Setup and permission handoffs can take longer than auto-lock. The
+        // visible camera app stays awake; backgrounding restores normal sleep.
+        UIApplication.shared.isIdleTimerDisabled = true
         quests.setForeground(true)
+        quests.restoreConnection()
         continueQuestCameraSetup()
         writeDiagnostics()
     }
     private func continueQuestCameraSetup() {
         guard questCameraStartRequested, quests.paired else { return }
-        guard UIApplication.shared.applicationState == .active else { setupEvent = "waiting-for-foreground"; return }
-        if running { questCameraStartRequested = false; status = "Your glasses camera is connected to the game."; return }
+        guard UIApplication.shared.applicationState == .active else {
+            setupEvent = "waiting-for-foreground"
+            updateCameraStatus(.paused, "Keep Kith Camera open on the phone to start the glasses camera.")
+            return
+        }
+        if running { questCameraStartRequested = false; status = quests.cameraMessage; return }
         if wearables.registrationState == .registered {
             setupEvent = "camera-start-requested"
             questCameraStartRequested = false
             start()
             return
         }
-        status = "Complete camera registration in Meta AI. Kith will start the glasses camera when you return."
+        updateCameraStatus(.permission, "Complete camera registration in Meta AI. Kith will start the glasses camera when you return.")
         setupEvent = "meta-registration-required"
         guard setupRegistrationTask == nil, wearables.registrationState != .registering else { return }
         setupRegistrationTask = Task { [weak self] in
@@ -174,13 +186,18 @@ final class CameraBridge: ObservableObject {
             do { try await self.wearables.startRegistration() }
             catch {
                 self.questCameraStartRequested = false
-                self.status = error.localizedDescription
+                self.updateCameraStatus(.error, error.localizedDescription)
             }
         }
     }
     func start() {
         guard !running else { return }
+        guard UIApplication.shared.applicationState == .active else {
+            updateCameraStatus(.paused, "Keep Kith Camera open on the phone to start the glasses camera.")
+            return
+        }
         running = true
+        updateCameraStatus(.starting, "Starting the glasses camera…")
         lastCameraFrameAt = nil
         generation += 1
         let generation = self.generation
@@ -188,7 +205,7 @@ final class CameraBridge: ObservableObject {
             do {
                 guard wearables.registrationState == .registered else { throw BridgeError.message("Register this app with Meta AI first.") }
                 try await waitForCameraDevice()
-                status = "Requesting glasses-camera permission…"
+                updateCameraStatus(.permission, "Allow glasses-camera access in Meta AI, then return to Kith Camera.")
                 var permission = try await wearables.checkPermissionStatus(.camera)
                 if permission != .granted { permission = try await wearables.requestPermission(.camera) }
                 guard permission == .granted else { throw BridgeError.message("Glasses-camera permission was denied.") }
@@ -223,7 +240,7 @@ final class CameraBridge: ObservableObject {
                 session = created
                 lastSessionError = nil
                 observeSession(created, generation: generation)
-                status = "Connecting to the glasses camera…"
+                updateCameraStatus(.starting, "Connecting to the glasses camera…")
                 try created.start()
                 try await waitUntilStarted(created, generation: generation)
                 try Task.checkCancellation()
@@ -235,10 +252,14 @@ final class CameraBridge: ObservableObject {
             } catch {
                 if generation == self.generation {
                     refreshDevices()
-                    stop(error.localizedDescription)
+                    stop(error.localizedDescription, cameraState: .error)
                 }
             }
         }
+    }
+    private func updateCameraStatus(_ state: QuestCameraState, _ message: String) {
+        status = message
+        quests.setCameraState(state, message: CameraDiagnostics.redact(message, secrets: wearables.devices))
     }
     private func writeDiagnostics() {
         let secrets = wearables.devices + [quests.pairingCode]
@@ -250,6 +271,8 @@ final class CameraBridge: ObservableObject {
             setupStatus: CameraDiagnostics.redact(quests.status, secrets: secrets),
             cameraStatus: CameraDiagnostics.redact(status, secrets: secrets),
             paired: quests.paired, running: running,
+            cameraReady: quests.cameraReady, cameraState: quests.cameraState.rawValue,
+            cameraMessage: CameraDiagnostics.redact(quests.cameraMessage, secrets: secrets),
             lastFrameReceived: lastCameraFrameAt != nil,
             lastFrameReceivedAt: lastCameraFrameAt.map { formatter.string(from: $0) },
             registrationState: wearables.registrationState.description,
@@ -265,7 +288,7 @@ final class CameraBridge: ObservableObject {
             for await error in errors {
                 guard let self, generation == self.generation, !Task.isCancelled else { return }
                 self.lastSessionError = error
-                self.status = error.localizedDescription
+                self.updateCameraStatus(.error, error.localizedDescription)
                 print("Kith: session error: \(error.localizedDescription)")
             }
         }
@@ -277,14 +300,14 @@ final class CameraBridge: ObservableObject {
                 if state == .paused {
                     self.phoneFrame = nil
                     self.quests.setCameraRunning(false)
-                    self.status = "Glasses session paused. Wear the glasses and resume on the glasses."
+                    self.updateCameraStatus(.paused, "Glasses session paused. Wear the glasses and resume on the glasses.")
                 }
                 if state == .stopped, self.camera != nil {
                     // DAT closes errorStream at the terminal state. Drain it so
                     // a generic stopped message cannot erase the actual reason.
                     await self.sessionErrorTask?.value
                     guard generation == self.generation, !Task.isCancelled else { return }
-                    self.stop(self.lastSessionError?.localizedDescription ?? "Glasses session stopped. Start again to reconnect.")
+                    self.stop(self.lastSessionError?.localizedDescription ?? "Glasses session stopped. Start again to reconnect.", cameraState: self.lastSessionError == nil ? .paused : .error)
                 }
             }
         }
@@ -334,7 +357,7 @@ final class CameraBridge: ObservableObject {
             guard let buffer = CMSampleBufferGetImageBuffer(frame.sampleBuffer) else {
                 Task { @MainActor in
                     guard let self, generation == self.generation else { return }
-                    self.status = "Camera frames arrived, but Meta did not provide a decoded image."
+                    self.updateCameraStatus(.error, "Camera frames arrived, but Meta did not provide a decoded image.")
                 }
                 return
             }
@@ -352,31 +375,38 @@ final class CameraBridge: ObservableObject {
                 self.sessionStatus = "Session: \(session.state.description) · Camera: \(state)"
                 print("Kith: \(self.sessionStatus)")
                 if state == .streaming { self.hasStreamed = true; UIApplication.shared.isIdleTimerDisabled = true; self.quests.setCameraRunning(true); self.status = "Camera streaming. Waiting for the first image…" }
-                else if state == .paused { self.phoneFrame = nil; UIApplication.shared.isIdleTimerDisabled = false; self.quests.setCameraRunning(false); self.status = "Glasses camera paused. Waiting for fresh frames." }
-                else if state == .stopped && self.hasStreamed { self.stop("Glasses camera stopped. Start again to reconnect.") }
-                else if state == .starting { self.status = "Glasses connected. Starting video stream…" }
-                else if state == .waitingForDevice { self.status = "Camera waiting for glasses. Keep them on and connected." }
+                else if state == .paused { self.phoneFrame = nil; self.quests.setCameraRunning(false); self.updateCameraStatus(.paused, "Glasses camera paused. Waiting for fresh frames.") }
+                else if state == .stopped && self.hasStreamed { self.stop("Glasses camera stopped. Start again to reconnect.", cameraState: .paused) }
+                else if state == .starting {
+                    self.quests.cameraStopped("Glasses connected. Starting video stream…", state: .starting)
+                    self.updateCameraStatus(.starting, "Glasses connected. Starting video stream…")
+                }
+                else if state == .waitingForDevice {
+                    self.quests.cameraStopped("Camera waiting for glasses. Keep them on and connected.", state: .starting)
+                    self.updateCameraStatus(.starting, "Camera waiting for glasses. Keep them on and connected.")
+                }
             }
         })
         streamTokens.append(attached.stream.errorPublisher.listen { [weak self] error in
-            Task { @MainActor in if generation == self?.generation { self?.stop(error.localizedDescription) } }
+            Task { @MainActor in if generation == self?.generation { self?.stop(error.localizedDescription, cameraState: .error) } }
         })
-        status = "Glasses connected. Starting video stream…"
+        updateCameraStatus(.starting, "Glasses connected. Starting video stream…")
         attached.stream.start()
         firstFrameTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(20)) } catch { return }
             guard let self, generation == self.generation, self.phoneFrame == nil else { return }
-            self.stop("No camera image arrived after 20 seconds (camera: \(attached.stream.state)). Check Bluetooth and Local Network access for Kith Camera in device Settings, and stop any other glasses-camera session before retrying.")
+            self.stop("No camera image arrived after 20 seconds (camera: \(attached.stream.state)). Check Bluetooth and Local Network access for Kith Camera in device Settings, and stop any other glasses-camera session before retrying.", cameraState: .error)
         }
     }
     func stopIfStreamingInBackground() {
+        UIApplication.shared.isIdleTimerDisabled = false
         quests.setForeground(false)
-        if camera != nil { stop("Camera paused while the phone app is in the background. Reopen and Start.") }
+        if camera != nil { stop("Camera paused while the phone app is in the background. Reopen and Start.", cameraState: .paused) }
     }
-    func stop(_ message: String = "Stopped. Camera and relay released.") {
+    func stop(_ message: String = "Stopped. Camera and relay released.", cameraState: QuestCameraState = .idle) {
         questCameraStartRequested = false
         setupRegistrationTask?.cancel(); setupRegistrationTask = nil
-        UIApplication.shared.isIdleTimerDisabled = false
+        UIApplication.shared.isIdleTimerDisabled = UIApplication.shared.applicationState == .active
         generation += 1
         startTask?.cancel(); startTask = nil
         webTask?.cancel(); webTask = nil
@@ -389,7 +419,7 @@ final class CameraBridge: ObservableObject {
         session?.stop(); session = nil
         processor = nil
         phoneFrame = nil
-        quests.cameraSessionReleased()
+        quests.cameraSessionReleased(state: cameraState, message: CameraDiagnostics.redact(message, secrets: wearables.devices))
         webConnected = false
         hasStreamed = false
         relay.stop()

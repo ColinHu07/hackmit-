@@ -6,8 +6,8 @@ class SensorHost extends EventTarget implements GlassesSensorHost {
   isSecureContext = true;
   DeviceOrientationEvent: GlassesSensorHost['DeviceOrientationEvent'] = {};
   DeviceMotionEvent: GlassesSensorHost['DeviceMotionEvent'] = {};
-  orientation(alpha: number | null): void {
-    this.dispatchEvent(Object.assign(new Event('deviceorientation'), { alpha, beta: 0, gamma: 0 }));
+  orientation(alpha: number | null, type = 'deviceorientation'): void {
+    this.dispatchEvent(Object.assign(new Event(type), { alpha, beta: 0, gamma: 0 }));
   }
   motion(verticalG: number): void {
     this.dispatchEvent(Object.assign(new Event('devicemotion'), {
@@ -172,7 +172,7 @@ describe('permission and foreground lifecycle', () => {
       t.host.orientation(0);
       t.at(100); t.host.orientation(90);
       expect(t.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: false });
-      expect(t.controller.state.message).toContain('Walking sensors unavailable');
+      expect(t.controller.state.message).toContain(motion ? 'steps denied' : 'steps unavailable');
       expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI / 2);
       t.walk(200, 2000, 90);
       expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
@@ -284,6 +284,147 @@ describe('permission and foreground lifecycle', () => {
     t.controller.stop();
     expect(t.controller.resume()).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('starts granted head steering even if motion permission is stalled, then attaches a late motion grant', async () => {
+    const t = setup();
+    let grant!: (permission: string) => void;
+    const request = vi.fn(() => new Promise<string>(resolve => { grant = resolve; }));
+    t.host.DeviceMotionEvent = { requestPermission: request };
+    expect(await t.controller.start()).toBe(true);
+    t.host.orientation(0); t.at(100); t.host.orientation(90);
+    expect(t.controller.state).toMatchObject({ status: 'live', headStatus: 'ready', stepStatus: 'permission' });
+    expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI / 2);
+    t.walk(200, 1000, 90);
+    expect(t.controller.state.steps).toBe(0);
+    grant('granted'); await vi.advanceTimersByTimeAsync(0);
+    t.walk(1200, 1000, 90);
+    expect(t.controller.state).toMatchObject({ status: 'live', motionReady: true, steps: 2 });
+    expect(t.controller.state.message).toBe('Head live · steps ready · 2 detected');
+    expect(request).toHaveBeenCalledTimes(1);
+    t.controller.stop();
+  });
+
+  it('settles a stalled head start after eight seconds and accepts its eventual authorized response', async () => {
+    const t = setup();
+    let grant!: (permission: string) => void;
+    const request = vi.fn(() => new Promise<string>(resolve => { grant = resolve; }));
+    t.host.DeviceOrientationEvent = { requestPermission: request };
+    const starting = t.controller.start();
+    t.at(8000); await vi.advanceTimersByTimeAsync(8000);
+    expect(await starting).toBe(false);
+    expect(t.controller.state).toMatchObject({ status: 'unavailable', headStatus: 'permission' });
+    expect(t.controller.state.readiness).toContain('Head permission');
+    expect(t.controller.resume()).toBe(true);
+    expect(request).toHaveBeenCalledTimes(1);
+    t.walk(8000, 500);
+    expect(t.controller.state.steps).toBe(0);
+    grant('granted'); await vi.advanceTimersByTimeAsync(0);
+    t.walk(8500, 500);
+    expect(t.controller.state).toMatchObject({ status: 'live', steps: 0 });
+    t.walk(9000, 500);
+    expect(t.controller.state.steps).toBe(2);
+    t.controller.stop();
+  });
+
+  it('preserves grants returned while a camera screen is foreground and resumes only on caller request', async () => {
+    const t = setup();
+    let grantHead!: (permission: string) => void, grantMotion!: (permission: string) => void;
+    const head = vi.fn(() => new Promise<string>(resolve => { grantHead = resolve; }));
+    const motion = vi.fn(() => new Promise<string>(resolve => { grantMotion = resolve; }));
+    t.host.DeviceOrientationEvent = { requestPermission: head };
+    t.host.DeviceMotionEvent = { requestPermission: motion };
+    const starting = t.controller.start();
+    t.visibility.hide(true); t.controller.suspend(); t.controller.suspend();
+    grantHead('granted'); grantMotion('granted');
+    expect(await starting).toBe(false);
+    t.walk(0, 2000);
+    expect(t.controller.pose).toEqual({ x: 0, z: 0, yaw: Math.PI });
+    expect(t.controller.state).toMatchObject({ status: 'paused', headingReady: false, motionReady: false });
+    expect(t.controller.resume()).toBe(false);
+    t.visibility.hide(false);
+    expect(t.controller.status).toBe('paused');
+    expect(t.controller.resume()).toBe(true);
+    t.walk(2000, 500);
+    expect(t.controller.state.steps).toBe(0);
+    t.walk(2500, 500);
+    expect(t.controller.state.steps).toBe(2);
+    expect(head).toHaveBeenCalledTimes(1); expect(motion).toHaveBeenCalledTimes(1);
+    t.controller.stop();
+    t.visibility.hide(true); t.visibility.hide(false);
+    expect(t.controller.resume()).toBe(false);
+    const stopped = t.controller.pose;
+    t.walk(3000, 2000);
+    expect(t.controller.pose).toEqual(stopped);
+  });
+
+  it('can request foreground recovery before the original permission response arrives', async () => {
+    const t = setup();
+    let grant!: (permission: string) => void;
+    const request = vi.fn(() => new Promise<string>(resolve => { grant = resolve; }));
+    t.host.DeviceOrientationEvent = { requestPermission: request };
+    const starting = t.controller.start();
+    t.visibility.hide(true); t.controller.suspend();
+    t.visibility.hide(false);
+    expect(t.controller.resume()).toBe(true);
+    expect(t.controller.status).toBe('requesting');
+    grant('granted');
+    expect(await starting).toBe(true);
+    t.walk(0, 500);
+    expect(t.controller.resume()).toBe(true);
+    t.walk(500, 500);
+    expect(t.controller.state.steps, 'idempotent foreground recovery does not reset a live step rhythm').toBe(2);
+    expect(request).toHaveBeenCalledTimes(1);
+    t.controller.stop();
+  });
+
+  it('an explicit Pause after a permission timeout blocks the old late grant', async () => {
+    const t = setup();
+    let grant!: (permission: string) => void;
+    t.host.DeviceOrientationEvent = { requestPermission: () => new Promise(resolve => { grant = resolve; }) };
+    const starting = t.controller.start();
+    t.at(8000); await vi.advanceTimersByTimeAsync(8000);
+    expect(await starting).toBe(false);
+    t.controller.stop();
+    grant('granted'); await vi.advanceTimersByTimeAsync(0);
+    expect(t.controller.resume()).toBe(false);
+    t.walk(8000, 2000);
+    expect(t.controller.status).toBe('off');
+    expect(t.onPose).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('supports absolute-only orientation events without mixing different sensor reference frames', async () => {
+    const t = setup(); await t.controller.start();
+    t.host.orientation(220, 'deviceorientationabsolute');
+    t.at(100); t.host.orientation(230, 'deviceorientationabsolute');
+    const before = t.controller.pose;
+    expect(before.yaw).toBeCloseTo(-Math.PI + 10 * Math.PI / 180);
+    t.host.orientation(20);
+    expect(t.controller.pose).toEqual(before);
+    t.at(1400); t.host.orientation(80);
+    expect(t.controller.pose, 'fallback switches origins without rotating the pet').toEqual(before);
+    t.at(1500); t.host.orientation(90);
+    expect(t.controller.pose.yaw).toBeCloseTo(-Math.PI + 20 * Math.PI / 180);
+    expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
+    expect(t.controller.state.steps).toBe(0);
+    t.controller.stop();
+  });
+
+  it('reports incomplete motion data rather than inventing steps from gravity or head rotation', async () => {
+    const t = setup(); await t.controller.start();
+    for (let now = 0; now < 2000; now += 100) {
+      t.at(now); t.host.orientation(now / 100);
+      t.host.dispatchEvent(Object.assign(new Event('devicemotion'), {
+        acceleration: null, accelerationIncludingGravity: { x: 0, y: 0, z: -9.80665 },
+      }));
+    }
+    expect(t.controller.state).toMatchObject({ status: 'live', headStatus: 'ready', stepStatus: 'incomplete', motionReady: false, steps: 0 });
+    expect(t.controller.state.message).toBe('Head live · steps no acceleration · 0 detected');
+    expect(t.controller.pose.x).toBe(0); expect(t.controller.pose.z).toBe(0);
+    t.walk(2000, 1000, 19);
+    expect(t.controller.state).toMatchObject({ stepStatus: 'ready', steps: 2 });
+    t.controller.stop();
   });
 });
 

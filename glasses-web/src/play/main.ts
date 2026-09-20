@@ -6,6 +6,7 @@ import { evidenceReadiness } from '../../../companion-web/src/EvidenceReadiness'
 import { GlassesMotion } from './GlassesMotion';
 import { GlassesPosePublisher } from './GlassesPosePublisher';
 import { GlassesCamera, type CaptureStatus } from './GlassesCamera';
+import { cameraAvailability, recordingPreview } from './CameraPresentation';
 import type { EvidenceQuestId, PetActionKind } from '../../../shared/play-protocol';
 
 const params = new URLSearchParams(location.search);
@@ -32,6 +33,7 @@ let selectedQuest: EvidenceQuestId = 'touchGrass';
 let capture: CaptureStatus | null = null;
 let captureQuest: EvidenceQuestId | null = null;
 let cameraPoll: ReturnType<typeof setTimeout> | undefined;
+let recorderPreviewTimer: ReturnType<typeof setTimeout> | undefined;
 let cameraGeneration = 0;
 let cameraBusy = false;
 let previousMember = '';
@@ -42,10 +44,11 @@ let lastRoomNotice = '';
 let grassQuestAvailable: boolean | undefined;
 let renderedHappiness: number | undefined;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
-let resumeAfterReconnect = false;
+let walkingWanted = false;
+let pageInCache = false;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header class="glass-header"><span class="brand">kith<small>Meadow 3</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
+  <header class="glass-header"><span class="brand">kith<small>Meadow 4</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
   <canvas id="playground" aria-label="Your shared beaver playground"></canvas>
   <div id="tracking-status" class="glass-status">Loading your beaver…</div><div id="notice" class="glass-notice" role="status"></div>
   <nav class="action-rail" aria-label="Game actions"><button id="walk" type="button" disabled>Walk</button><button data-action="wave" type="button" disabled>Wave</button><button data-action="feed" id="feed" type="button" disabled>Berry</button><button id="quests" type="button" disabled>Quests</button><button id="more" type="button">More</button></nav>
@@ -88,7 +91,7 @@ function updateGameControls(): void {
 function join(): void {
   try {
     server = normalizeServerUrl(server); save('server', server); save('name', name);
-    resumeAfterReconnect = false;
+    walkingWanted = false;
     motion.stop();
     lastRoomNotice = ''; grassQuestAvailable = undefined;
     previousMember = ''; member = null; snapshot = null;
@@ -138,15 +141,14 @@ const client = new RoomClient({
     if (state !== 'connected') {
       suspendCameraWork();
       walkingRequest++; previousMember = ''; posePublisher.clear();
-      if (state === 'reconnecting' && !document.hidden) {
-        resumeAfterReconnect ||= ['waiting', 'live', 'stale', 'simulated'].includes(motion.status);
+      if (pageInCache || state === 'reconnecting' || state === 'connecting') {
         motion.suspend();
       } else {
-        resumeAfterReconnect = false;
+        walkingWanted = false;
         motion.stop();
       }
       motionEnabled = false; playground?.setWalkingPose(null);
-      if (resumeAfterReconnect && ready) el('tracking-status').textContent = 'Reconnecting… tracking will resume when you’re back.';
+      if (walkingWanted && ready) el('tracking-status').textContent = 'Reconnecting… tracking will resume when you’re back.';
     }
   },
   snapshot: (next, membership) => {
@@ -156,10 +158,7 @@ const client = new RoomClient({
     if (local && previousMember !== member.playerId) {
       previousMember = member.playerId;
       motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
-      if (resumeAfterReconnect && !document.hidden) {
-        resumeAfterReconnect = false;
-        motion.resume();
-      }
+      if (walkingWanted && !document.hidden) motion.resume();
     }
     motion.setWorldLimit(next.worldLimit ?? 3);
     if (motionEnabled) playground?.setWalkingPose(motion.pose);
@@ -201,15 +200,17 @@ function settings(message = ''): void {
 }
 
 async function enableWalking(): Promise<void> {
-  resumeAfterReconnect = false;
-  if (motionEnabled || motion.status === 'requesting') { walkingRequest++; motion.stop(); return; }
+  if (motionEnabled || motion.status === 'requesting') { walkingWanted = false; walkingRequest++; motion.stop(); return; }
   if (connection !== 'connected' || document.hidden) return;
   const local = snapshot?.players.find(player => player.id === member?.playerId);
   if (!local) return;
+  walkingWanted = true;
   const request = ++walkingRequest;
   motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
   simulatorHeading = 0;
-  if (simulator) motion.startSimulation(); else await motion.start();
+  if (motion.status === 'paused' && motion.resume()) { /* Reuse the user's existing permission request. */ }
+  else if (simulator) motion.startSimulation();
+  else await motion.start();
   if (request !== walkingRequest || connection !== 'connected' || document.hidden) return;
   closePanel();
 }
@@ -265,7 +266,7 @@ function cameraViewMatches(generation: number, id: string, session: string): boo
     && connection === 'connected' && !document.hidden;
 }
 function leaveCameraPanel(next: string): void {
-  cameraGeneration++; clearTimeout(cameraPoll);
+  cameraGeneration++; clearTimeout(cameraPoll); clearTimeout(recorderPreviewTimer);
   if (currentPanel === 'capture' && next !== 'capture' && next !== 'review') {
     cancelCaptureRequested = true;
     if (!cameraBusy) void discardActiveCapture();
@@ -281,7 +282,7 @@ async function discardActiveCapture(): Promise<void> {
   finally { captureSession = null; cameraBusy = false; }
 }
 function suspendCameraWork(): void {
-  cameraGeneration++; clearTimeout(cameraPoll);
+  cameraGeneration++; clearTimeout(cameraPoll); clearTimeout(recorderPreviewTimer);
   if (captureSession) {
     cancelCaptureRequested = true;
     if (!cameraBusy) void discardActiveCapture();
@@ -321,15 +322,14 @@ async function pairCamera(returnToQuest?: EvidenceQuestId): Promise<void> {
   bind('back', () => { if (returnToQuest) { selectedQuest = returnToQuest; questPanel(); } else more(); });
   const showState = (state: CaptureStatus) => {
     if (!current()) return;
-    if (state.connected && returnToQuest) {
+    const available = cameraAvailability(state);
+    if (available.ready && returnToQuest) {
       selectedQuest = returnToQuest;
-      questPanel('Camera relay connected. Start the glasses camera on your phone, then choose Photo or Clip.');
+      questPanel('Glasses camera ready. Choose Photo & grade or 6s clip & grade.');
       return;
     }
-    el('panel-status').textContent = state.connected
-      ? 'Connected. Start the glasses camera in Kith Camera. Photo & grade or Clip & grade sends each capture to Muse.'
-      : state.paired ? 'Linked. Reopen Kith Camera and start the glasses camera.' : 'Enter this code in Kith Camera on the paired iPhone.';
-    if (state.paired) el('pair-code').textContent = 'Linked';
+    el('panel-status').textContent = available.message;
+    if (state.paired) el('pair-code').textContent = available.ready ? 'Camera ready' : state.connected ? 'Camera starting' : 'Phone offline';
   };
   const showCode = (paired: { code: string; expiresAt: number }) => {
     if (!current()) return;
@@ -380,54 +380,100 @@ async function startCapture(kind: 'photo' | 'clip'): Promise<void> {
   if (!readiness.ready || kind === 'photo' && questId === 'dapHandshake') return;
   cameraBusy = true; capture = null; captureQuest = questId;
   captureSession = session; cancelCaptureRequested = false;
-  panel(kind === 'photo' ? 'Taking a photo' : 'Recording 6 seconds', `<p>Keep the action in the glasses camera’s view.</p><p id="panel-status" class="progress-text">Requesting glasses camera capture…</p>${button('Cancel', 'cancel-capture', true)}`, 'capture');
+  panel(kind === 'photo' ? 'Glasses photo' : 'Record a 6-second clip', `<div class="recorder-view"><img id="recording-preview" alt="Live view from your glasses camera" hidden><p id="recording-placeholder">Connecting to your glasses camera…</p><span id="recording-clock" class="recording-clock">Preparing</span></div><p id="panel-status" class="small">Checking the camera. Keep Kith Camera open on your iPhone.</p><div class="button-row">${button('Try again', 'retry-capture', true)}${button('Cancel', 'cancel-capture')}</div>${button('Camera setup', 'recorder-setup')}`, 'capture');
+  el('retry-capture').hidden = true; el('recorder-setup').hidden = true;
   const generation = cameraGeneration;
   const current = () => cameraViewMatches(generation, 'capture', session) && !cancelCaptureRequested;
-  bind('cancel-capture', async () => {
-    if (cameraBusy) return;
-    cancelCaptureRequested = true; cameraGeneration++; clearTimeout(cameraPoll);
-    el<HTMLButtonElement>('cancel-capture').disabled = true;
+  const expiredPreview = () => {
+    if (!current()) return;
+    el<HTMLImageElement>('recording-preview').hidden = true;
+    el('recording-placeholder').hidden = false;
+    el('recording-placeholder').textContent = 'Waiting for a fresh glasses camera frame…';
+    el('recording-clock').textContent = 'Preview paused';
+  };
+  const showFailure = async (message: string, needsSetup = false) => {
+    cameraBusy = false;
     await discardActiveCapture();
-    if (currentPanel === 'capture' && camera.sessionKey === session && !document.hidden) { selectedQuest = questId; questPanel('Capture discarded.'); }
+    if (!current()) return;
+    clearTimeout(recorderPreviewTimer);
+    el('panel-status').textContent = message;
+    el('recording-clock').textContent = 'Not recording';
+    el('retry-capture').hidden = false; el<HTMLButtonElement>('retry-capture').disabled = false;
+    el('recorder-setup').hidden = !needsSetup;
+    el('cancel-capture').textContent = 'Back to quest';
+    el('retry-capture').focus();
+  };
+  bind('retry-capture', () => startCapture(kind));
+  bind('recorder-setup', async () => {
+    if (cameraBusy) return;
+    await discardActiveCapture();
+    if (current()) await pairCamera(questId);
+  });
+  bind('cancel-capture', async () => {
+    cancelCaptureRequested = true;
+    clearTimeout(cameraPoll); clearTimeout(recorderPreviewTimer);
+    if (!cameraBusy) await discardActiveCapture();
+    if (currentPanel === 'capture' && camera.sessionKey === session && !document.hidden) {
+      selectedQuest = questId; questPanel('Capture canceled.');
+    }
   });
   try {
-    const cameraState = await camera.status();
-    if (!current()) { cameraBusy = false; captureSession = null; return; }
-    if (!cameraState.paired || !cameraState.connected) {
-      cameraBusy = false; captureSession = null; captureQuest = null;
-      await pairCamera(questId);
-      return;
+    const waitingSince = Date.now();
+    while (current()) {
+      const state = await camera.status();
+      if (!current()) { cameraBusy = false; await discardActiveCapture(); return; }
+      const available = cameraAvailability(state);
+      if (available.ready) break;
+      el('recording-placeholder').textContent = available.title;
+      el('panel-status').textContent = available.message;
+      if (!state.paired || !state.connected || ['permission', 'paused', 'error'].includes(state.cameraState ?? '') || Date.now() - waitingSince > 20_000) {
+        await showFailure(available.message, !state.paired);
+        return;
+      }
+      await new Promise<void>(resolve => setTimeout(resolve, 750));
     }
+    if (!current()) { cameraBusy = false; await discardActiveCapture(); return; }
     const request = await camera.capture(kind, questId);
-    if (!current()) {
-      cameraBusy = false;
-      await discardActiveCapture();
-      return;
-    }
+    if (!current()) { cameraBusy = false; await discardActiveCapture(); return; }
     cameraBusy = false;
-    el<HTMLButtonElement>('cancel-capture').disabled = false;
-    el('panel-status').textContent = 'Waiting for fresh glasses camera evidence…';
+    el('panel-status').textContent = kind === 'photo' ? 'Taking a photo through your glasses…' : 'Starting recording. The live view appears with the first camera frame.';
+    el('recording-placeholder').textContent = 'Waiting for the glasses camera…';
     const startedAt = Date.now();
+    let lastSequence = 0;
     const poll = async () => {
       if (!current()) return;
       try {
         const state = await camera.status();
         if (!current()) return;
-        if (state.requestId !== request.requestId || state.questId !== questId || state.status === 'error') throw new Error(state.error || 'Capture ended. Try again.');
-        if (state.status === 'ready') { captureSession = null; capture = state; captureQuest = questId; reviewCapture(true); return; }
-        if (!state.connected || Date.now() - startedAt > 35_000) throw new Error('Camera bridge disconnected. Keep Kith Camera open and try again.');
-        cameraPoll = setTimeout(() => { void poll(); }, 1000);
+        if (state.requestId !== request.requestId || state.questId !== questId || state.status === 'error') throw new Error(state.error || 'The camera stopped this capture. Try again.');
+        if (state.status === 'ready') {
+          clearTimeout(recorderPreviewTimer);
+          captureSession = null; capture = state; captureQuest = questId;
+          reviewCapture(true); return;
+        }
+        const preview = recordingPreview(state, request.requestId);
+        if (preview && preview.sequence > lastSequence) {
+          lastSequence = preview.sequence;
+          const image = el<HTMLImageElement>('recording-preview');
+          image.src = preview.image; image.hidden = false;
+          el('recording-placeholder').hidden = true;
+          el('recording-clock').textContent = preview.remaining ? `● REC · ${preview.remaining}s` : 'Finishing clip…';
+          el('panel-status').textContent = 'Recording from your glasses. Keep the action in view.';
+          clearTimeout(recorderPreviewTimer);
+          recorderPreviewTimer = setTimeout(expiredPreview, 3000);
+        }
+        if (!state.connected) throw new Error(cameraAvailability(state).message);
+        if (Date.now() - startedAt > 35_000) throw new Error('The glasses camera did not finish recording. Check Kith Camera on your phone and retry.');
+        cameraPoll = setTimeout(() => { void poll(); }, 500);
       } catch (error) {
-        if (!current()) return;
-        selectedQuest = questId;
-        questPanel(error instanceof Error ? error.message : 'Capture failed.');
+        if (current()) await showFailure(error instanceof Error ? error.message : 'Capture failed.');
       }
     };
     void poll();
   } catch (error) {
     cameraBusy = false;
-    if (current()) { captureSession = null; selectedQuest = questId; questPanel(error instanceof Error ? error.message : 'Capture failed.'); }
-    else { captureSession = null; }
+    if (current()) await showFailure(error instanceof Error ? error.message : 'Capture failed.');
+    else await discardActiveCapture();
   }
 }
 
@@ -532,16 +578,36 @@ document.addEventListener('keydown', event => {
 });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
-    if (connection === 'connected') tell('Welcome back. Select Walk to resume motion.');
+    if (connection === 'connected' && walkingWanted) {
+      const local = snapshot?.players.find(player => player.id === member?.playerId);
+      if (local) motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
+      motion.resume();
+    }
+    else if (connection === 'connected') tell('Welcome back. Select Walk to enable head tracking and steps.');
     resumeCameraPanel();
   } else {
-    resumeAfterReconnect = false;
     walkingRequest++; posePublisher.clear();
     motion.suspend();
     suspendCameraWork();
   }
 });
-window.addEventListener('pagehide', () => { suspendCameraWork(); walkingRequest++; posePublisher.clear(); client.stop(false); motion.stop(); clearTimeout(cameraPoll); clearTimeout(noticeTimer); playground?.dispose(); });
+window.addEventListener('pagehide', event => {
+  pageInCache = event.persisted;
+  suspendCameraWork(); walkingRequest++; posePublisher.clear();
+  motion.suspend(); client.stop(false);
+  clearTimeout(cameraPoll); clearTimeout(recorderPreviewTimer); clearTimeout(noticeTimer);
+  if (!event.persisted) { motion.stop(); playground?.dispose(); }
+});
+window.addEventListener('pageshow', event => {
+  if (!event.persisted) return;
+  pageInCache = false;
+  // Rejoin after a cached page returns; the first authoritative snapshot resumes
+  // previously requested tracking. Its renderer and permission grants survived.
+  const saved = member;
+  client.start(server, params.has('room') ? { type: 'join', roomCode: params.get('room')!.toUpperCase(), name,
+    ...(saved?.roomCode === params.get('room')!.toUpperCase() ? { playerToken: saved.playerToken } : {}) }
+    : { type: 'lobby', name, ...(saved ? { playerToken: saved.playerToken } : {}) });
+});
 
 // Connecting is independent of the 3D download: an unavailable server must not
 // look like a stuck beaver, and users can fix the connection while assets load.
@@ -559,7 +625,7 @@ try {
     if (motionEnabled) playground.setWalkingPose(motion.pose);
   }, { display: true });
   await playground.load(message => { el('tracking-status').textContent = message; }); ready = true;
-  el('tracking-status').textContent = simulator ? 'Simulator · select Walk, then W / A / D' : 'Select Walk while facing forward';
+  el('tracking-status').textContent = walkingWanted ? motion.state.message : simulator ? 'Simulator · select Walk, then W / A / D' : 'Select Walk to enable head tracking and steps';
   updateGameControls();
   if (el('join')) el<HTMLButtonElement>('join').disabled = false;
 } catch (error) { el('tracking-status').textContent = error instanceof Error ? error.message : 'Could not load the beaver. Reopen Kith to retry.'; }
