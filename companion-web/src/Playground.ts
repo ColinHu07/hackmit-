@@ -11,6 +11,7 @@ import { SoftJump } from '../../glasses-web/src/rendering/SoftJump';
 import { GroundContact } from '../../glasses-web/src/rendering/GroundContact';
 import { SoftPaws } from './SoftPaws';
 import { samplePetAction } from './PetActionPose';
+import { advancePetStage, makePlayDance, samplePlayDance, spacePets, type PlayDance } from './PlayChoreography';
 import type { WeatherKind } from './LocalWeather';
 import type { WalkingPose } from './WalkingTracker';
 import type { PlayPlayer, PlaySnapshot } from '../../shared/play-protocol';
@@ -28,6 +29,11 @@ interface NearbyPet {
 
 interface PetVisual {
   root: THREE.Group;
+  stage: THREE.Group;
+  presented: { x: number; z: number } | null;
+  danceDistance: number;
+  danceYaw: number;
+  danceGait: number;
   body: THREE.Group;
   ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   shadow: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
@@ -57,6 +63,7 @@ export class Playground {
   private readonly materials = new Set<THREE.Material>();
   private readonly textures = new Set<THREE.Texture>();
   private readonly pets: PetVisual[] = [];
+  private readonly dances = new Map<number, PlayDance>();
   private readonly target: THREE.Group;
   private readonly ball: THREE.Group;
   private readonly resizeObserver: ResizeObserver;
@@ -234,6 +241,8 @@ export class Playground {
         if (!this.walkingPose) { pet.root.position.set(0, 0.035, 0); pet.yaw = Math.PI; }
       } else if (player && pet.playerId !== player.id) {
         pet.playerId = player.id;
+        pet.presented = null;
+        pet.stage.position.set(0, 0, 0);
         pet.root.position.set(player.x, 0.035, player.z);
         pet.motion.reset(player.x, player.z);
         pet.yaw = player.yaw;
@@ -436,6 +445,8 @@ export class Playground {
 
   private buildPet(source: THREE.Group, slot: number): PetVisual {
     const root = new THREE.Group();
+    const stage = new THREE.Group();
+    root.add(stage);
     const body = new THREE.Group();
     const model = clone(source);
     const heads: SoftHead[] = [];
@@ -465,26 +476,26 @@ export class Playground {
     normalized.position.set(-center.x * scale, -bounds.min.y * scale, -center.z * scale);
     normalized.add(model);
     body.add(normalized);
-    root.add(body);
+    stage.add(body);
     const contact = new GroundContact(body, 0, 0.27);
     const ring = this.mesh(new THREE.RingGeometry(0.45, 0.49, 64), new THREE.MeshBasicMaterial({
       color: SLOT_COLORS[slot] ?? SLOT_COLORS[0], opacity: 0.72, transparent: true, depthWrite: false,
     }));
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.009;
-    root.add(ring);
+    stage.add(ring);
     const shadow = this.mesh(new THREE.PlaneGeometry(1.35, 1.1), new THREE.MeshBasicMaterial({
       map: this.shadowTexture, transparent: true, opacity: 0.75, depthWrite: false,
     }));
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.y = 0.004;
-    root.add(shadow);
+    stage.add(shadow);
     const hearts = Array.from({ length: 4 }, () => {
       const heart = this.mesh(this.heartGeometry(), new THREE.MeshBasicMaterial({
         color: 0xd79380, side: THREE.DoubleSide, transparent: true, opacity: 0, depthWrite: false,
       }));
       heart.scale.setScalar(0.1);
-      root.add(heart);
+      stage.add(heart);
       return heart;
     });
     const treat = new THREE.Group();
@@ -496,15 +507,15 @@ export class Playground {
     leaf.position.set(0.035, 0.09, 0);
     leaf.rotation.x = -0.4;
     treat.add(leaf);
-    root.add(treat);
+    stage.add(treat);
     const crumbs = Array.from({ length: 6 }, () => {
       const crumb = this.mesh(new THREE.IcosahedronGeometry(0.025, 0), this.material(0xedb965));
       crumb.visible = false;
-      root.add(crumb);
+      stage.add(crumb);
       return crumb;
     });
     this.scene.add(root);
-    return { root, body, ring, shadow, hearts, treat, crumbs, contact, jumps, paws, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
+    return { root, stage, presented: null, danceDistance: 0, danceYaw: Math.PI, danceGait: 0, body, ring, shadow, hearts, treat, crumbs, contact, jumps, paws, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
   }
 
   private resize = (): void => {
@@ -605,6 +616,7 @@ export class Playground {
       }
       this.animatePet(pet, player, delta, now / 1000, serverTime, reducedMotion);
     }
+    this.animateSocialSpacing(serverTime, delta, reducedMotion);
     const followedPet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
     if (followedPet?.root.visible) {
       const { x, z } = followedPet.root.position;
@@ -645,7 +657,8 @@ export class Playground {
   };
 
   private updateFootprints(pet: PetVisual, now: number): void {
-    const position = pet.root.position;
+    const position = pet.root.position.clone().add(pet.stage.position).add(pet.body.position);
+    position.y = 0;
     const distance = this.trailPosition?.distanceTo(position) ?? 0;
     if (!this.trailPosition || distance > 1.5) this.trailPosition = position.clone();
     else if (distance >= 0.22) {
@@ -683,21 +696,15 @@ export class Playground {
     const active = Boolean(action && serverTime >= action.startedAt && progress < 1);
     const envelope = active ? Math.sin(progress * Math.PI) : 0;
     const pose = samplePetAction(active ? action?.kind : undefined, progress, reducedMotion);
-    let lift = pose.lift;
+    const lift = pose.lift;
     let tilt = reducedMotion ? 0 : Math.sin(seconds * 1.7) * 0.018;
     tilt += pose.tilt;
     let bow = pose.bow;
-    let yaw = pet.yaw + pose.turn;
+    const yaw = pet.yaw + pose.turn;
     if (!reducedMotion && active && action) {
       if (action.kind === 'dap') {
         tilt += Math.sin(progress * Math.PI * 8) * 0.1 * envelope;
         bow = Math.sin(progress * Math.PI) * 0.12;
-      }
-      if (action.kind === 'play') {
-        lift = Math.abs(Math.sin(progress * Math.PI * 3)) * 0.26;
-        const friend = this.snapshot?.players.find((candidate) => candidate.id !== player?.id && candidate.connected);
-        if (friend) yaw = Math.atan2(friend.x - pet.root.position.x, friend.z - pet.root.position.z);
-        tilt += Math.sin(progress * Math.PI * 6) * 0.055;
       }
     }
     const stride = pet.distance + pose.stride;
@@ -736,7 +743,7 @@ export class Playground {
     });
     for (let index = 0; index < pet.hearts.length; index++) {
       const heart = pet.hearts[index]!;
-      const joy = action?.kind === 'feed' || action?.kind === 'wave' ? pose.joy : envelope;
+      const joy = action?.kind === 'feed' || action?.kind === 'wave' || action?.kind === 'play' ? pose.joy : envelope;
       heart.visible = active && action?.kind !== 'jump' && joy > 0 && (reducedMotion ? index === 0 : true);
       if (!heart.visible) continue;
       const phase = reducedMotion ? 0.4 : (progress * 1.6 + index * 0.24) % 1;
@@ -747,21 +754,81 @@ export class Playground {
     }
   }
 
+  private animateSocialSpacing(serverTime: number, delta: number, reducedMotion: boolean): void {
+    const visible = this.pets.filter(pet => pet.root.visible);
+    const snapshotPlayers = this.snapshot?.players ?? [];
+    const active = snapshotPlayers.filter(player => player.action?.kind === 'play'
+      && player.action.startedAt <= serverTime && serverTime < player.action.startedAt + player.action.duration);
+    const starts = new Set(active.map(player => player.action!.startedAt));
+    for (const start of this.dances.keys()) if (!starts.has(start)) this.dances.delete(start);
+    // Cache the whole group, so a departing friend never reshuffles the others.
+    for (const start of starts) if (!this.dances.has(start)) {
+      const group = active.filter(player => player.action!.startedAt === start);
+      const resting = spacePets(snapshotPlayers.filter(p => p.connected).map(p => ({ id: p.id, slot: p.slot, x: p.x, z: p.z })));
+      const members = resting.filter(p => group.some(member => member.id === p.id));
+      if (members.length >= 2) this.dances.set(start, makePlayDance(members));
+    }
+    const dancePositions = new Map<string, { x: number; z: number; center: PlayDance['center']; progress: number }>();
+    for (const [start, dance] of this.dances) {
+      const action = active.find(player => player.action!.startedAt === start)!.action!;
+      const progress = (serverTime - start) / action.duration;
+      for (const point of samplePlayDance(dance, progress, reducedMotion)) {
+        dancePositions.set(point.id, { ...point, center: dance.center, progress });
+      }
+    }
+    const candidates = visible.map(pet => {
+      const slot = this.pets.indexOf(pet);
+      const dance = pet.playerId ? dancePositions.get(pet.playerId) : undefined;
+      return { id: pet.playerId ?? `preview-${slot}`, slot,
+        x: dance?.x ?? pet.root.position.x + pet.body.position.x,
+        z: dance?.z ?? pet.root.position.z + pet.body.position.z };
+    });
+    const previous = visible.flatMap(pet => {
+      const slot = this.pets.indexOf(pet);
+      return pet.presented ? [{ id: pet.playerId ?? `preview-${slot}`, slot, ...pet.presented }] : [];
+    });
+    // Include spectators and resting pets in contacts, not just the dancers.
+    for (const point of advancePetStage(candidates, previous, delta, reducedMotion)) {
+      const pet = this.pets[point.slot]!;
+      const dance = pet.playerId ? dancePositions.get(pet.playerId) : undefined;
+      pet.stage.position.set(point.x - pet.root.position.x - pet.body.position.x, 0,
+        point.z - pet.root.position.z - pet.body.position.z);
+      if (dance && !reducedMotion) {
+        const dx = pet.presented ? point.x - pet.presented.x : 0;
+        const dz = pet.presented ? point.z - pet.presented.z : 0;
+        const travel = Math.hypot(dx, dz);
+        const speed = travel / Math.max(delta, 0.001);
+        if (!pet.presented) pet.danceYaw = pet.yaw;
+        pet.danceDistance += travel * 142 / PET_EXTENT;
+        pet.danceGait += (Math.min(1, speed * 1.6) - pet.danceGait) * (1 - Math.exp(-14 * delta));
+        // Point the feet along actual travel; turn inward when settling to bow.
+        let targetYaw = speed > 0.04 ? Math.atan2(dx, dz)
+          : Math.atan2(dance.center.x - point.x, dance.center.z - point.z);
+        if (dance.progress > 0.96) targetYaw = pet.yaw;
+        pet.danceYaw += Math.atan2(Math.sin(targetYaw - pet.danceYaw), Math.cos(targetYaw - pet.danceYaw))
+          * (1 - Math.exp(-14 * delta));
+        const pose = samplePetAction('play', dance.progress);
+        const sway = Math.sin(pet.danceDistance / 36 * Math.PI * 2) * 0.07 * pet.danceGait;
+        pet.body.rotation.set(0, pet.danceYaw, (pose.tilt + sway) * 0.25, 'YXZ');
+        pet.gaits.forEach(gait => gait.set(pet.danceDistance, pet.danceGait));
+        pet.heads.forEach((head, i) => head.set(pose.tilt + sway, pose.bow, pet.jumps[i]?.torsoPitch ?? 0));
+        pet.body.position.y = -pet.contact.lowestY();
+      } else {
+        pet.danceYaw = pet.yaw;
+        pet.danceGait = 0;
+      }
+      pet.presented = { x: point.x, z: point.z };
+    }
+  }
+
   private animateBall(serverTime: number, reducedMotion: boolean): void {
-    const player = this.snapshot?.players.find((candidate) => candidate.connected && candidate.action?.kind === 'play'
-      && candidate.action.startedAt <= serverTime && candidate.action.startedAt + candidate.action.duration > serverTime);
-    const action = player?.action;
-    this.ball.visible = Boolean(player && action);
-    if (!player || !action) return;
-    const friend = this.snapshot?.players.find((candidate) => candidate.id !== player.id && candidate.connected);
-    const progress = (serverTime - action.startedAt) / action.duration;
-    const between = reducedMotion ? 0.5 : (Math.sin(progress * Math.PI * 4 - Math.PI / 2) + 1) / 2;
-    this.ball.position.set(
-      THREE.MathUtils.lerp(player.x, friend?.x ?? player.x + 0.8, between),
-      0.17 + (reducedMotion ? 0 : Math.abs(Math.sin(progress * Math.PI * 4)) * 0.32),
-      THREE.MathUtils.lerp(player.z, friend?.z ?? player.z + 0.5, between),
-    );
-    this.ball.rotation.z = reducedMotion ? 0 : progress * Math.PI * 6;
+    const entry = this.dances.entries().next().value;
+    this.ball.visible = !!entry;
+    if (!entry) return;
+    const [start, dance] = entry;
+    // A grounded toy marks the circle; pets run around it instead of through it.
+    this.ball.position.set(dance.center.x, 0.15, dance.center.z);
+    this.ball.rotation.z = reducedMotion ? 0 : Math.sin((serverTime - start) / 600) * 0.12;
   }
 
   private disposeResources(): void {

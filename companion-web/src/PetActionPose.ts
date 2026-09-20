@@ -52,6 +52,13 @@ export function samplePetAction(kind: PetActionKind | undefined, progress: numbe
     pose.tilt = -0.1 * greeting;
     pose.bow = -0.06 * greeting;
     pose.joy = greeting;
+  } else if (kind === 'play') {
+    const greeting = window(t, 0.67, 0.72, 0.8, 0.84);
+    pose.crouch = 0.45 * window(t, 0.67, 0.72, 0.73, 0.78);
+    pose.bow = 0.2 * window(t, 0.67, 0.72, 0.74, 0.79);
+    pose.wave = 1.8 * window(t, 0.74, 0.78, 0.81, 0.84);
+    pose.tilt = Math.sin(t * Math.PI * 24) * 0.1 * greeting;
+    pose.joy = window(t, 0.65, 0.71, 0.89, 1);
   } else if (kind === 'jump') {
     if (t < 0.24) {
       pose.crouch = window(t, 0, 0.14, 0.14, 0.24);

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { samplePetAction } from './PetActionPose';
 
 describe('pet action choreography', () => {
-  it.each(['feed', 'wave', 'jump'] as const)('%s begins and ends at rest with finite, continuous poses', kind => {
+  it.each(['feed', 'wave', 'jump', 'play'] as const)('%s begins and ends at rest with finite, continuous poses', kind => {
     expect(samplePetAction(kind, 0)).toEqual(samplePetAction(undefined, 0));
     expect(samplePetAction(kind, 1)).toEqual(samplePetAction(undefined, 0));
     let previous = samplePetAction(kind, 0);
@@ -48,7 +48,7 @@ describe('pet action choreography', () => {
     expect(samplePetAction('jump', 0.74)).toMatchObject({ lift: 0, tuck: 0, crouch: 0 });
     expect(samplePetAction('jump', 0.81).crouch).toBeCloseTo(0.9);
   });
-  it.each(['feed', 'wave', 'jump'] as const)('keeps %s motionless under reduced motion', kind => {
+  it.each(['feed', 'wave', 'jump', 'play'] as const)('keeps %s motionless under reduced motion', kind => {
     for (const t of [0.1, 0.3, 0.5, 0.8]) {
       expect(samplePetAction(kind, t, true)).toMatchObject({ turn: 0, approach: 0, lift: 0, crouch: 0, tuck: 0, wave: 0, gait: 0, bow: 0 });
     }

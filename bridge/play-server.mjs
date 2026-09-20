@@ -504,13 +504,14 @@ export function createPlayServer(options = {}) {
       const playmates = [player, ...connectedPlayers.filter(friend => friend !== player && Math.hypot(player.x - friend.x, player.z - friend.z) <= PLAY_FRIEND_DISTANCE)];
       if (playmates.length < 2) return fail(ws, 'friend_too_far', 'Bring another connected pet close together to play.');
       if (now - room.lastPlayAt < 5000) return fail(ws, 'play_cooldown', 'Your pets are catching their breath. Try again in a moment.');
+      if (playmates.some(friend => friend.action?.kind === 'play' && now < friend.action.startedAt + friend.action.duration)) {
+        return fail(ws, 'action_busy', 'Let your friends finish their dance first.');
+      }
       room.lastPlayAt = now;
       room.bond += 1;
       room.quest.met = true;
       room.quest.played = true;
       for (const friend of playmates) {
-        const other = playmates.find(candidate => candidate !== friend);
-        friend.yaw = Math.atan2(other.x - friend.x, other.z - friend.z);
         setAction(friend, 'play', now);
       }
       playmates.forEach(peer => awardAction(peer, 'play'));

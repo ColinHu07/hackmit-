@@ -167,6 +167,12 @@ test('two phones share authoritative movement, quests, and one cooperative bond 
   assert.equal(played.bond, 1);
   assert.ok(played.players.every(player => player.action.kind === 'play'));
   assert.equal(played.players[0].action.startedAt, played.players[1].action.startedAt);
+  assert.equal(played.players[0].action.duration, 9000);
+  assert.deepEqual(played.players.map(p => p.yaw), waved.players.map(p => p.yaw), 'dancing must not swing the walking camera');
+  b.send({ type: 'move', x: 3, z: 3 });
+  const dancing = await state(b, s => s.serverTime > played.serverTime);
+  assert.ok(dancing.players.every(p => p.action?.kind === 'play'));
+  assert.ok(dancing.players.every(p => p.targetX === p.x && p.targetZ === p.z), 'walking cannot interrupt the shared dance');
   b.send({ type: 'action', action: 'play' });
   await error(b, 'action_busy');
   b.clear();
