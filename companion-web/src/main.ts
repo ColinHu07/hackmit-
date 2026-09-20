@@ -653,14 +653,15 @@ function startWalking(): void {
   walking = true;
   const local = snapshot?.players.find(p => p.id === membership?.playerId);
   walkingTracker.reset(local?.x ?? 0, local?.z ?? 0);
-  el('walking-status').textContent = 'Finding your position and north…';
+  el('walking-status').textContent = 'Aligning your pet with your phone…';
+  el('compass-reading').textContent = 'Reading your starting direction…';
   publishWalking();
   updateControls();
   nativeCommand('startLocation', { purpose: 'walking' });
 }
-function publishWalking(moved = false): void {
-  if (!walking) return;
-  playground?.setWalkingPose(walkingTracker.pose);
+function publishWalking(moved = false, initialHeading = false): void {
+  if (!walking || !walkingTracker.hasHeading) return;
+  playground?.setWalkingPose(walkingTracker.pose, initialHeading);
   if (membership && connection === 'connected') {
     if (moved) client.move(walkingTracker.pose.x, walkingTracker.pose.z);
     client.heading(walkingTracker.pose.yaw);
@@ -684,9 +685,10 @@ if (isNativePhone()) {
     if (!walking) return;
     if (event.type === 'status') el('walking-status').textContent = event.message ?? '';
     if (event.type === 'heading') {
+      const initialHeading = !walkingTracker.hasHeading;
       if (walkingTracker.heading(event.degrees ?? -1, event.accuracy ?? -1)) {
         el('compass-reading').textContent = `N ↑ · ${Math.round(event.degrees!)}° ${event.reference === 'true' ? 'true' : 'magnetic'}`;
-        publishWalking();
+        publishWalking(false, initialHeading);
       } else el('compass-reading').textContent = 'Compass uncertain · move away from metal';
     }
     const fix = nativeFix(event);

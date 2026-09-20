@@ -117,6 +117,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
                 locationManager.startUpdatingLocation()
                 if CLLocationManager.headingAvailable() { locationManager.startUpdatingHeading() }
             }
+            if let heading = locationManager.heading { publishHeading(heading) }
             if let fix = lastFix, abs(fix.timestamp.timeIntervalSinceNow) < 15 { publish(fix) }
             if locationManager.accuracyAuthorization == .reducedAccuracy {
                 emit(["type": "status", "message": "Enable Precise Location in iPhone Settings for nearby pets and walking."])
@@ -140,6 +141,10 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     func locationManager(_ manager: CLLocationManager, didUpdateHeading heading: CLHeading) {
         guard isTracking, Date().timeIntervalSince(lastHeadingTime) >= 0.2 else { return }
         lastHeadingTime = Date()
+        publishHeading(heading)
+    }
+    private func publishHeading(_ heading: CLHeading) {
+        guard isTracking, abs(heading.timestamp.timeIntervalSinceNow) < 10 else { return }
         let useTrue = heading.trueHeading >= 0
         emit(["type": "heading", "degrees": useTrue ? heading.trueHeading : heading.magneticHeading,
               "accuracy": heading.headingAccuracy, "reference": useTrue ? "true" : "magnetic"])
@@ -149,7 +154,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
         else { emit(["type": "status", "message": "Waiting for a usable GPS signal. Keep the app open."]) }
     }
     private func stopSensors() {
-        isTracking = false; lastFix = nil
+        isTracking = false; lastFix = nil; lastHeadingTime = .distantPast
         locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
     }
     @objc private func becameActive() {

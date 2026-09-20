@@ -52,3 +52,17 @@ describe('native walking in a north-aligned meadow', () => {
     expect(delta.east).toBeCloseTo(1.11, 1); expect(delta.north).toBe(0);
   });
 });
+
+it('waits for a valid initial compass bearing and supports starting in every direction', () => {
+  for (const [degrees, yaw] of [[0, Math.PI], [90, Math.PI / 2], [180, 0], [270, -Math.PI / 2]]) {
+    const tracker = new WalkingTracker();
+    expect(tracker.hasHeading).toBe(false);
+    expect(tracker.heading(degrees!, 50)).toBe(false);
+    expect(tracker.hasHeading).toBe(false);
+    tracker.heading(degrees!, 5);
+    expect(tracker.hasHeading).toBe(true);
+    expect(tracker.pose.yaw).toBeCloseTo(yaw!);
+    tracker.reset();
+    expect(tracker.hasHeading).toBe(false);
+  }
+});

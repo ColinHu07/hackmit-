@@ -141,8 +141,12 @@ export class Playground {
     this.renderer.toneMappingExposure = kind === 'night' ? 0.72 : kind === 'rain' ? 0.92 : 1.12;
   }
 
-  setWalkingPose(pose: WalkingPose | null): void {
+  setWalkingPose(pose: WalkingPose | null, initialHeading = false): void {
     this.walkingPose = pose ? { ...pose } : null;
+    if (pose && initialHeading) {
+      const pet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
+      if (pet) { pet.yaw = pose.yaw; pet.body.rotation.y = pose.yaw; }
+    }
     this.camera.position.set(pose ? 0 : 8, pose ? 13 : 10, pose ? 10 : 12);
     this.camera.lookAt(0, 0, 0);
   }

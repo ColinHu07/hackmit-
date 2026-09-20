@@ -15,13 +15,15 @@ export function localMeters(from: LocationFix, to: LocationFix): { east: number;
 export class WalkingTracker {
   private anchor: LocationFix | null = null;
   private lastTimestamp = -Infinity;
+  hasHeading = false;
   pose: WalkingPose = { x: 0, z: 0, yaw: Math.PI };
   reset(x = 0, z = 0): void {
-    this.anchor = null; this.lastTimestamp = -Infinity;
+    this.anchor = null; this.lastTimestamp = -Infinity; this.hasHeading = false;
     this.pose = { ...this.pose, x, z };
   }
   heading(degrees: number, accuracy: number): boolean {
     if (!Number.isFinite(degrees) || degrees < 0 || degrees >= 360 || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 25) return false;
+    this.hasHeading = true;
     this.pose = { ...this.pose, yaw: headingToYaw(degrees) };
     return true;
   }
