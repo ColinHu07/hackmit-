@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import WebSocket from 'ws';
 import { createPlayServer } from './play-server.mjs';
-import { parsePlayMessage, PLAY_WORLD_LIMIT } from '../shared/play-protocol.mjs';
+import { parsePlayMessage, PLAY_WORLD_LIMIT, PLAY_ACTION_DURATION } from '../shared/play-protocol.mjs';
 
 async function setup(t, options = {}) {
   const app = createPlayServer(options);
@@ -265,11 +265,11 @@ test('a completed squad can start and finish the Mossback raid with per-player r
   // Waving beside teammates must calm Mossback too (regression).
   a.send({ type: 'action', action: 'wave' });
   await state(a, snapshot => snapshot.raid.health === 13);
-  await new Promise(resolve => setTimeout(resolve, 1_500));
+  await new Promise(resolve => setTimeout(resolve, PLAY_ACTION_DURATION.wave + 100));
   // Continue until the cooperative meter reaches zero.
   for (let round = 0; round < 4; round++) {
     for (const client of [a, b, c]) client.send({ type: 'action', action: 'jump' });
-    await new Promise(resolve => setTimeout(resolve, 1_100));
+    await new Promise(resolve => setTimeout(resolve, PLAY_ACTION_DURATION.jump + 100));
   }
   a.send({ type: 'action', action: 'jump' });
   b.send({ type: 'action', action: 'jump' });

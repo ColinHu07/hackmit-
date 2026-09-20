@@ -12,6 +12,12 @@ An interaction has three parts: an input requests `pet`, `feed`, or `play`; `Cre
 
 Author future run cycles **in place**: the physics system must remain responsible for translation, takeoff, and landing. Keep authored clip motion inside the root-relative stage; animation clips should not relocate the saved direction anchor. Explicit **Move here** commands use `AnchorTravel` to move that anchor along a smooth angular path. Its travel distance drives the same `SoftGait` footsteps and facing, with a speed cap derived from calibrated FOV. Initial placement remains immediate; subsequent relocation and retargeting preserve the visible current position. The current `Play` reaction starts a short run that may continue after its three-second feedback effects finish. Pet/feed stop the route and brake on landing if Nova is already airborne.
 
+## Phone playground actions
+
+`PetActionPose` samples the shared action clock so every phone sees the same sequence. Treat takes 6.2 seconds: a half turn toward the viewer, a crouched approach, a fruit lifted from the ground to the muzzle, three bites with crumbs, a happy head wiggle with hearts, and a turn and walk home. Wave takes 3.4 seconds, turns toward the viewer, raises and swings one forepaw using `SoftPaws`, lowers it, and turns forward again. Jump takes 1.4 seconds with a grounded knee bend, ballistic flight, tucked feet, and an impact bend using `SoftJump`. `GroundContact` uses a support depth in the phone scene's units to keep the soles on the ground.
+
+These actions offset the rendered body; shared player coordinates and the following camera remain anchored to the walking heading. Reduced motion retains static treat/heart feedback without turns, travel, or jumping. The source mesh remains unrigged, so the forepaw and chewing responses are procedural approximations. Shared durations live in `shared/play-protocol.mjs`; a running game server needs a restart to serve changed durations. Device-local happiness loses one point every 45 minutes (1.5 times the previous 30-minute interval), retaining the existing floor and quest rewards.
+
 ## Proposed authored clips
 
 These are the target names and art direction for a future animated GLB, not clips already present in the asset. Durations match the current interaction timings; `Idle` is a suggested loop length.

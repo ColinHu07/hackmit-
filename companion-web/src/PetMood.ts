@@ -10,7 +10,7 @@ export function readMood(raw: string | null, now = Date.now()): MoodState {
   return { value: 70, updatedAt: now, rewarded: [] };
 }
 export function moodValue(state: MoodState, now = Date.now()): number {
-  return Math.max(20, state.value - Math.max(0, now - state.updatedAt) / 3_600_000 * 2);
+  return Math.max(20, state.value - Math.max(0, now - state.updatedAt) / (30 * 60_000 * 1.5));
 }
 export function rewardMood(state: MoodState, id: string, now = Date.now()): MoodState {
   if (state.rewarded.includes(id)) return state;

@@ -7,6 +7,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
 import { SoftHead } from '../../glasses-web/src/rendering/SoftHead';
+import { SoftJump } from '../../glasses-web/src/rendering/SoftJump';
+import { GroundContact } from '../../glasses-web/src/rendering/GroundContact';
+import { SoftPaws } from './SoftPaws';
+import { samplePetAction } from './PetActionPose';
 import type { WeatherKind } from './LocalWeather';
 import type { WalkingPose } from './WalkingTracker';
 import type { PlayPlayer, PlaySnapshot } from '../../shared/play-protocol';
@@ -29,6 +33,10 @@ interface PetVisual {
   shadow: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   hearts: THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial>[];
   treat: THREE.Group;
+  crumbs: THREE.Mesh[];
+  contact: GroundContact;
+  jumps: SoftJump[];
+  paws: SoftPaws[];
   heads: SoftHead[];
   gaits: SoftGait[];
   playerId: string | null;
@@ -176,7 +184,7 @@ export class Playground {
     const local = this.snapshot?.players.find(player => player.id === this.localPlayerId);
     const pet = this.pets.find(pet => pet.playerId === this.localPlayerId);
     if (!local || !pet || !this.enabled) return;
-    const [x, z] = screenMovement(pet.body.rotation.y, right, down);
+    const [x, z] = screenMovement(pet.yaw, right, down);
     const limit = this.snapshot?.worldLimit ?? 3;
     this.onMove(THREE.MathUtils.clamp(local.targetX + x, -limit, limit), THREE.MathUtils.clamp(local.targetZ + z, -limit, limit));
   }
@@ -426,6 +434,8 @@ export class Playground {
     const model = clone(source);
     const heads: SoftHead[] = [];
     const gaits: SoftGait[] = [];
+    const jumps: SoftJump[] = [];
+    const paws: SoftPaws[] = [];
     model.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       object.geometry = object.geometry.clone();
@@ -436,6 +446,8 @@ export class Playground {
       if (!(object instanceof THREE.SkinnedMesh) && !object.geometry.morphAttributes.position?.length) {
         heads.push(new SoftHead(object));
         gaits.push(new SoftGait(object));
+        jumps.push(new SoftJump(object));
+        paws.push(new SoftPaws(object));
       }
     });
     const bounds = new THREE.Box3().setFromObject(source);
@@ -448,6 +460,7 @@ export class Playground {
     normalized.add(model);
     body.add(normalized);
     root.add(body);
+    const contact = new GroundContact(body, 0, 0.27);
     const ring = this.mesh(new THREE.RingGeometry(0.45, 0.49, 64), new THREE.MeshBasicMaterial({
       color: SLOT_COLORS[slot] ?? SLOT_COLORS[0], opacity: 0.72, transparent: true, depthWrite: false,
     }));
@@ -478,8 +491,14 @@ export class Playground {
     leaf.rotation.x = -0.4;
     treat.add(leaf);
     root.add(treat);
+    const crumbs = Array.from({ length: 6 }, () => {
+      const crumb = this.mesh(new THREE.IcosahedronGeometry(0.025, 0), this.material(0xedb965));
+      crumb.visible = false;
+      root.add(crumb);
+      return crumb;
+    });
     this.scene.add(root);
-    return { root, body, ring, shadow, hearts, treat, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
+    return { root, body, ring, shadow, hearts, treat, crumbs, contact, jumps, paws, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
   }
 
   private resize = (): void => {
@@ -583,9 +602,9 @@ export class Playground {
     const followedPet = this.snapshot ? this.pets.find(pet => pet.playerId === this.localPlayerId) : this.pets[0];
     if (followedPet?.root.visible) {
       const { x, z } = followedPet.root.position;
-      // Follow the rendered heading (including its smoothing), not a stale
-      // compass target, so the pet never swings sideways relative to the view.
-      this.camera.position.set(...followingCamera(followedPet.body.rotation.y, x, z));
+      // Follow the smoothed walking heading. A play animation can turn the body
+      // toward a friend without abruptly swinging the whole meadow around.
+      this.camera.position.set(...followingCamera(followedPet.yaw, x, z));
       this.camera.lookAt(x, 0, z);
       this.sun.position.set(x - 3, 9, z + 5);
       this.sun.target.position.set(x, 0, z);
@@ -646,21 +665,20 @@ export class Playground {
       pet.root.position.z = pet.motion.z;
       pet.distance += travel * 142 / PET_EXTENT;
       const yawDelta = Math.atan2(Math.sin(player.yaw - pet.yaw), Math.cos(player.yaw - pet.yaw));
-      pet.yaw += yawDelta * (reducedMotion ? 1 : 1 - Math.exp(-10 * delta));
+      pet.yaw += yawDelta * (reducedMotion ? 1 : 1 - Math.exp(-6 * delta));
     }
     pet.gaitStrength = THREE.MathUtils.lerp(pet.gaitStrength, reducedMotion ? 0 : Math.min(speed * 1.6, 1), 1 - Math.exp(-8 * delta));
     const action = player?.action;
     const progress = action ? THREE.MathUtils.clamp((serverTime - action.startedAt) / Math.max(1, action.duration), 0, 1) : 1;
     const active = Boolean(action && serverTime >= action.startedAt && progress < 1);
     const envelope = active ? Math.sin(progress * Math.PI) : 0;
-    let lift = 0;
+    const pose = samplePetAction(active ? action?.kind : undefined, progress, reducedMotion);
+    let lift = pose.lift;
     let tilt = reducedMotion ? 0 : Math.sin(seconds * 1.7) * 0.018;
-    let bow = 0;
-    let yaw = pet.yaw;
+    tilt += pose.tilt;
+    let bow = pose.bow;
+    let yaw = pet.yaw + pose.turn;
     if (!reducedMotion && active && action) {
-      if (action.kind === 'wave') tilt += Math.sin(progress * Math.PI * 7) * 0.12 * envelope;
-      if (action.kind === 'feed') bow = Math.sin(progress * Math.PI * 4) * 0.14 * envelope;
-      if (action.kind === 'jump') lift = Math.sin(progress * Math.PI) * 0.7;
       if (action.kind === 'dap') {
         tilt += Math.sin(progress * Math.PI * 8) * 0.1 * envelope;
         bow = Math.sin(progress * Math.PI) * 0.12;
@@ -672,26 +690,48 @@ export class Playground {
         tilt += Math.sin(progress * Math.PI * 6) * 0.055;
       }
     }
-    const stridePhase = pet.distance / 36 * Math.PI * 2;
-    if (!reducedMotion) tilt += Math.sin(stridePhase) * 0.14 * pet.gaitStrength;
-    pet.body.position.y = lift + (reducedMotion ? 0 : (1 - Math.cos(stridePhase * 2)) * 0.025 * pet.gaitStrength);
-    pet.body.rotation.set(0, yaw, tilt * 0.25);
-    for (const head of pet.heads) head.set(tilt, bow);
-    for (const gait of pet.gaits) gait.set(pet.distance, pet.gaitStrength);
+    const stride = pet.distance + pose.stride;
+    const stridePhase = stride / 36 * Math.PI * 2;
+    const gaitStrength = Math.max(pet.gaitStrength, pose.gait) * (1 - pose.tuck);
+    if (!reducedMotion) tilt += Math.sin(stridePhase) * 0.14 * gaitStrength;
+    pet.body.position.set(-Math.sin(pet.yaw) * pose.approach, 0, -Math.cos(pet.yaw) * pose.approach);
+    pet.body.rotation.set(pose.pitch, yaw, tilt * 0.25, 'YXZ');
+    // Measure untucked soles, then fold the feet without cancelling their lift.
+    pet.jumps.forEach(jump => jump.set(pose.crouch, 0));
+    pet.heads.forEach((head, index) => head.set(tilt, bow, pet.jumps[index]?.torsoPitch ?? 0));
+    pet.gaits.forEach(gait => gait.set(stride, gaitStrength));
+    pet.paws.forEach(paws => paws.set(pose.wave, pose.hold));
+    pet.body.position.y = lift - pet.contact.lowestY();
+    pet.jumps.forEach(jump => jump.set(pose.crouch, pose.tuck));
+    pet.shadow.position.set(pet.body.position.x, 0.004, pet.body.position.z);
     pet.shadow.material.opacity = 0.72 - lift * 0.4;
     pet.shadow.scale.setScalar(1 - lift * 0.22);
-    pet.treat.visible = active && action?.kind === 'feed';
-    if (pet.treat.visible) {
-      pet.treat.position.set(Math.sin(yaw) * 0.57, 0.52 + envelope * 0.35, Math.cos(yaw) * 0.57);
-      pet.treat.scale.setScalar(reducedMotion ? 1 : 1 - progress * 0.65);
-    }
+    pet.treat.visible = active && action?.kind === 'feed' && pose.treatScale > 0.001;
+    // The snack waits on the ground in front of the viewer-facing pet, then
+    // follows the paws to the muzzle. Its location is independent of the turn.
+    const snackDistance = THREE.MathUtils.lerp(1.05, 1.2, pose.treatLift);
+    const snackHeight = THREE.MathUtils.lerp(0.11, 0.9, pose.treatLift) + pose.chew * 0.012;
+    pet.treat.position.set(-Math.sin(pet.yaw) * snackDistance + Math.cos(pet.yaw) * 0.17, snackHeight,
+      -Math.cos(pet.yaw) * snackDistance - Math.sin(pet.yaw) * 0.17);
+    pet.treat.scale.setScalar(Math.max(0, pose.treatScale));
+    pet.treat.rotation.z = pose.chew * 0.08;
+    pet.crumbs.forEach((crumb, index) => {
+      crumb.visible = !reducedMotion && active && action?.kind === 'feed' && progress > 0.45 && progress < 0.65;
+      if (!crumb.visible) return;
+      const phase = ((progress - 0.45) * 18 + index / 6) % 1;
+      const spread = (index - 2.5) * 0.055 * phase;
+      crumb.position.set(pet.treat.position.x + Math.cos(pet.yaw) * spread,
+        snackHeight - phase * phase * 0.65, pet.treat.position.z - Math.sin(pet.yaw) * spread);
+      crumb.scale.setScalar(1 - phase);
+    });
     for (let index = 0; index < pet.hearts.length; index++) {
       const heart = pet.hearts[index]!;
-      heart.visible = active && action?.kind !== 'jump' && (reducedMotion ? index === 0 : true);
+      const joy = action?.kind === 'feed' || action?.kind === 'wave' ? pose.joy : envelope;
+      heart.visible = active && action?.kind !== 'jump' && joy > 0 && (reducedMotion ? index === 0 : true);
       if (!heart.visible) continue;
       const phase = reducedMotion ? 0.4 : (progress * 1.6 + index * 0.24) % 1;
-      heart.material.opacity = Math.sin(phase * Math.PI) * envelope * 0.9;
-      heart.position.set((index - 1.5) * 0.22, 1.45 + phase * 0.75, 0);
+      heart.material.opacity = Math.sin(phase * Math.PI) * joy * 0.9;
+      heart.position.set(pet.body.position.x + (index - 1.5) * 0.22, 1.45 + phase * 0.75, pet.body.position.z);
       heart.quaternion.copy(this.camera.quaternion);
       heart.scale.setScalar(0.095 + Math.sin(phase * Math.PI) * 0.035);
     }

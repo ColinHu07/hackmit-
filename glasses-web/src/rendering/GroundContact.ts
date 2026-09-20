@@ -8,7 +8,7 @@ export class GroundContact {
   private readonly inverseBody = new THREE.Matrix4();
   private readonly local = new THREE.Matrix4();
 
-  constructor(private readonly body: THREE.Object3D, private readonly footY: number) {
+  constructor(private readonly body: THREE.Object3D, private readonly footY: number, supportDepth = 26) {
     body.updateWorldMatrix(true, true);
     this.inverseBody.copy(body.matrixWorld).invert();
     body.traverse(object => {
@@ -18,7 +18,7 @@ export class GroundContact {
       const positions = object.geometry.getAttribute('position');
       for (let i = 0; i < positions.count; i++) {
         this.point.fromBufferAttribute(positions, i).applyMatrix4(this.local);
-        if (this.point.y <= footY + 26) indices.push(i);
+        if (this.point.y <= footY + supportDepth) indices.push(i);
       }
       this.support.push({ mesh: object, indices });
     });
