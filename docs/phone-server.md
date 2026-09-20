@@ -1,5 +1,15 @@
 # Phone playground server
 
+## Automatic shared playground
+
+The default app flow joins one shared playground automatically. Set the same server URL on both phones and open the app: each device gets its own player ID and pet, and connected pets appear on both screens. No room code, squad quest, location permission, or nearby invitation is required to join. The existing four-player limit applies; a fifth player sees a full-playground message rather than silently entering a different room. Private room links and opt-in nearby discovery remain available.
+
+**Both the client and the host's Node server must be updated.** Older servers reject the new `lobby` message; the app explains that the host needs to update and restart. For the team server at `ws://10.189.108.228:8788/play`, the host must deploy this version and restart their existing process. For a backend-only host, run `npm ci` and `HOST=0.0.0.0 PORT=8788 npm run play:server` after updating the source. For a host serving the website too, run `npm ci && npm run build:phone`, then restart with `HOST=0.0.0.0 PORT=8788 npm run web:start`. Restarting loses existing in-memory rooms.
+
+Native apps need a rebuilt/reinstalled bundle; browsers need the updated website. Opening Server settings and saving an address leaves the previous playground and joins the new server automatically. Leave playground pauses joining until Connect is tapped or the app is opened again. Lobby reconnect tokens are saved privately on the device per server URL; expired tokens are replaced automatically after the server's reconnect grace period or a restart. These are temporary session identities, not permanent accounts or saved avatars.
+
+Wire protocol: send `{ "type": "lobby", "name": "Alex" }` with an optional private `playerToken` to resume. A regular `welcome` is returned, and shared-playground snapshots carry `publicLobby: true`. The server chooses the room internally; users do not select or exchange its code.
+
 The phone playground uses a separate Node WebSocket service from the glasses landmark relay. It supports up to four real players per room, many rooms at once, and two-player nearby discovery encounters; there is no simulated second player. Room and presence state live in memory and disappear on restart. The current playground shares a virtual space, not physical AR anchors.
 
 ## Share a phone-browser link

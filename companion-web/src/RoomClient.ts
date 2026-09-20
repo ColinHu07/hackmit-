@@ -16,7 +16,7 @@ interface Callbacks {
   snapshot: (snapshot: CompatibleSnapshot, membership: Membership) => void;
   error: (message: string, terminal?: boolean) => void;
 }
-type Entry = { type: 'create'; name: string } | { type: 'join'; name: string; roomCode: string; playerToken?: string };
+type Entry = { type: 'lobby'; name: string; playerToken?: string } | { type: 'create'; name: string } | { type: 'join'; name: string; roomCode: string; playerToken?: string };
 
 export function normalizeServerUrl(raw: string): string {
   const url = new URL(raw.trim());
@@ -76,7 +76,9 @@ export class RoomClient {
     socket.onopen = () => {
       if (socket !== this.socket || this.stopped) return;
       const entry = this.membership
-        ? { type: 'join', roomCode: this.membership.roomCode, playerToken: this.membership.playerToken, name: this.membership.name }
+        ? this.entry?.type === 'lobby'
+          ? { type: 'lobby', playerToken: this.membership.playerToken, name: this.membership.name }
+          : { type: 'join', roomCode: this.membership.roomCode, playerToken: this.membership.playerToken, name: this.membership.name }
         : this.entry;
       socket.send(JSON.stringify(entry));
     };
@@ -86,6 +88,18 @@ export class RoomClient {
       try { message = JSON.parse(event.data) as ServerMessage; }
       catch { this.fail('The server sent an unreadable response.'); return; }
       if (message.type === 'error') {
+        if (!this.connected && this.entry?.type === 'lobby') {
+          if (message.code === 'invalid_token' && (this.membership || this.entry.playerToken)) {
+            this.membership = null;
+            this.entry = { type: 'lobby', name: this.entry.name };
+            socket.send(JSON.stringify(this.entry));
+            return;
+          }
+          if (message.code === 'invalid_message') {
+            this.fail('This server needs an update for automatic joining. Ask the host to update and restart the Bondimals server.');
+            return;
+          }
+        }
         if (!this.connected) this.fail(message.message);
         else this.callbacks.error(message.message);
         return;

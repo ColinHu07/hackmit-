@@ -43,6 +43,70 @@ const welcome = client => client.next(message => message.type === 'welcome');
 const error = (client, code) => client.next(message => message.type === 'error' && message.code === code);
 const state = (client, match) => client.next(message => message.type === 'snapshot' && match(message.snapshot)).then(message => message.snapshot);
 
+test('phones automatically share one lobby, with independent pets, live motion, and private reconnect tokens', async t => {
+  const { connect } = await setup(t);
+  const a = await connect();
+  const b = await connect();
+  a.send({ type: 'lobby', name: 'Alex' });
+  b.send({ type: 'lobby', name: 'Blair' });
+  const [first, second] = await Promise.all([welcome(a), welcome(b)]);
+  assert.equal(first.roomCode, second.roomCode);
+  assert.equal(first.snapshot.publicLobby, true);
+  assert.notEqual(first.playerId, second.playerId);
+  assert.notEqual(first.playerToken, second.playerToken);
+  const together = await state(a, s => s.players.length === 2);
+  assert.equal(new Set(together.players.map(p => p.slot)).size, 2);
+  assert.ok(together.players.every(p => !('token' in p) && !('playerToken' in p)));
+  a.send({ type: 'move', x: 0, z: 1 });
+  await state(b, s => s.players.some(p => p.id === first.playerId && p.targetZ === 1));
+  b.send({ type: 'action', action: 'wave' });
+  await state(a, s => s.players.some(p => p.id === second.playerId && p.action?.kind === 'wave'));
+  a.ws.close();
+  await state(b, s => s.players.some(p => p.id === first.playerId && !p.connected));
+  const resumed = await connect();
+  resumed.send({ type: 'lobby', name: 'Alex', playerToken: first.playerToken });
+  assert.equal((await welcome(resumed)).playerId, first.playerId);
+  const privateClient = await connect();
+  privateClient.send({ type: 'create', name: 'Private' });
+  const privateRoom = await welcome(privateClient);
+  assert.notEqual(privateRoom.roomCode, first.roomCode);
+  assert.equal(privateRoom.snapshot.publicLobby, undefined);
+  const intruder = await connect();
+  intruder.send({ type: 'lobby', name: 'Other', playerToken: privateRoom.playerToken });
+  await error(intruder, 'invalid_token');
+});
+
+test('a full shared lobby rejects overflow instead of silently splitting friends into different rooms', async t => {
+  const { connect } = await setup(t);
+  const clients = [];
+  let code;
+  for (let i = 0; i < 4; i++) {
+    const client = await connect();
+    clients.push(client);
+    client.send({ type: 'lobby', name: `Player ${i}` });
+    const joined = await welcome(client);
+    code ??= joined.roomCode;
+    assert.equal(joined.roomCode, code);
+  }
+  const fifth = await connect();
+  fifth.send({ type: 'lobby', name: 'Fifth' });
+  await error(fifth, 'room_full');
+  clients[0].send({ type: 'leave' });
+  await state(clients[1], s => s.players.length === 3);
+  fifth.send({ type: 'lobby', name: 'Fifth' });
+  assert.equal((await welcome(fifth)).roomCode, code);
+});
+
+test('lobby messages validate names and tokens and respect server admission limits', async t => {
+  assert.equal(parsePlayMessage({ type: 'lobby', name: '' }), null);
+  assert.equal(parsePlayMessage({ type: 'lobby', name: 'Alex', playerToken: 'bad' }), null);
+  assert.equal(parsePlayMessage({ type: 'lobby', name: 'Alex', roomCode: 'ABC234' }), null);
+  const { connect } = await setup(t, { maxRooms: 0 });
+  const client = await connect();
+  client.send({ type: 'lobby', name: 'Alex' });
+  await error(client, 'server_full');
+});
+
 test('two phones share authoritative movement, quests, and one cooperative bond reward', async t => {
   const { origin, connect } = await setup(t);
   assert.deepEqual(await (await fetch(origin + '/health')).json(), {

@@ -54,7 +54,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div id="room-input-wrap" hidden><label for="room-input">Your friend's room code</label><input id="room-input" name="room" maxlength="6" minlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC123" pattern="[A-Za-z0-9]{6}" /></div>
           <button class="primary-button" id="enter-button" type="submit" disabled><span id="enter-label">Loading your pet…</span>${icon('arrow')}</button>
           <p class="form-note" id="entry-note">${icon('people')} Turn a nearby pet into a real hello.</p>
-          <button type="button" id="entry-mode" class="entry-mode">Use a room code instead</button>
+          <button type="button" id="entry-mode" class="entry-mode">Private room options</button>
+          <button type="button" id="nearby-mode" class="entry-mode">Find nearby pets with location</button>
         </form>
         <div class="little-note"><span class="note-line"></span><p>The best adventures<br>start with a little hello.</p></div>
       </div>
@@ -144,7 +145,8 @@ if (nativeSelection.changed) {
   clearResume();
 }
 let serverUrl = params.get('server') || nativeSelection.url || import.meta.env.VITE_PLAY_SERVER_URL || devServer;
-let mode: 'nearby' | 'create' | 'join' = params.has('room') ? 'join' : 'nearby';
+let mode: 'lobby' | 'nearby' | 'create' | 'join' = params.has('room') ? 'join' : 'lobby';
+let lobbyPaused = false;
 let walking = false;
 const walkingTracker = new WalkingTracker();
 const stepDetector = new StepDetector();
@@ -216,8 +218,23 @@ const weather = new LocalWeather(value => {
   el('local-weather').hidden = isNativePhone() || value.kind !== 'unknown';
 });
 let autoNearby = stored('bondimals:auto-nearby') !== 'off';
+function lobbyTokenKey(): string { return `bondimals:lobby-token:${normalizeServerUrl(serverUrl)}`; }
+function joinSharedPlayground(): void {
+  if (!ready || document.hidden || lobbyPaused || membership || connection === 'connecting' || connection === 'reconnecting') return;
+  stopNearby();
+  clearResume();
+  const name = nameInput.value.trim() || 'Explorer';
+  save('bondimals:name', name);
+  const token = stored(lobbyTokenKey());
+  el('error-message').hidden = true;
+  client.start(serverUrl, { type: 'lobby', name, ...(/^[a-f0-9]{48}$/.test(token ?? '') ? { playerToken: token! } : {}) });
+}
 function resumeAutomaticNearby(): void {
   renderMood();
+  if (mode === 'lobby') {
+    try { joinSharedPlayground(); } catch (cause) { error(cause instanceof Error ? cause.message : 'Check your server settings.'); }
+    return;
+  }
   if (!isNativePhone()) return;
   if (!ready || !autoNearby || membership || connection === 'connecting' || connection === 'reconnecting' || mode !== 'nearby' || document.hidden || (nearbyActive && locationActive)) return;
   try { startNearby(); } catch (cause) { error(cause instanceof Error ? cause.message : 'Check your server settings.'); }
@@ -254,9 +271,9 @@ function error(message: string, terminal = false): void {
 }
 function updateEntry(): void {
   const busy = connection === 'connecting';
-  el('manual-modes').hidden = mode === 'nearby';
+  el('manual-modes').hidden = mode === 'nearby' || mode === 'lobby';
   el('location-explainer').hidden = mode !== 'nearby';
-  el('entry-mode').textContent = mode === 'nearby' ? 'Use a room code instead' : 'Find nearby pets instead';
+  el('entry-mode').textContent = mode === 'lobby' || mode === 'nearby' ? 'Private room options' : 'Back to shared playground';
   try { el('location-host').textContent = `Game server: ${new URL(serverUrl).host}`; } catch { el('location-host').textContent = 'Set your game server in Server settings.'; }
   el('entry-note').textContent = mode === 'nearby' ? 'Turn a nearby pet into a real hello.' : 'Up to 4 players · no download or location needed';
   {
@@ -273,6 +290,13 @@ function updateEntry(): void {
   el<HTMLButtonElement>('create-tab').disabled = busy;
   el<HTMLButtonElement>('join-tab').disabled = busy;
   el<HTMLButtonElement>('entry-mode').disabled = busy;
+  el<HTMLButtonElement>('nearby-mode').disabled = busy;
+  if (mode === 'lobby') {
+    el('home-title').innerHTML = 'Little pets.<br><em>Better together.</em>';
+    el('home-intro').textContent = 'Use the same server on both phones. Your pets appear together automatically.';
+    el('entry-note').textContent = 'One shared playground · up to 4 players · no room code needed';
+    el('enter-label').textContent = !ready ? 'Loading your pet…' : busy ? 'Connecting to your server…' : 'Connect to shared playground';
+  }
   nameInput.disabled = busy;
   codeInput.disabled = busy;
 }
@@ -296,7 +320,7 @@ function updateControls(): void {
   el<HTMLButtonElement>('confirm-dap').disabled = !connected || !friend || !!snapshot?.encounter?.dapConfirmed.includes(membership?.playerId ?? '') || !!snapshot?.encounter?.dapComplete;
   el('scene-hint').textContent = connection === 'offline' ? 'Offline. Leave the playground to connect again.'
     : !connected ? 'Reconnecting. Your pets are waiting for you.'
-    : !friend ? snapshot?.legacyServer ? 'Invite a friend using this room code.' : 'Touch grass to finish your solo quest, or invite a friend.'
+    : !friend ? snapshot?.publicLobby ? 'Your friend appears automatically when they open the app on this server.' : snapshot?.legacyServer ? 'Invite a friend using this room code.' : 'Touch grass to finish your solo quest, or invite a friend.'
     : near ? 'You’re close! Wave hello or play together.' : 'Tap to move, or meet in the middle.';
 }
 function setConnection(state: ConnectionState): void {
@@ -305,7 +329,7 @@ function setConnection(state: ConnectionState): void {
   const labels: Record<ConnectionState, string> = { idle: 'Pet preview', connecting: 'Connecting', connected: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
   el('connection-status').dataset.state = state;
   el('connection-label').textContent = labels[state];
-  el<HTMLButtonElement>('server-settings').disabled = !!membership || state === 'connecting';
+  el<HTMLButtonElement>('server-settings').disabled = false;
   updateEntry();
   updateControls();
   if (state === 'connected') startWalking();
@@ -346,7 +370,7 @@ const client = new RoomClient({
   state: setConnection,
   error,
   snapshot(next, member) {
-    const entering = !membership;
+    const entering = membership?.playerId !== member.playerId;
     membership = member;
     snapshot = next;
     el('server-compatibility').hidden = !next.legacyServer;
@@ -354,7 +378,8 @@ const client = new RoomClient({
     document.querySelector<HTMLButtonElement>('[data-action="dap"]')!.hidden = !!next.legacyServer;
     if (entering) {
       stopWalking();
-      try { sessionStorage.setItem(resumeKey, JSON.stringify({ ...member, serverUrl })); } catch { /* Reconnect still works without persistent storage. */ }
+      if (next.publicLobby) save(lobbyTokenKey(), member.playerToken);
+      else try { sessionStorage.setItem(resumeKey, JSON.stringify({ ...member, serverUrl })); } catch { /* Reconnect still works without persistent storage. */ }
     }
     el('home-panel').hidden = true;
     el('nearby-panel').hidden = true;
@@ -369,10 +394,11 @@ const client = new RoomClient({
     const nearbyFriend = next.players.find(player => player.id !== member.playerId && player.connected);
     const nearFriend = !!localPlayer && next.players.some(player => player.id !== member.playerId && player.connected && Math.hypot(player.x - localPlayer.x, player.z - localPlayer.z) <= 1.5);
     el('connection-label').textContent = next.legacyServer ? `${connectedCount} here` : `${connectedCount}/${next.encounter ? 2 : 4} here`;
-    el<HTMLButtonElement>('server-settings').disabled = true;
-    el('room-invite').hidden = !!next.encounter;
+    el<HTMLButtonElement>('server-settings').disabled = false;
+    el('room-invite').hidden = !!next.encounter || !!next.publicLobby;
     el('dap-quest').hidden = !next.encounter;
     el('invite-note').textContent = next.encounter ? 'You found each other nearby. Make this a real-world hello.' : connectedCount >= 3 ? 'Squad is here! Circle up for your shared quest.' : connectedCount === 2 ? 'Duo quest unlocked. Meet each other in the pen.' : 'Only players using this room code appear here. Friends in nearby discovery must join this room, or you can leave and find them in nearby mode.';
+    if (next.publicLobby) el('invite-note').textContent = `Shared server: ${new URL(serverUrl).host}. Friends appear automatically when they open the app using this server.`;
     if (next.encounter) {
       const confirmed = next.encounter.dapConfirmed.includes(member.playerId);
       el('dap-status').textContent = next.encounter.dapComplete ? 'You both confirmed your hello. One shared moment earned!' : confirmed ? 'You confirmed. Waiting for your friend to confirm too.' : 'Both players confirm after meeting in person.';
@@ -612,7 +638,8 @@ function stopNearby(): void {
   setConnection('idle');
 }
 
-el('entry-mode').addEventListener('click', () => { mode = mode === 'nearby' ? 'join' : 'nearby'; updateEntry(); });
+el('entry-mode').addEventListener('click', () => { mode = mode === 'nearby' || mode === 'lobby' ? 'join' : 'lobby'; updateEntry(); });
+el('nearby-mode').addEventListener('click', () => { mode = 'nearby'; updateEntry(); });
 el('start-squad-room').addEventListener('click', () => { stopNearby(); clearResume(); client.start(serverUrl, { type: 'create', name: nameInput.value.trim() }); });
 el('join-nearby-room').addEventListener('click', () => { stopNearby(); mode = 'join'; updateEntry(); codeInput.focus(); });
 el('stop-nearby').addEventListener('click', () => { autoNearby = false; save('bondimals:auto-nearby', 'off'); stopNearby(); });
@@ -639,13 +666,15 @@ el('entry-form').addEventListener('submit', event => {
   el('error-message').hidden = true;
   try {
     serverUrl = normalizeServerUrl(serverUrl);
-    if (mode === 'nearby') startNearby();
+    if (mode === 'lobby') { lobbyPaused = false; joinSharedPlayground(); }
+    else if (mode === 'nearby') startNearby();
     else client.start(serverUrl, mode === 'create' ? { type: 'create', name } : { type: 'join', name, roomCode: codeInput.value.trim().toUpperCase() });
   } catch (cause) { error(cause instanceof Error ? cause.message : 'Check the multiplayer server address.'); }
 });
-el('leave-button').addEventListener('click', () => {
+function leavePlayground(): void {
   stopWalking();
   clearResume();
+  if (snapshot?.publicLobby) save(lobbyTokenKey(), '');
   membership = null;
   snapshot = null;
   lastRoster = '';
@@ -659,12 +688,13 @@ el('leave-button').addEventListener('click', () => {
   el('error-message').hidden = true;
   el('app').classList.remove('in-room');
   el('quest-tools').hidden = false;
-  mode = 'nearby';
+  mode = 'lobby';
+  lobbyPaused = true;
   el('scene-caption').textContent = 'Small paws. Big adventures.';
   updateEntry();
-  resumeAutomaticNearby();
   startWalking();
-});
+}
+el('leave-button').addEventListener('click', leavePlayground);
 document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
   button.addEventListener('click', () => {
     el('error-message').hidden = true;
@@ -868,7 +898,10 @@ el('close-settings').addEventListener('click', () => settings.close());
 el('settings-form').addEventListener('submit', event => {
   event.preventDefault();
   try {
-    serverUrl = normalizeServerUrl(el<HTMLInputElement>('server-url').value);
+    const nextServer = normalizeServerUrl(el<HTMLInputElement>('server-url').value);
+    if (nextServer !== serverUrl || !snapshot?.publicLobby || connection !== 'connected') leavePlayground();
+    serverUrl = nextServer;
+    lobbyPaused = false;
     save('bondimals:server', serverUrl);
     updateEntry();
     settings.close();
@@ -899,7 +932,7 @@ try {
   el('scene-loading').hidden = true;
   updateEntry();
   const saved = readResume();
-  if (saved && (!params.has('room') || params.get('room')?.toUpperCase() === saved.roomCode)) {
+  if (saved && mode !== 'lobby' && saved.serverUrl === serverUrl && (!params.has('room') || params.get('room')?.toUpperCase() === saved.roomCode)) {
     try {
       serverUrl = normalizeServerUrl(saved.serverUrl);
       client.start(serverUrl, { type: 'join', name: saved.name, roomCode: saved.roomCode, playerToken: saved.playerToken });

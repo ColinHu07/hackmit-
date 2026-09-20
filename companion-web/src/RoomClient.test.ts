@@ -75,6 +75,44 @@ afterEach(() => {
 });
 
 describe('RoomClient session lifecycle', () => {
+  it('automatically joins without a room code and resumes its own lobby pet', () => {
+    const { client, callbacks } = setup();
+    client.start('ws://play.example/play', { type: 'lobby', name: 'Alex' });
+    const joined = socket(1);
+    joined.open();
+    expect(joined.commands()).toEqual([{ type: 'lobby', name: 'Alex' }]);
+    joined.receive(welcome);
+    joined.serverClose();
+    vi.advanceTimersByTime(500);
+    const resumed = socket(2);
+    resumed.open();
+    expect(resumed.commands()).toEqual([{ type: 'lobby', name: 'Alex', playerToken: welcome.playerToken }]);
+    resumed.receive(welcome);
+    expect(callbacks.state).toHaveBeenLastCalledWith('connected');
+  });
+
+  it('recovers an expired lobby identity after a server restart without requiring a code', () => {
+    const { client, callbacks } = setup();
+    client.start('ws://play.example/play', { type: 'lobby', name: 'Alex', playerToken: welcome.playerToken });
+    const joined = socket(1);
+    joined.open();
+    joined.receive({ type: 'error', code: 'invalid_token', message: 'Expired' });
+    expect(joined.commands().at(-1)).toEqual({ type: 'lobby', name: 'Alex' });
+    joined.receive(welcome);
+    expect(callbacks.state).toHaveBeenLastCalledWith('connected');
+    expect(callbacks.error).not.toHaveBeenCalled();
+  });
+
+  it('explains that the host needs an update when an older server rejects automatic joining', () => {
+    const { client, callbacks } = setup();
+    client.start('ws://play.example/play', { type: 'lobby', name: 'Alex' });
+    const joined = socket(1);
+    joined.open();
+    joined.receive({ type: 'error', code: 'invalid_message', message: 'Unknown command' });
+    expect(callbacks.error).toHaveBeenLastCalledWith(expect.stringContaining('update and restart'), true);
+    expect(joined.commands()).toEqual([{ type: 'lobby', name: 'Alex' }]);
+  });
+
   it('resumes the same player and token after a dropped connection', () => {
     const { client, callbacks, first } = setup();
     first.open();

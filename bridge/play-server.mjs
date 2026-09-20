@@ -21,6 +21,7 @@ export function createPlayServer(options = {}) {
   const serveWeb = options.webRoot ? createStaticWebHandler(options.webRoot) : null;
   const origins = new Set(options.allowedOrigins ?? []);
   const rooms = new Map();
+  let publicLobbyCode = null;
   const connections = new Set();
   const addresses = new Map();
   const photoVerifier = options.photoVerifier ?? createQuestPhotoVerifier(options.meta);
@@ -185,6 +186,7 @@ export function createPlayServer(options = {}) {
         endsAt: room.raid?.endsAt ?? null,
       },
       quest: { ...room.quest }, notice: room.notice,
+      ...(room.code === publicLobbyCode ? { publicLobby: true } : {}),
       ...(room.encounter ? { encounter: {
         kind: 'nearby', dapConfirmed: [...room.encounter.dapConfirmed], dapComplete: room.encounter.dapComplete,
       } } : {}),
@@ -341,7 +343,7 @@ export function createPlayServer(options = {}) {
   }
   function processMessage(ws, message) {
     const now = Date.now();
-    if (message.type === 'create' || message.type === 'join') {
+    if (message.type === 'create' || message.type === 'join' || message.type === 'lobby') {
       if (ws.session) return fail(ws, 'already_joined', 'Leave your current room before joining another.');
       if (!consume(ws.quota.admissions, 60, 0.5, now)) return fail(ws, 'rate_limited', 'Too many room requests. Try again shortly.');
       if (message.type === 'create') {
@@ -349,7 +351,16 @@ export function createPlayServer(options = {}) {
         addPlayer(ws, createRoom(), message.name);
         return;
       }
-      const room = rooms.get(message.roomCode);
+      let room;
+      if (message.type === 'lobby') {
+        room = rooms.get(publicLobbyCode);
+        if (!room) {
+          if (rooms.size >= maxRooms) return fail(ws, 'server_full', 'The playground is full. Try again later.');
+          room = createRoom();
+          publicLobbyCode = room.code;
+          room.notice = 'Friends using this server appear here automatically.';
+        }
+      } else room = rooms.get(message.roomCode);
       if (!room) return fail(ws, 'room_not_found', 'That room does not exist or has expired.');
       // Reap expired reservations before admission, even between simulation ticks.
       reapPlayers(room, now);
@@ -364,7 +375,9 @@ export function createPlayServer(options = {}) {
         return;
       }
       if (room.encounter) return fail(ws, 'private_room', 'This nearby playground requires your invitation session.');
-      if (room.players.size >= PLAY_MAX_PLAYERS) return fail(ws, 'room_full', 'This pen already has four players. Start another pen for a new squad.');
+      if (room.players.size >= PLAY_MAX_PLAYERS) return fail(ws, 'room_full', room.code === publicLobbyCode
+        ? 'This server’s shared playground is full (4 players). Try again when someone leaves.'
+        : 'This pen already has four players. Start another pen for a new squad.');
       addPlayer(ws, room, message.name);
       return;
     }

@@ -49,6 +49,7 @@ export interface RaidBossState {
 }
 
 export interface PlaySnapshot {
+  publicLobby?: true;
   roomCode: string;
   serverTime: number;
   players: PlayPlayer[];
@@ -66,6 +67,7 @@ export interface PlaySnapshot {
 }
 
 export type PlayClientMessage =
+  | { type: 'lobby'; name: string; playerToken?: string }
   | { type: 'create'; name: string }
   | { type: 'join'; roomCode: string; name: string; playerToken?: string }
   | { type: 'heading'; yaw: number }

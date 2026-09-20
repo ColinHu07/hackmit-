@@ -11,6 +11,7 @@ export const PLAY_MAX_MESSAGE_BYTES = 1024;
 export function parsePlayMessage(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const allowed = {
+    lobby: ['type', 'name', 'playerToken'],
     create: ['type', 'name'], join: ['type', 'roomCode', 'name', 'playerToken'],
     heading: ['type', 'yaw'], move: ['type', 'x', 'z'], action: ['type', 'action'], leave: ['type'], confirm_dap: ['type'], ready_squad_quest: ['type'], ready_raid: ['type'],
   };
@@ -33,6 +34,8 @@ export function parsePlayMessage(input) {
   const name = input.name.trim().replace(/\s+/g, ' ');
   if (!name || Array.from(name).length > 24 || /[\u0000-\u001f\u007f]/u.test(name)) return null;
   if (input.type === 'create') return { type: 'create', name };
+  if (input.playerToken !== undefined && (typeof input.playerToken !== 'string' || !/^[a-f0-9]{48}$/.test(input.playerToken))) return null;
+  if (input.type === 'lobby') return { type: 'lobby', name, ...(input.playerToken === undefined ? {} : { playerToken: input.playerToken }) };
   if (typeof input.roomCode !== 'string' || input.roomCode.length > 12) return null;
   const roomCode = input.roomCode.trim().toUpperCase();
   if (roomCode.length !== 6 || [...roomCode].some(char => !PLAY_ROOM_ALPHABET.includes(char))) return null;

@@ -42,16 +42,18 @@ An unsigned simulator build is available with `BONDIMALS_SERVER_URL=ws://127.0.0
 
 ## Native controls
 
+### Automatic multiplayer
+
+Set the same URL in **Server settings** on both phones. The app automatically joins that server's shared playground with a separate pet for each device, up to four players. Room codes and squad quests are not required. **The host must run the updated server supporting automatic joining**, and both phones need the updated app bundle. An older host produces an explicit update-required message. See [server deployment instructions](../docs/phone-server.md#automatic-shared-playground).
+
 ### Play with a friend on a laptop
 
 Use `ws://10.189.108.228:8788/play` in the native app's **Server settings** while on
 the team's Wi-Fi. The browser-sharing command must use the same upstream:
 `npm run web:share -- --provider serveo --server ws://10.189.108.228:8788/play`.
-Give the printed HTTPS link to your laptop friend. One player creates a room and
-the other enters its code; sharing a server alone does not put everyone in one
-room. On the phone, **Start a squad quest room** opens a room from the nearby
-screen, or stop discovery and select **Use a room code instead** to join.
-Room-code play works even when the laptop cannot obtain precise location.
+Give the printed HTTPS link to your laptop friend. With the updated server and
+clients, both join its shared playground automatically. Location is not required.
+Private rooms remain available through **Private room options**.
 
 For a preconfigured build, set `BONDIMALS_SERVER_URL` to the LAN address and
 `BONDIMALS_WEB_URL` to the printed HTTPS link when running the build script. The
