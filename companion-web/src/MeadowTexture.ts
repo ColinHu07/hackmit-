@@ -9,13 +9,16 @@ export function meadowTexture(): THREE.CanvasTexture {
   let seed = 197;
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
   ctx.fillStyle = '#91aa72'; ctx.fillRect(0, 0, 512, 512);
-  // Broad patches help read translation even on small screens.
-  for (let row = 0; row < 8; row++) for (let col = 0; col < 8; col++) {
-    const x = col * 64, y = row * 64;
-    ctx.fillStyle = (row + col) % 2 ? '#9bb67c' : '#89a568';
-    ctx.globalAlpha = 0.55; ctx.fillRect(x, y, 64, 64);
-    ctx.globalAlpha = 0.28; ctx.fillStyle = '#d1cf9a';
-    ctx.beginPath(); ctx.ellipse(x + 18 + random() * 28, y + 18 + random() * 28, 15 + random() * 15, 9 + random() * 8, random() * Math.PI, 0, Math.PI * 2); ctx.fill();
+  // Soft irregular patches, with seamless wrapping at the texture edges.
+  // Large color changes read as meadow habitats instead of checkerboard tiles.
+  for (let i = 0; i < 75; i++) {
+    const x = random() * 512, y = random() * 512, radius = 22 + random() * 65;
+    for (const dx of [-512, 0, 512]) for (const dy of [-512, 0, 512]) {
+      const gradient = ctx.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, radius);
+      gradient.addColorStop(0, i % 3 ? 'rgba(61,105,43,0.27)' : 'rgba(227,210,141,0.38)');
+      gradient.addColorStop(1, 'rgba(145,170,114,0)');
+      ctx.fillStyle = gradient; ctx.fillRect(x + dx - radius, y + dy - radius, radius * 2, radius * 2);
+    }
   }
   ctx.globalAlpha = 1;
   for (let i = 0; i < 1800; i++) {
@@ -36,7 +39,7 @@ export function meadowTexture(): THREE.CanvasTexture {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(6, 6);
+  texture.repeat.set(2, 2);
   texture.anisotropy = 4;
   return texture;
 }

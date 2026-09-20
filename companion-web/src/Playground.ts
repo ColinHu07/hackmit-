@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { followingCamera, screenMovement, walkingPlayer } from './WalkingView';
 import { meadowTexture, pawTexture } from './MeadowTexture';
+import { meadowDetails } from './MeadowDetails';
+import { SmoothWalk } from './SmoothWalk';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
@@ -33,6 +35,7 @@ interface PetVisual {
   distance: number;
   gaitStrength: number;
   yaw: number;
+  motion: SmoothWalk;
 }
 
 /** Shared room coordinates, or an illustrative arrangement of nearby pets. */
@@ -146,7 +149,7 @@ export class Playground {
 
   setWeather(kind: WeatherKind): void {
     this.weatherKind = kind;
-    this.flowers.visible = kind === 'sunny';
+    this.flowers.visible = kind !== 'snow';
     this.weatherParticles.visible = kind === 'rain' || kind === 'snow';
     this.groundMaterial.color.set(kind === 'snow' ? 0xe5efff : kind === 'rain' ? 0xa5bfba : kind === 'night' ? 0x9baac5 : 0xffffff);
     for (const footprint of this.footprints) footprint.mesh.material.color.set(kind === 'night' ? 0xf1dba9 : 0x455c35);
@@ -215,6 +218,7 @@ export class Playground {
       } else if (player && pet.playerId !== player.id) {
         pet.playerId = player.id;
         pet.root.position.set(player.x, 0.035, player.z);
+        pet.motion.reset(player.x, player.z);
         pet.yaw = player.yaw;
         pet.distance = 0;
         pet.gaitStrength = 0;
@@ -302,6 +306,7 @@ export class Playground {
     this.disposeResources();
     this.scene.traverse((object) => {
       if (object instanceof THREE.DirectionalLight) object.shadow.dispose();
+      if (object instanceof THREE.InstancedMesh) object.dispose();
     });
     this.scene.clear();
     this.renderer.dispose();
@@ -361,59 +366,12 @@ export class Playground {
     underside.position.y = -0.87;
     this.scene.add(underside);
 
-    // Quiet markings make the board easy to read without drawing a literal grid.
-    for (const radius of [1.05, 2.3]) {
-      const marking = this.mesh(new THREE.RingGeometry(radius, radius + 0.018, 72), new THREE.MeshBasicMaterial({
-        color: 0xf8f8e8, transparent: true, opacity: 0.3, depthWrite: false,
-      }));
-      marking.rotation.x = -Math.PI / 2;
-      marking.position.y = 0.009;
-      this.scene.add(marking);
+    const details = meadowDetails();
+    for (const group of [details.plants, details.flowers]) {
+      group.traverse(object => { if (object instanceof THREE.Mesh) this.trackMesh(object); });
     }
-    const stoneMaterial = this.material(0xdbdbc7);
-    const grassMaterial = this.material(0x8da77b);
-    const flowerMaterial = this.material(0xfff3ce);
-    const flowerCenterMaterial = this.material(0xd7b768);
-    const stoneGeometry = new THREE.DodecahedronGeometry(1, 0);
-    const bladeGeometry = new THREE.ConeGeometry(0.05, 0.24, 4);
-    const flowerGeometry = new THREE.SphereGeometry(0.047, 6, 4);
-    // Deterministic placement means the same shared place appears on every device.
-    for (let index = 0; index < 30; index++) {
-      const side = index % 4;
-      const along = -2.9 + Math.floor(index / 4) * 0.82;
-      const edge = 3.45 + Math.sin(index * 3.7) * 0.09;
-      const x = side === 0 ? -edge : side === 1 ? edge : along;
-      const z = side === 2 ? -edge : side === 3 ? edge : along;
-      if (index % 5 === 0) {
-        const stone = this.mesh(stoneGeometry, stoneMaterial);
-        stone.position.set(x, 0.09, z);
-        stone.scale.set(0.17 + (index % 3) * 0.025, 0.11, 0.13);
-        stone.rotation.set(0.2, index, 0.15);
-        stone.castShadow = true;
-        this.scene.add(stone);
-      } else {
-        for (let bladeIndex = 0; bladeIndex < 3; bladeIndex++) {
-          const blade = this.mesh(bladeGeometry, grassMaterial);
-          blade.position.set(x + (bladeIndex - 1) * 0.06, 0.09, z + bladeIndex * 0.018);
-          blade.rotation.z = (bladeIndex - 1) * -0.25;
-          blade.scale.y = 0.7 + ((index + bladeIndex) % 4) * 0.15;
-          this.scene.add(blade);
-        }
-        if (index % 3 === 0) {
-          const flower = new THREE.Group();
-          for (let petal = 0; petal < 5; petal++) {
-            const sphere = this.mesh(flowerGeometry, flowerMaterial);
-            sphere.position.set(Math.cos(petal * Math.PI * 0.4) * 0.06, 0, Math.sin(petal * Math.PI * 0.4) * 0.06);
-            sphere.scale.y = 0.4;
-            flower.add(sphere);
-          }
-          flower.add(this.mesh(new THREE.SphereGeometry(0.035, 6, 4), flowerCenterMaterial));
-          flower.position.set(x, 0.2, z);
-          flower.scale.setScalar(1.6);
-          this.flowers.add(flower);
-        }
-      }
-    }
+    this.scene.add(details.plants);
+    this.flowers.add(details.flowers);
   }
 
   private buildTarget(): THREE.Group {
@@ -509,7 +467,7 @@ export class Playground {
     treat.add(leaf);
     root.add(treat);
     this.scene.add(root);
-    return { root, body, ring, shadow, hearts, treat, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI };
+    return { root, body, ring, shadow, hearts, treat, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
   }
 
   private resize = (): void => {
@@ -657,18 +615,19 @@ export class Playground {
   private animatePet(pet: PetVisual, player: PlayPlayer | undefined, delta: number, seconds: number, serverTime: number, reducedMotion: boolean): void {
     let speed = 0;
     if (player) {
-      const dx = player.x - pet.root.position.x;
-      const dz = player.z - pet.root.position.z;
-      const blend = reducedMotion ? 1 : 1 - Math.exp(-15 * delta);
-      const travel = Math.hypot(dx, dz) * blend;
+      // Reset only when another mode has explicitly placed the pet.
+      if (Math.hypot(pet.motion.x - pet.root.position.x, pet.motion.z - pet.root.position.z) > 0.001) {
+        pet.motion.reset(pet.root.position.x, pet.root.position.z);
+      }
+      const travel = pet.motion.advance(player.x, player.z, delta);
       speed = travel / delta;
-      pet.root.position.x += dx * blend;
-      pet.root.position.z += dz * blend;
+      pet.root.position.x = pet.motion.x;
+      pet.root.position.z = pet.motion.z;
       pet.distance += travel * 142 / PET_EXTENT;
       const yawDelta = Math.atan2(Math.sin(player.yaw - pet.yaw), Math.cos(player.yaw - pet.yaw));
       pet.yaw += yawDelta * (reducedMotion ? 1 : 1 - Math.exp(-10 * delta));
     }
-    pet.gaitStrength = THREE.MathUtils.lerp(pet.gaitStrength, reducedMotion ? 0 : Math.min(speed * 0.9, 1), 1 - Math.exp(-12 * delta));
+    pet.gaitStrength = THREE.MathUtils.lerp(pet.gaitStrength, reducedMotion ? 0 : Math.min(speed * 1.6, 1), 1 - Math.exp(-8 * delta));
     const action = player?.action;
     const progress = action ? THREE.MathUtils.clamp((serverTime - action.startedAt) / Math.max(1, action.duration), 0, 1) : 1;
     const active = Boolean(action && serverTime >= action.startedAt && progress < 1);
@@ -692,7 +651,9 @@ export class Playground {
         tilt += Math.sin(progress * Math.PI * 6) * 0.055;
       }
     }
-    pet.body.position.y = lift + (reducedMotion ? 0 : Math.abs(Math.sin(pet.distance / 36 * Math.PI * 2)) * 0.07 * pet.gaitStrength);
+    const stridePhase = pet.distance / 36 * Math.PI * 2;
+    if (!reducedMotion) tilt += Math.sin(stridePhase) * 0.14 * pet.gaitStrength;
+    pet.body.position.y = lift + (reducedMotion ? 0 : (1 - Math.cos(stridePhase * 2)) * 0.025 * pet.gaitStrength);
     pet.body.rotation.set(0, yaw, tilt * 0.25);
     for (const head of pet.heads) head.set(tilt, bow);
     for (const gait of pet.gaits) gait.set(pet.distance, pet.gaitStrength);
