@@ -272,7 +272,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     }
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
         picker.dismiss(animated: true) { self.emit(["type": "active"]) }; cameraBusy = false
-        emit(["type": "recording", "message": "Recording canceled. Nothing was saved."])
+        emit(["type": "recording", "message": "Recording canceled."])
     }
     func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
         defer { picker.dismiss(animated: true) { self.emit(["type": "active"]) }; cameraBusy = false }
@@ -285,7 +285,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
             for old in try FileManager.default.contentsOfDirectory(at: clipsDirectory, includingPropertiesForKeys: nil) where old != destination {
                 try? FileManager.default.removeItem(at: old)
             }
-            emit(["type": "recording", "message": "Clip saved on this device. Review it below. Tap Submit clip to check it with Meta."])
+            emit(["type": "recording", "message": "Clip ready. Submit clip for grading."])
         } catch { emit(["type": "recording", "message": "The clip could not be saved. Please try again."]) }
     }
     private func prepareQuestClip(requestId: String) {
@@ -326,7 +326,7 @@ final class PhoneViewController: UIViewController, WKScriptMessageHandler, WKNav
     }
     private func reviewClip() {
         guard presentedViewController == nil else { return }
-        guard let clip = latestClip else { emit(["type": "recording", "message": "No saved clip yet. Tap Record quest clip."]); return }
+        guard let clip = latestClip else { emit(["type": "recording", "message": "No saved clip yet. Tap Record clip."]); return }
         let controller = AVPlayerViewController()
         controller.player = AVPlayer(url: clip)
         present(controller, animated: true) { controller.player?.play() }

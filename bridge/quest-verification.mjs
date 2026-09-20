@@ -57,7 +57,7 @@ export function createQuestPhotoVerifier(options = {}) {
     configured,
     async verify(input) {
       const images = validateEvidence(input);
-      if (!configured) throw new Error('Meta verification is not configured yet. Set the API key, base URL, and vision model on the server.');
+      if (!configured) throw new Error('Quest grading is not configured yet. Please try again later.');
       const quest = PHOTO_VERIFICATION_QUESTS[input.questId];
       const count = Math.max(quest.minPeople, Math.min(4, input.participantCount ?? quest.minPeople));
       const prompt = [
@@ -81,10 +81,10 @@ export function createQuestPhotoVerifier(options = {}) {
             { type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } })),
           ] }] }),
         });
-      } catch { throw new Error('Meta verification timed out or could not be reached. Please retry.'); }
-      if (!response.ok) throw new Error(`Meta verification returned HTTP ${response.status}. Check the server API configuration or retry shortly.`);
+      } catch { throw new Error('Quest grading timed out or could not be reached. Please retry.'); }
+      if (!response.ok) throw new Error(`Quest grading returned HTTP ${response.status}. Please retry shortly.`);
       let payload;
-      try { payload = await response.json(); } catch { throw new Error('Meta returned an unreadable response.'); }
+      try { payload = await response.json(); } catch { throw new Error('Quest grading returned an unreadable response.'); }
       return parseDecision(payload?.choices?.[0]?.message?.content);
     },
   };

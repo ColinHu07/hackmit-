@@ -351,7 +351,7 @@ function updateControls(): void {
   });
   el<HTMLButtonElement>('quest-button').disabled = !connected || !local;
   document.querySelectorAll<HTMLButtonElement>('[data-move]').forEach(button => { button.disabled = !connected || !local; });
-  el<HTMLButtonElement>('quest-button').disabled = !connected || friends.length < 1;
+  el<HTMLButtonElement>('quest-button').disabled = !connected || !local;
   el<HTMLButtonElement>('zoom-out-button').hidden = !membership || !connected || nearbyActive;
   el<HTMLButtonElement>('meet-button').disabled = !connected || !friend;
   el<HTMLButtonElement>('ready-squad').disabled = !connected || !local || (snapshot?.players.filter(p => p.connected).every(p => snapshot?.quests[p.id]?.squadCircle) ?? false) || (snapshot?.players.filter(player => player.connected).length ?? 0) < 3;
