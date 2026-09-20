@@ -73,6 +73,9 @@ function showError(error: unknown): void {
   if (status) status.textContent = message; else tell(message);
 }
 function tokenKey(): string { return `session:${server}`; }
+function updateGameControls(): void {
+  for (const control of document.querySelectorAll<HTMLButtonElement>('[data-action],#walk,#quests')) control.disabled = !ready || connection !== 'connected';
+}
 function join(): void {
   try {
     server = normalizeServerUrl(server); save('server', server); save('name', name);
@@ -103,7 +106,7 @@ const motion = new GlassesMotion({
       posePublisher.clearHeading();
       if (connection === 'connected') client.heading(motion.pose.yaw, false);
     }
-    el('tracking-status').textContent = state.message;
+    if (ready) el('tracking-status').textContent = state.message;
     const resume = ['paused', 'stale'].includes(state.status);
     el('walk').textContent = motionEnabled ? 'Pause' : state.status === 'requesting' ? 'Allow…' : resume ? 'Resume' : 'Walk';
     el<HTMLButtonElement>('walk').disabled = !ready || connection !== 'connected' || state.status === 'requesting';
@@ -119,7 +122,7 @@ const client = new RoomClient({
     connection = state;
     el('connection').textContent = state === 'connected' ? 'Connected' : state === 'connecting' ? 'Connecting…' : state === 'reconnecting' ? 'Reconnecting…' : 'Offline';
     playground?.setEnabled(state === 'connected');
-    for (const control of document.querySelectorAll<HTMLButtonElement>('[data-action],#walk,#quests')) control.disabled = !ready || state !== 'connected';
+    updateGameControls();
     if (state !== 'connected') {
       suspendCameraWork();
       walkingRequest++; previousMember = ''; posePublisher.clear(); motion.stop();
@@ -128,22 +131,22 @@ const client = new RoomClient({
   },
   snapshot: (next, membership) => {
     snapshot = next; member = membership; save(tokenKey(), JSON.stringify(member));
-    playground.update(next, member.playerId);
+    playground?.update(next, member.playerId);
     const local = next.players.find(player => player.id === member!.playerId);
     if (local && previousMember !== member.playerId) {
       previousMember = member.playerId;
       motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
     }
     motion.setWorldLimit(next.worldLimit ?? 3);
-    if (motionEnabled) playground.setWalkingPose(motion.pose);
+    if (motionEnabled) playground?.setWalkingPose(motion.pose);
     const happiness = local?.survival?.happiness ?? 70;
-    playground.setHappiness(happiness);
+    playground?.setHappiness(happiness);
     el('mood-face').innerHTML = beaverMoodFace(happiness);
     el('mood-value').textContent = `${Math.round(happiness)}%`;
     el('mood-fill').style.width = `${happiness}%`;
     el('connection').textContent = `${next.players.filter(player => player.connected).length}/4 here`;
     const cooldown = local?.survival?.treatCooldownMs ?? 0;
-    el<HTMLButtonElement>('feed').disabled = cooldown > 0 || (local?.survival?.inventory.berry ?? 1) < 1;
+    el<HTMLButtonElement>('feed').disabled = !ready || cooldown > 0 || (local?.survival?.inventory.berry ?? 1) < 1;
     el('feed').textContent = cooldown > 0 ? `${Math.ceil(cooldown / 1000)}s` : 'Berry';
     if (!currentPanel && next.notice) tell(next.notice);
   },
@@ -151,7 +154,7 @@ const client = new RoomClient({
     tell(message);
     if (terminal) settings(message);
   },
-});
+}, { retryInitialConnection: true });
 const camera = new GlassesCamera(() => server, () => member);
 
 function settings(message = ''): void {
@@ -472,7 +475,13 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', () => { suspendCameraWork(); walkingRequest++; posePublisher.clear(); client.stop(false); motion.stop(); clearTimeout(cameraPoll); playground?.dispose(); });
 
+// Connecting is independent of the 3D download: an unavailable server must not
+// look like a stuck beaver, and users can fix the connection while assets load.
+if (params.get('server') || read('server') || configuredServer || !location.hostname.endsWith('.github.io')) join();
+else settings();
+
 try {
+  el('tracking-status').textContent = 'Loading your beaver…';
   playground = new Playground(el<HTMLCanvasElement>('playground'), (x, z) => {
     if (connection !== 'connected' || document.hidden) return;
     const local = snapshot?.players.find(player => player.id === member?.playerId);
@@ -483,6 +492,6 @@ try {
   }, { display: true });
   await playground.load(); ready = true;
   el('tracking-status').textContent = simulator ? 'Simulator · select Walk, then W / A / D' : 'Select Walk while facing forward';
-  if (params.get('server') || read('server') || configuredServer || !location.hostname.endsWith('.github.io')) join();
-  else settings();
+  updateGameControls();
+  if (el('join')) el<HTMLButtonElement>('join').disabled = false;
 } catch { el('tracking-status').textContent = 'Could not load the beaver. Reopen Kith to retry.'; }

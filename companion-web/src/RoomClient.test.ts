@@ -75,6 +75,57 @@ afterEach(() => {
 });
 
 describe('RoomClient session lifecycle', () => {
+  it.each(['closed', 'timeout'] as const)('retries an initial %s connection when the display opts in', reason => {
+    const callbacks = { state: vi.fn(), snapshot: vi.fn(), error: vi.fn() };
+    const client = new RoomClient(callbacks, { retryInitialConnection: true });
+    client.start('ws://play.example/play', { type: 'lobby', name: 'Glasses' });
+    const initial = socket(0);
+    if (reason === 'closed') initial.serverClose();
+    else vi.advanceTimersByTime(10_000);
+    expect(callbacks.state).toHaveBeenLastCalledWith('reconnecting');
+    expect(callbacks.error).not.toHaveBeenCalled();
+    // A timeout's late close must not enqueue a second retry.
+    initial.serverClose();
+    vi.advanceTimersByTime(500);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    const retry = socket(1);
+    retry.open();
+    expect(retry.commands()).toEqual([{ type: 'lobby', name: 'Glasses' }]);
+    retry.receive(welcome);
+    expect(callbacks.state).toHaveBeenLastCalledWith('connected');
+    vi.advanceTimersByTime(1000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    client.stop();
+  });
+
+  it('bounds display retries and allows a fresh attempt after the tunnel returns', () => {
+    const callbacks = { state: vi.fn(), snapshot: vi.fn(), error: vi.fn() };
+    const client = new RoomClient(callbacks, { retryInitialConnection: true });
+    client.start('ws://play.example/play', { type: 'lobby', name: 'Glasses' });
+    for (let i = 0; i <= 8; i++) {
+      socket(i).serverClose();
+      vi.advanceTimersByTime(Math.min(5000, 500 * 2 ** i));
+    }
+    expect(callbacks.state).toHaveBeenLastCalledWith('offline');
+    expect(callbacks.error).toHaveBeenCalledTimes(1);
+    expect(MockWebSocket.instances).toHaveLength(9);
+    client.start('ws://play.example/play', { type: 'lobby', name: 'Glasses' });
+    socket(9).open(); socket(9).receive(welcome);
+    expect(callbacks.state).toHaveBeenLastCalledWith('connected');
+    client.stop();
+  });
+
+  it('never retries a server rejection even when initial transport retries are enabled', () => {
+    const callbacks = { state: vi.fn(), snapshot: vi.fn(), error: vi.fn() };
+    const client = new RoomClient(callbacks, { retryInitialConnection: true });
+    client.start('ws://play.example/play', { type: 'join', roomCode: 'ABC234', name: 'Glasses' });
+    socket(0).open(); socket(0).receive({ type: 'error', code: 'room_full', message: 'This room is full.' });
+    socket(0).serverClose();
+    vi.advanceTimersByTime(60_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(callbacks.error).toHaveBeenCalledExactlyOnceWith('This room is full.', true);
+  });
+
   it('sends explicit head-heading locks while preserving ordinary phone heading messages', () => {
     const { client, first } = setup();
     first.open(); first.receive(welcome); first.send.mockClear();

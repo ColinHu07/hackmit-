@@ -15,7 +15,12 @@ let stopping = false;
 const serveoFingerprint = 'SHA256:GnmVK+70U6GqbupoV+gg7LnHHUsW1IjrK0cLqvDJxIk';
 const serveoKnownHosts = fileURLToPath(new URL('./serveo-known-hosts', import.meta.url));
 
-export function serveoSshArgs(port) {
+export function serveoSshArgs(port, { hostname, identityFile } = {}) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Choose a valid local port.');
+  if (!!hostname !== !!identityFile) throw new Error('A reserved hostname and its registered identity file are both required.');
+  if (hostname && !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:serveousercontent\.com|serveo\.net)$/.test(hostname)) {
+    throw new Error('Use the reserved Serveo hostname, without a protocol or path.');
+  }
   const entries = readFileSync(serveoKnownHosts, 'utf8').split(/\r?\n/).filter(line => line && !line.startsWith('#'));
   const [host, algorithm, key] = entries[0]?.split(/\s+/) ?? [];
   const fingerprint = key && `SHA256:${createHash('sha256').update(Buffer.from(key, 'base64')).digest('base64').replace(/=+$/, '')}`;
@@ -27,13 +32,14 @@ export function serveoSshArgs(port) {
     '-o', `UserKnownHostsFile=${serveoKnownHosts}`,
     '-o', `GlobalKnownHostsFile=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
     '-o', 'StrictHostKeyChecking=yes', '-o', 'HostKeyAlgorithms=ssh-ed25519', '-o', 'UpdateHostKeys=no',
-    '-o', 'IdentityFile=none', '-o', 'CertificateFile=none', '-o', 'IdentityAgent=none',
-    '-o', 'PubkeyAuthentication=no', '-o', 'PasswordAuthentication=no',
-    // Serveo's anonymous handshake uses keyboard-interactive with no password challenge.
-    '-o', 'PreferredAuthentications=keyboard-interactive', '-o', 'NumberOfPasswordPrompts=1',
+    '-o', `IdentityFile=${identityFile ? resolve(identityFile) : 'none'}`, '-o', 'CertificateFile=none', '-o', 'IdentityAgent=none',
+    '-o', 'IdentitiesOnly=yes', '-o', `PubkeyAuthentication=${identityFile ? 'yes' : 'no'}`, '-o', 'PasswordAuthentication=no',
+    // Serveo completes its handshake through keyboard-interactive (no password
+    // challenge), including after a registered public key has been offered.
+    '-o', `PreferredAuthentications=${identityFile ? 'publickey,keyboard-interactive' : 'keyboard-interactive'}`, '-o', 'NumberOfPasswordPrompts=1',
     '-o', 'ConnectTimeout=10', '-o', 'ExitOnForwardFailure=yes',
     '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
-    '-T', '-R', `80:127.0.0.1:${port}`, '--', 'bondimals@serveo.net', '--https-only',
+    '-T', '-R', `${hostname ? `${hostname}:` : ''}80:127.0.0.1:${port}`, '--', 'bondimals@serveo.net', '--https-only',
   ];
 }
 
@@ -73,9 +79,6 @@ async function stop(code, message) {
   active.forEach(child => signalChild(child, 'SIGKILL'));
   process.exit(code);
 }
-
-process.once('SIGINT', () => void stop(0, 'Stopping the phone link and its game server.'));
-process.once('SIGTERM', () => void stop(0));
 
 function completed(child) {
   return new Promise((resolveDone, reject) => {
@@ -220,5 +223,7 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  process.once('SIGINT', () => void stop(0, 'Stopping the phone link and its game server.'));
+  process.once('SIGTERM', () => void stop(0));
   main().catch(error => void stop(1, error.message));
 }

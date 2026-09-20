@@ -9,7 +9,10 @@ The display game uses a Meta Ray-Ban Display Web App. The phone camera app uses 
 - `npm run web:start` serves both UIs and their game/camera endpoints from port 8788. Put that one origin behind HTTPS/WSS.
 - Open `/glasses/setup.html` on the paired iPhone for the Meta Add to glasses deep link, or register `/glasses/index.html` manually in Meta AI.
 - For GitHub Pages, build with `VITE_PLAY_SERVER_URL=wss://YOUR_GAME_HOST/play npm run build --workspace @bondimals/glasses-web -- --base=/YOUR_REPO/`; Pages serves assets only, while gameplay and camera requests use that secure server.
-- Keep the server and tunnel alive during a temporary demo. A tunnel restart changes the address; use Connection & controls to update it on the glasses.
+- A phone's LAN address such as `ws://10.189.42.248:8788/play` is still the same backend, but the HTTPS glasses app requires a secure `wss://` gateway to it. GitHub Pages hosts the UI and cannot host the multiplayer server.
+- Keep the server and tunnel alive during a temporary demo. Anonymous Serveo forwards expire and receive a new address on restart; an SSH keepalive alone does not prevent expiry. Use an authenticated, reserved hostname for a stable demo link. A replacement tunnel must also be updated in the glasses build/settings and the phone camera bridge.
+- The display retries temporary transport failures during first connection as well as after joining. A rejected room is reported immediately. After retries are exhausted, use the connection panel's Join button to retry.
+- After reserving a Serveo hostname and registering this Mac's dedicated public key, run `node scripts/share-game-server.mjs --hostname YOUR_NAME.serveousercontent.com --identity /absolute/path/to/key`. This forwards port 8788, verifies the existing game server, pins Serveo's host key and reconnects the same hostname after an SSH interruption. It stops if Serveo substitutes an anonymous hostname. The private key stays outside the repository. The Mac and game server must remain running.
 - The native camera target is iOS 17.2+ with DAT 0.9.0. Build `glasses-ios/BondimalsCamera.xcodeproj`, scheme `BondimalsCamera`, with your signing team. This is separate from the Kith phone game.
 
 ## Controls

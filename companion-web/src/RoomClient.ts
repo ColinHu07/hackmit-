@@ -16,6 +16,10 @@ interface Callbacks {
   snapshot: (snapshot: CompatibleSnapshot, membership: Membership) => void;
   error: (message: string, terminal?: boolean) => void;
 }
+interface ConnectionOptions {
+  /** Display apps should recover a temporarily unavailable tunnel on first entry. */
+  retryInitialConnection?: boolean;
+}
 type Entry = { type: 'lobby'; name: string; playerToken?: string } | { type: 'create'; name: string } | { type: 'join'; name: string; roomCode: string; playerToken?: string };
 
 export function normalizeServerUrl(raw: string): string {
@@ -47,7 +51,7 @@ export class RoomClient {
   private watchdog: ReturnType<typeof setInterval> | undefined;
   private legacyServer = false;
 
-  constructor(private readonly callbacks: Callbacks) {}
+  constructor(private readonly callbacks: Callbacks, private readonly options: ConnectionOptions = {}) {}
 
   start(serverUrl: string, entry: Entry): void {
     const url = normalizeServerUrl(serverUrl);
@@ -69,8 +73,7 @@ export class RoomClient {
     this.socket = socket;
     this.timeout = setTimeout(() => {
       if (socket !== this.socket) return;
-      if (!this.membership) this.fail('The server did not respond. Check its address in Server settings.');
-      else socket.close();
+      this.retryConnection('The server did not respond. Check its address in Server settings.');
     }, 10_000);
 
     socket.onopen = () => {
@@ -138,17 +141,26 @@ export class RoomClient {
         this.fail('This pet continued in another tab. Return home to join as a different player.');
         return;
       }
-      if (!this.membership) {
-        this.fail('Could not connect. Start the multiplayer server, then check Server settings.');
-        return;
-      }
-      if (++this.attempts > 8) {
-        this.fail('Connection lost. Return home and rejoin the playground.');
-        return;
-      }
-      this.callbacks.state('reconnecting');
-      this.retry = setTimeout(() => this.connect(), Math.min(5000, 500 * 2 ** (this.attempts - 1)));
+      this.retryConnection(this.membership
+        ? 'Connection lost. Return home and rejoin the playground.'
+        : 'Could not connect. Start the multiplayer server, then check Server settings.');
     };
+  }
+
+  private retryConnection(message: string): void {
+    if (!this.membership && !this.options.retryInitialConnection || ++this.attempts > 8) {
+      this.fail(message);
+      return;
+    }
+    clearTimeout(this.timeout);
+    clearTimeout(this.retry);
+    clearInterval(this.watchdog);
+    this.connected = false;
+    const previous = this.socket;
+    this.socket = null;
+    previous?.close();
+    this.callbacks.state('reconnecting');
+    this.retry = setTimeout(() => this.connect(), Math.min(5000, 500 * 2 ** (this.attempts - 1)));
   }
 
   move(x: number, z: number): void {
