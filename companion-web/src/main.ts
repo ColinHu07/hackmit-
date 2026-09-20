@@ -93,7 +93,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section class="playground-panel" aria-label="Your local world">
       <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div>
       <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
-      <div class="mood-card"><div><strong>Your pet’s happiness</strong><span id="mood-label"></span></div><meter id="mood-meter" min="0" max="100" value="70" aria-label="Pet happiness"></meter><p id="mood-note">Complete a quest together for +12 happiness. Slowly drifts down between adventures.</p></div>
+      <div class="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-note"><span class="mood-fill"></span></div><p id="mood-note">A little happier with every adventure. Complete a quest together for +12.</p></div>
       <div class="scene-caption" id="scene-caption"><span class="caption-star">✳</span> Small paws. Big adventures.</div>
       <div class="play-controls" id="play-controls" hidden>
         <div class="moment-line"><span id="scene-hint">Tap the ground to move your pet.</span><span class="bond-counter">${icon('heart')}<span id="bond-count">0</span><span class="bond-word">moments</span></span></div>
@@ -183,7 +183,10 @@ let mood = readMood(stored('bondimals:mood'));
 save('bondimals:mood', JSON.stringify(mood));
 function renderMood(): void {
   const value = Math.round(moodValue(mood));
-  el<HTMLMeterElement>('mood-meter').value = value;
+  const meter = el('mood-meter');
+  meter.style.setProperty('--happiness', `${value}%`);
+  meter.setAttribute('aria-valuenow', String(value));
+  meter.setAttribute('aria-valuetext', `${value}% · ${value >= 80 ? 'Joyful' : value >= 50 ? 'Content' : 'Ready for company'}`);
   el('mood-label').textContent = `${value}% · ${value >= 80 ? 'Joyful' : value >= 50 ? 'Content' : 'Ready for company'}`;
 }
 renderMood();
