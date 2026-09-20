@@ -1,3 +1,8 @@
+export const SAD_HAPPINESS_THRESHOLD = 45;
+export function happinessState(value: number): 'sad' | 'happy' {
+  return value < SAD_HAPPINESS_THRESHOLD ? 'sad' : 'happy';
+}
+
 /** Device-local happiness. Quest IDs prevent snapshot/reconnect reward duplication. */
 export interface MoodState { value: number; updatedAt: number; rewarded: string[] }
 export function readMood(raw: string | null, now = Date.now()): MoodState {

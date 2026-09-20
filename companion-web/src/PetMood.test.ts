@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moodValue, readMood, rewardMood } from './PetMood';
+import { moodValue, readMood, rewardMood, happinessState } from './PetMood';
 describe('pet happiness', () => {
   it('decays across app restarts but stays above its gentle floor', () => {
     const state = readMood(null, 0);
@@ -27,4 +27,8 @@ describe('pet happiness', () => {
     expect(readMood('{oops', 10).value).toBe(70);
     expect(readMood('{"value":1000}', 10).updatedAt).toBe(10);
   });
+});
+
+it('switches to sad strictly below the marked threshold and recovers above it', () => {
+  expect([0, 44.9, 45, 70, 100].map(happinessState)).toEqual(['sad', 'sad', 'happy', 'happy', 'happy']);
 });

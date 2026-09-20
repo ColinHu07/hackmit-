@@ -7,6 +7,7 @@ import { SoftGait } from '../../glasses-web/src/rendering/SoftGait';
 import { SoftJump } from '../../glasses-web/src/rendering/SoftJump';
 import { GroundContact } from '../../glasses-web/src/rendering/GroundContact';
 import { SoftPaws } from './SoftPaws';
+import { SoftExpression } from './SoftExpression';
 import { samplePetAction } from './PetActionPose';
 
 it('composes the phone rigs without moving the face during a wave or sinking the feet during a jump', async () => {
@@ -23,7 +24,19 @@ it('composes the phone rigs without moving the face during a wave or sinking the
   scene.traverse(o => { if (o.isMesh) mesh = o; });
   const positions = mesh.geometry.getAttribute('position');
   const head = new SoftHead(mesh), gait = new SoftGait(mesh), jump = new SoftJump(mesh), paws = new SoftPaws(mesh);
+  const expression = new SoftExpression(mesh);
   const ground = new GroundContact(body, 0, 0.27);
+  expression.set(1, 0, 0);
+  let changedFace = 0;
+  const facePoint = new THREE.Vector3();
+  for (let i = 0; i < positions.count; i++) {
+    mesh.getVertexPosition(i, facePoint);
+    const displacement = facePoint.distanceTo(new THREE.Vector3().fromBufferAttribute(positions, i));
+    if (positions.getY(i) < 0.2 || positions.getZ(i) < 0.36) expect(displacement).toBeLessThan(1e-6);
+    changedFace = Math.max(changedFace, displacement);
+  }
+  expect(changedFace).toBeGreaterThan(0.015);
+  expression.set(0, 0, 0);
   const point = new THREE.Vector3();
   paws.set(2.5, 0);
   let movedPaw = 0;
@@ -41,6 +54,7 @@ it('composes the phone rigs without moving the face during a wave or sinking the
   for (const t of [0, 0.14, 0.24, 0.49, 0.74, 0.81, 1]) {
     const pose = samplePetAction('jump', t);
     jump.set(pose.crouch, 0); head.set(pose.tilt, pose.bow, jump.torsoPitch); gait.set(0, 0);
+    expression.set(t === 1 ? 0 : 1, pose.tilt, pose.bow, jump.torsoPitch);
     body.rotation.set(pose.pitch, 0, 0);
     body.position.y = pose.lift - ground.lowestY();
     jump.set(pose.crouch, pose.tuck);

@@ -2,7 +2,8 @@ import '@fontsource-variable/dm-sans';
 import '@fontsource-variable/manrope';
 import './style.css';
 import { LocalWeather } from './LocalWeather';
-import { readMood, moodValue } from './PetMood';
+import { beaverMoodFace } from './BeaverMoodFace';
+import { readMood, moodValue, happinessState, SAD_HAPPINESS_THRESHOLD } from './PetMood';
 import { Playground } from './Playground';
 import { RoomClient, normalizeServerUrl } from './RoomClient';
 import { NearbyClient } from './NearbyClient';
@@ -40,12 +41,6 @@ const paths: Record<string, string> = {
   link: '<path d="m10 14 4-4M8 15l-2 2a3 3 0 0 1-4-4l5-5a3 3 0 0 1 4 0m2 8a3 3 0 0 0 4 0l5-5a3 3 0 0 0-4-4l-2 2"/>',
 };
 const icon = (name: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.leaf}</svg>`;
-
-function beaverFace(state: 'low' | 'uneasy' | 'okay' | 'happy' | 'joyful'): string {
-  const mouth = { low: 'M18 35c-3-4-9-4-12 0', uneasy: 'M17 34c-2-2-6-2-8 0', okay: 'M9 34h6', happy: 'M8 32c2 5 6 5 8 0', joyful: 'M7 31c3 7 7 7 10 0' }[state];
-  const brows = { low: 'M7 21l3 1M14 22l3-1', uneasy: 'M7 22l3-1M14 21l3 1', okay: '', happy: '', joyful: '' }[state];
-  return `<svg class="beaver-face" viewBox="0 0 24 42" aria-hidden="true"><circle cx="5" cy="9" r="4" fill="#9b6a45"/><circle cx="19" cy="9" r="4" fill="#9b6a45"/><circle cx="12" cy="22" r="10" fill="#b77c50"/><circle cx="8.5" cy="21" r="1.25" fill="#29392e"/><circle cx="15.5" cy="21" r="1.25" fill="#29392e"/><path d="M10 26h4l1 3h-6Z" fill="#6f4830"/><path d="${mouth}" fill="none" stroke="#29392e" stroke-width="1.4" stroke-linecap="round"/>${brows ? `<path d="${brows}" fill="none" stroke="#6f4830" stroke-width="1.2" stroke-linecap="round"/>` : ''}</svg>`;
-}
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="site-header">
@@ -103,7 +98,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section class="playground-panel" aria-label="Your local world">
       <div class="scene-topline"><div class="scene-title">${icon('leaf')} <span id="world-title">AROUND YOU</span></div><div class="scene-topline-actions"><button id="zoom-out-button" class="zoom-out-button" type="button" hidden>Zoom out</button><div id="connection-status" class="connection-status" data-state="idle"><span></span><span id="connection-label">Pet preview</span></div></div></div>
       <div class="weather-line"><span id="weather-status" role="status">Allow location for your local weather</span><button id="local-weather" class="text-button" hidden title="Uses your location once; sends rounded coordinates to Open-Meteo for weather">Use my local weather</button></div><div class="scene" id="scene"><canvas id="playground" tabindex="0" aria-label="Pet playground. Tap the ground to move your pet. When focused, use the arrow keys to move."></canvas><aside class="status-effects" aria-label="Pet status effects"><span class="status-effects-title">PET STATUS</span><div class="status-effect"><span class="status-effect-icon">${icon('heart')}</span><span><strong>Happiness</strong><small id="effect-mood">70% · Content</small></span></div><div class="status-effect"><span class="status-effect-icon">${icon('leaf')}</span><span><strong>Local sky</strong><small id="effect-weather">Weather unavailable</small></span></div><div class="status-effect" id="effect-bond-row" hidden><span class="status-effect-icon">${icon('people')}</span><span><strong>Bond</strong><small id="effect-bond">0 shared moments</small></span></div></aside><div id="treat-timer" class="treat-timer" role="img" aria-label="Treat cooldown" hidden><svg class="treat-timer-donut" viewBox="0 0 48 48" aria-hidden="true"><circle class="treat-timer-track" cx="24" cy="24" r="20"/><circle class="treat-timer-ring" cx="24" cy="24" r="20" pathLength="100"/></svg><span class="treat-timer-berry" aria-hidden="true">🫐</span><span class="treat-timer-count" aria-hidden="true"></span></div><div id="scene-loading" class="scene-loading"><span class="loading-dot"></span>Waking up Nova…</div></div>
-      <div class="mood-card" id="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div class="mood-face-scale" role="img" aria-label="Beaver happiness states"><span data-mood-face="low">${beaverFace('low')}</span><span data-mood-face="uneasy">${beaverFace('uneasy')}</span><span data-mood-face="okay">${beaverFace('okay')}</span><span data-mood-face="happy">${beaverFace('happy')}</span><span data-mood-face="joyful">${beaverFace('joyful')}</span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-note"><span class="mood-fill"></span></div><p id="mood-note">Berries add 3% happiness over three bites. Normally, happiness drops 1% every minute.</p></div>
+      <div class="mood-card" id="mood-card"><div class="mood-heading"><strong>${icon('heart')} Your pet’s happiness</strong><span id="mood-label"></span></div><div id="mood-meter" class="mood-track" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70" aria-label="Pet happiness" aria-describedby="mood-threshold-note mood-note" style="--sad-threshold:${SAD_HAPPINESS_THRESHOLD}%"><span class="mood-fill"><span id="mood-marker" class="mood-marker" aria-hidden="true">${beaverMoodFace(70)}</span></span><span class="mood-threshold" aria-hidden="true"></span></div><p id="mood-threshold-note" class="mood-threshold-note">Sad below ${SAD_HAPPINESS_THRESHOLD}%</p><p id="mood-note">Berries add 3% happiness over three bites. Normally, happiness drops 1% every minute.</p></div>
       <section class="berry-bag" id="survival-card" aria-label="Your treats">
         <div class="berry-bag-heading"><div class="berry-balance"><span class="berry-bag-icon" aria-hidden="true">🫐</span><div><span class="small-label">YOUR TREATS</span><strong><span id="berry-count">—</span> <span class="berry-unit">berries</span></strong></div></div><button id="health-treat" class="health-treat" data-action="feed" type="button">Give a berry</button></div>
         <p id="treat-cooldown" class="treat-cooldown" role="status"></p>
@@ -224,16 +219,18 @@ let mood = readMood(stored('bondimals:mood'));
 save('bondimals:mood', JSON.stringify(mood));
 function renderMood(): void {
   const care = snapshot?.players.find(player => player.id === membership?.playerId)?.survival;
-  const value = care ? Math.round(care.happiness * 10) / 10 : Math.round(moodValue(mood));
+  const happiness = care?.happiness ?? moodValue(mood);
+  const value = Math.round(happiness * 10) / 10;
   const meter = el('mood-meter');
-  meter.style.setProperty('--happiness', `${value}%`);
+  meter.style.setProperty('--happiness', `${happiness}%`);
   meter.setAttribute('aria-valuenow', String(value));
-  const state = value < 25 ? 'low' : value < 45 ? 'uneasy' : value < 65 ? 'okay' : value < 85 ? 'happy' : 'joyful';
-  const label = state === 'low' ? 'Needs care' : state === 'uneasy' ? 'A little sad' : state === 'okay' ? 'Content' : state === 'happy' ? 'Happy' : 'Joyful';
+  const state = happinessState(happiness);
+  const label = happiness < 25 ? 'Sad' : happiness < 45 ? 'A little sad' : happiness < 65 ? 'Content' : happiness < 85 ? 'Happy' : 'Joyful';
+  el('mood-marker').innerHTML = beaverMoodFace(happiness);
   meter.setAttribute('aria-valuetext', `${value}% · ${label}`);
   el('effect-mood').textContent = `${value}% · ${label}`;
   el('mood-label').textContent = `${value}% · ${label}`;
-  document.querySelectorAll<HTMLElement>('[data-mood-face]').forEach(face => face.classList.toggle('active', face.dataset.moodFace === state));
+  playground?.setHappiness(happiness);
   el('mood-card')?.setAttribute('data-mood-state', state);
 }
 renderMood();
@@ -1196,6 +1193,7 @@ try {
     else client.move(x, z);
   });
   await playground.load();
+  renderMood();
   ready = true;
   playground.update(null, null);
   playground.setEnabled(false);

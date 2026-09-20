@@ -70,9 +70,13 @@ body{background:radial-gradient(ellipse at 90% 0,#e8eddc70,transparent 55%),var(
 .mood-heading strong{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:600}
 .mood-heading svg{width:15px;height:15px;color:#81966b}
 .mood-heading>span{font-size:10px;color:#67785e;font-variant-numeric:tabular-nums}
-.mood-card .mood-track{display:block;height:9px;margin-top:12px;overflow:hidden;border-radius:999px;background:#64804a14;box-shadow:inset 0 1px 3px #485c3108}
-.mood-face-scale{display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;padding:0 2px}.mood-face-scale span{display:grid;place-items:center;width:28px;height:32px;border-radius:50%;filter:grayscale(.7);opacity:.42;transform:scale(.86);transition:opacity 250ms,filter 250ms,transform 250ms,background 250ms}.mood-face-scale span.active{filter:none;opacity:1;transform:scale(1.18);background:#fffef7a8;box-shadow:0 4px 12px #526d4118}.beaver-face{display:block;width:24px;height:30px;overflow:visible}.mood-card[data-mood-state=low] .mood-fill{background:linear-gradient(90deg,#d9948f,#c67a72)}.mood-card[data-mood-state=uneasy] .mood-fill{background:linear-gradient(90deg,#dec28a,#d09c69)}
-.mood-fill{display:block;width:var(--happiness,70%);height:100%;border-radius:inherit;background:linear-gradient(90deg,#bfd399,#8aac7d 65%,#719778);box-shadow:0 0 12px #8fb17930;transition:width 900ms var(--ease-soft)}
+.mood-card .mood-track{position:relative;display:block;height:9px;margin:32px 26px 0;overflow:visible;border-radius:999px;background:#64804a14;box-shadow:inset 0 1px 3px #485c3108;--mood-color:#719778}
+.mood-card[data-mood-state=sad] .mood-track{--mood-color:#c67a72}
+.mood-fill{position:relative;display:block;width:var(--happiness,70%);height:100%;border-radius:inherit;background:var(--mood-color);transition:width 900ms var(--ease-soft),background 250ms}
+.mood-marker{position:absolute;z-index:2;left:100%;top:50%;display:grid;place-items:center;width:52px;height:52px;border:3px solid #fffef7;border-radius:50%;background:#f8edcf;box-shadow:0 3px 10px #43573c30;transform:translate(-50%,-50%)}
+.mood-beaver-face{display:block;width:44px;height:44px;overflow:visible}
+.mood-threshold{position:absolute;left:var(--sad-threshold);top:-4px;width:2px;height:17px;background:#8c806a;transform:translateX(-50%);border-radius:2px}
+.mood-card .mood-threshold-note{margin-top:27px;font-size:9px;color:#8c806a}
 .mood-card p{color:#728168;font-size:10px;line-height:1.65;margin:10px 0 0;max-width:38em}
 .play-controls{padding:0 28px 8px}.moment-line{margin-bottom:12px}.moment-line>span:first-child{color:#6d7d63}
 .action-bar,.action-bar-five{gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));align-items:start}

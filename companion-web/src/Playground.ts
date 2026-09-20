@@ -10,6 +10,8 @@ import { SoftHead } from '../../glasses-web/src/rendering/SoftHead';
 import { SoftJump } from '../../glasses-web/src/rendering/SoftJump';
 import { GroundContact } from '../../glasses-web/src/rendering/GroundContact';
 import { SoftPaws } from './SoftPaws';
+import { SoftExpression } from './SoftExpression';
+import { happinessState } from './PetMood';
 import { samplePetAction } from './PetActionPose';
 import { advancePetStage, makePlayDance, samplePlayDance, spacePets, type PlayDance } from './PlayChoreography';
 import type { WeatherKind } from './LocalWeather';
@@ -44,6 +46,8 @@ interface PetVisual {
   jumps: SoftJump[];
   paws: SoftPaws[];
   heads: SoftHead[];
+  expressions: SoftExpression[];
+  sadness: number;
   gaits: SoftGait[];
   playerId: string | null;
   distance: number;
@@ -88,6 +92,7 @@ export class Playground {
   private viewTilt = { pitch: 0, roll: 0 };
   private renderedTilt = { pitch: 0, roll: 0 };
   private enabled = false;
+  private happiness = 70;
   private disposed = false;
   private visible = true;
   private contextLost = false;
@@ -208,6 +213,11 @@ export class Playground {
     const [x, z] = screenMovement(pet.yaw, right, down);
     const limit = this.snapshot?.worldLimit ?? 3;
     this.onMove(THREE.MathUtils.clamp(local.targetX + x, -limit, limit), THREE.MathUtils.clamp(local.targetZ + z, -limit, limit));
+  }
+
+  setHappiness(value: number): void {
+    this.happiness = value;
+    this.refreshAnimation();
   }
 
   async load(): Promise<void> {
@@ -458,6 +468,7 @@ export class Playground {
     const body = new THREE.Group();
     const model = clone(source);
     const heads: SoftHead[] = [];
+    const expressions: SoftExpression[] = [];
     const gaits: SoftGait[] = [];
     const jumps: SoftJump[] = [];
     const paws: SoftPaws[] = [];
@@ -473,6 +484,7 @@ export class Playground {
         gaits.push(new SoftGait(object));
         jumps.push(new SoftJump(object));
         paws.push(new SoftPaws(object));
+        expressions.push(new SoftExpression(object));
       }
     });
     const bounds = new THREE.Box3().setFromObject(source);
@@ -523,7 +535,7 @@ export class Playground {
       return crumb;
     });
     this.scene.add(root);
-    return { root, stage, presented: null, danceDistance: 0, danceYaw: Math.PI, danceGait: 0, body, ring, shadow, hearts, treat, crumbs, contact, jumps, paws, heads, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
+    return { root, stage, presented: null, danceDistance: 0, danceYaw: Math.PI, danceGait: 0, body, ring, shadow, hearts, treat, crumbs, contact, jumps, paws, heads, expressions, sadness: 0, gaits, playerId: null, distance: 0, gaitStrength: 0, yaw: Math.PI, motion: new SmoothWalk() };
   }
 
   private resize = (): void => {
@@ -707,7 +719,13 @@ export class Playground {
     const lift = pose.lift;
     let tilt = reducedMotion ? 0 : Math.sin(seconds * 1.7) * 0.018;
     tilt += pose.tilt;
-    let bow = pose.bow;
+    const isLocal = this.snapshot ? pet.playerId === this.localPlayerId : pet === this.pets[0];
+    const happiness = player?.survival?.happiness ?? (isLocal ? this.happiness : 70);
+    const sad = happinessState(happiness) === 'sad' ? 1 : 0;
+    pet.sadness += (sad - pet.sadness) * (reducedMotion ? 1 : 1 - Math.exp(-5 * delta));
+    // A lowered head makes the mood legible even when following from behind.
+    let bow = pose.bow + pet.sadness * 0.18 * (1 - pose.joy);
+    tilt -= pet.sadness * 0.045;
     const yaw = pet.yaw + pose.turn;
     if (!reducedMotion && active && action) {
       if (action.kind === 'dap') {
@@ -724,6 +742,7 @@ export class Playground {
     // Measure untucked soles, then fold the feet without cancelling their lift.
     pet.jumps.forEach(jump => jump.set(pose.crouch, 0));
     pet.heads.forEach((head, index) => head.set(tilt, bow, pet.jumps[index]?.torsoPitch ?? 0));
+    pet.expressions.forEach((face, index) => face.set(pet.sadness * (1 - pose.joy), tilt, bow, pet.jumps[index]?.torsoPitch ?? 0));
     pet.gaits.forEach(gait => gait.set(stride, gaitStrength));
     pet.paws.forEach(paws => paws.set(pose.wave, pose.hold));
     pet.body.position.y = lift - pet.contact.lowestY();
@@ -820,6 +839,7 @@ export class Playground {
         pet.body.rotation.set(0, pet.danceYaw, (pose.tilt + sway) * 0.25, 'YXZ');
         pet.gaits.forEach(gait => gait.set(pet.danceDistance, pet.danceGait));
         pet.heads.forEach((head, i) => head.set(pose.tilt + sway, pose.bow, pet.jumps[i]?.torsoPitch ?? 0));
+        pet.expressions.forEach((face, i) => face.set(pet.sadness * (1 - pose.joy), pose.tilt + sway, pose.bow, pet.jumps[i]?.torsoPitch ?? 0));
         pet.body.position.y = -pet.contact.lowestY();
       } else {
         pet.danceYaw = pet.yaw;
