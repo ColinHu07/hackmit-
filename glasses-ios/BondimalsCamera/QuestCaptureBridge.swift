@@ -298,7 +298,6 @@ final class QuestCaptureBridge: ObservableObject {
                 try await self.prepareCamera(id)
                 try Task.checkCancellation()
                 guard generation == self.generation, self.activeRequest == id else { return }
-                self.captureEvent("capturing", "Glasses camera ready. Capturing the requested \(kind).")
                 var evidence = kind == "photo" ? try await self.capturePhoto() : try await self.captureClip()
                 try Task.checkCancellation()
                 guard generation == self.generation, self.activeRequest == id else { return }
@@ -355,6 +354,7 @@ final class QuestCaptureBridge: ObservableObject {
 
     private func capturePhoto() async throws -> [String: Any] {
         _ = try requireFreshCamera()
+        captureEvent("capturing", "Fresh glasses frames confirmed. Taking the requested photo.")
         let cameraGeneration = self.cameraGeneration
         guard outstandingPhotoRequest == nil else { throw BridgeError.message("The previous glasses photo did not finish. Stop and restart the camera, then retry.") }
         guard let activeRequest else { throw CancellationError() }
@@ -390,29 +390,26 @@ final class QuestCaptureBridge: ObservableObject {
         guard let requestID = activeRequest else { throw CancellationError() }
         let cameraGeneration = self.cameraGeneration
         let start = ProcessInfo.processInfo.systemUptime
-        var lastSample = start
-        var sampleTimes: [Double] = []
+        var window = CameraClipWindow(startedAt: start)
         var frames: [String] = []
-        while frames.count < 12 {
+        captureEvent("capturing", "Fresh glasses frames confirmed. Recording for six seconds; startup and upload are separate.")
+        while !window.finished(at: ProcessInfo.processInfo.systemUptime) {
             try Task.checkCancellation()
             guard cameraGeneration == self.cameraGeneration else { throw BridgeError.message("The glasses camera was interrupted during the clip. Please retry.") }
             let frame = try requireFreshCamera()
             let now = ProcessInfo.processInfo.systemUptime
-            guard now - start < 9 else { throw BridgeError.message("The glasses clip was interrupted. Keep the camera live and retry.") }
-            if frame.receivedAt > lastSample, frames.isEmpty || frame.receivedAt - lastSample >= 0.5 {
+            if window.accept(frameAt: frame.receivedAt, now: now) {
                 let image = UIImage(cgImage: frame.image)
                 let data = try Self.jpeg(image)
                 frames.append("data:image/jpeg;base64," + data.base64EncodedString())
-                sampleTimes.append(frame.receivedAt)
-                lastSample = frame.receivedAt
                 preview = UIImage(data: data)
-                status = "Recording glasses clip · \(frames.count)/12 frames · no audio"
+                status = "Recording glasses clip · \(max(0, Int(ceil(6 - (now - start)))))s remaining · no audio"
                 offerProgress(image, requestID: requestID, sequence: frames.count, elapsedSeconds: max(0, frame.receivedAt - start))
             }
-            if frames.count < 12 { try await Task.sleep(for: .milliseconds(50)) }
+            try await Task.sleep(for: .milliseconds(25))
         }
-        let duration = (sampleTimes.last ?? start) - (sampleTimes.first ?? start)
-        guard duration >= 1, duration <= 10 else { throw BridgeError.message("The glasses clip timing was interrupted. Please retry.") }
+        let duration = window.sampledDuration
+        guard frames.count >= 3, duration >= 1, duration <= 6 else { throw BridgeError.message("Too few fresh images arrived during the six-second clip. Check the glasses connection and retry.") }
         return ["frames": frames, "durationSeconds": duration]
     }
 

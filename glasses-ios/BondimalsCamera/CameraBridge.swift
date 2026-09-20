@@ -19,6 +19,13 @@ final class CameraBridge: ObservableObject {
     @Published var deviceStatus = "Checking glasses connection…"
     @Published var sessionStatus = "Session: idle · Camera: off"
     @Published private(set) var setupEvent = "app-opened"
+    @Published private(set) var startupPhase: CameraStartupPhase = .idle
+    private var startupSessionState = "idle"
+    private var startupCameraState = "off"
+    private var startupRawFrameReceived = false
+    private var startupDecodedFrameReceived = false
+    private var startupFailure = ""
+    private var startupPermission = "unchecked"
     private var diagnosticObservers = Set<AnyCancellable>()
     private var lastCameraFrameAt: Date?
     private var webConnected = false
@@ -45,6 +52,8 @@ final class CameraBridge: ObservableObject {
     private var questCameraRequestID: String?
     private var pendingSessionRelease: Task<Bool, Never>?
     private var releasingSession: DeviceSession?
+    private var pendingListenerRelease: Task<Void, Never>?
+    private var listenerReleaseID: UUID?
 
     init() {
         let selector = AutoDeviceSelector(wearables: Wearables.shared)
@@ -100,6 +109,7 @@ final class CameraBridge: ObservableObject {
             $running.map { _ in () }.eraseToAnyPublisher(),
             $setupEvent.map { _ in () }.eraseToAnyPublisher(),
             $sessionStatus.map { _ in () }.eraseToAnyPublisher(),
+            $startupPhase.map { _ in () }.eraseToAnyPublisher(),
             quests.$status.map { _ in () }.eraseToAnyPublisher(),
             quests.$paired.map { _ in () }.eraseToAnyPublisher(),
             quests.$serverURL.map { _ in () }.eraseToAnyPublisher(),
@@ -126,6 +136,7 @@ final class CameraBridge: ObservableObject {
     }
 
     private func waitForCameraDevice() async throws {
+        startupPhase = .findingDevice
         updateCameraStatus(.starting, "Waiting for glasses to become ready. Wear them and keep them connected in Meta AI.")
         for _ in 0..<25 {
             try Task.checkCancellation()
@@ -216,6 +227,10 @@ final class CameraBridge: ObservableObject {
                 throw BridgeError.message("Meta has not confirmed the previous camera session closed. Stop the camera in Meta AI and reopen Kith Camera.")
             }
         }
+        // Do not retain stopped SDK sessions or let listeners from the previous
+        // capture overlap installation of the next session's listeners.
+        releasingSession = nil; pendingSessionRelease = nil
+        try await waitForPreviousListeners()
         try Task.checkCancellation()
         guard UIApplication.shared.applicationState == .active else {
             throw BridgeError.message("Keep Kith Camera open on the phone while capturing a quest.")
@@ -226,13 +241,13 @@ final class CameraBridge: ObservableObject {
         questCameraRequestID = requestID
         setupEvent = "quest-camera-start-requested"
         start()
-        let deadline = ProcessInfo.processInfo.systemUptime + 20
+        let deadline = ProcessInfo.processInfo.systemUptime + 25
         while !quests.cameraReady {
             try Task.checkCancellation()
             guard questCameraRequestID == requestID else { throw CancellationError() }
             guard running else { throw BridgeError.message(status) }
             guard ProcessInfo.processInfo.systemUptime < deadline else {
-                throw BridgeError.message("The glasses camera did not become ready in time. Check the phone's Meta permission prompt and retry.")
+                throw BridgeError.message(startupTimeoutMessage())
             }
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -251,6 +266,7 @@ final class CameraBridge: ObservableObject {
             updateCameraStatus(.error, "The previous camera session is still closing. Wait for the camera light to turn off, then retry.")
             return
         }
+        releasingSession = nil; pendingSessionRelease = nil
         guard UIApplication.shared.applicationState == .active else {
             updateCameraStatus(.paused, "Keep Kith Camera open on the phone to start the glasses camera.")
             return
@@ -258,18 +274,31 @@ final class CameraBridge: ObservableObject {
         running = true
         updateCameraStatus(.starting, "Starting the glasses camera…")
         lastCameraFrameAt = nil
+        startupPhase = .findingDevice
+        startupSessionState = "idle"; startupCameraState = "off"
+        startupRawFrameReceived = false; startupDecodedFrameReceived = false; startupFailure = ""; startupPermission = "unchecked"
         generation += 1
         let generation = self.generation
         startTask = Task {
             do {
+                try await waitForPreviousListeners()
+                try Task.checkCancellation()
+                guard generation == self.generation else { return }
                 guard wearables.registrationState == .registered else { throw BridgeError.message("Register this app with Meta AI first.") }
                 try await waitForCameraDevice()
-                updateCameraStatus(.permission, "Allow glasses-camera access in Meta AI, then return to Kith Camera.")
+                startupPhase = .checkingPermission
+                updateCameraStatus(.permission, "Checking Meta glasses-camera permission…")
                 var permission = try await wearables.checkPermissionStatus(.camera)
-                if permission != .granted { permission = try await wearables.requestPermission(.camera) }
+                startupPermission = permission == .granted ? "granted" : "denied"
+                if permission != .granted {
+                    startupPhase = .requestingPermission
+                    updateCameraStatus(.permission, "Allow glasses-camera access in Meta AI, then return to Kith Camera.")
+                    permission = try await wearables.requestPermission(.camera)
+                    startupPermission = permission == .granted ? "granted" : "denied"
+                }
                 guard permission == .granted else { throw BridgeError.message("Glasses-camera permission was denied.") }
                 guard generation == self.generation, !Task.isCancelled else { return }
-                processor = HandFrameProcessor(rotation: rotation, onFrame: { [weak self] frame in
+                processor = HandFrameProcessor(rotation: rotation, trackHands: questCameraRequestID == nil, onFrame: { [weak self] frame in
                     Task { @MainActor in
                         guard let self, generation == self.generation, self.running else { return }
                         if self.webConnected { self.relay.send(frame) }
@@ -283,6 +312,8 @@ final class CameraBridge: ObservableObject {
                     Task { @MainActor in
                         guard let self, generation == self.generation, self.running else { return }
                         self.lastCameraFrameAt = Date()
+                        self.startupDecodedFrameReceived = true
+                        self.startupPhase = .ready
                         self.phoneFrame = frame
                         self.quests.receive(frame)
                         if self.firstFrameTask != nil {
@@ -299,6 +330,7 @@ final class CameraBridge: ObservableObject {
                 session = created
                 lastSessionError = nil
                 observeSession(created, generation: generation)
+                startupPhase = .startingSession
                 updateCameraStatus(.starting, "Connecting to the glasses camera…")
                 try created.start()
                 try await waitUntilStarted(created, generation: generation)
@@ -310,6 +342,7 @@ final class CameraBridge: ObservableObject {
                 else { webStatus = "Web sharing is off. The camera preview works locally." }
             } catch {
                 if generation == self.generation {
+                    if !startupDecodedFrameReceived { startupFailure = CameraDiagnostics.redact(error.localizedDescription, secrets: wearables.devices) }
                     refreshDevices()
                     stop(error.localizedDescription, cameraState: .error)
                 }
@@ -319,6 +352,27 @@ final class CameraBridge: ObservableObject {
     private func updateCameraStatus(_ state: QuestCameraState, _ message: String) {
         status = message
         quests.setCameraState(state, message: CameraDiagnostics.redact(message, secrets: wearables.devices))
+    }
+    private func waitForPreviousListeners() async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while listenerReleaseID != nil {
+            try Task.checkCancellation()
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                throw BridgeError.message("The previous camera session has not released its listeners. Reopen Kith Camera before retrying.")
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        pendingListenerRelease = nil
+    }
+    private func startupTimeoutMessage() -> String {
+        startupSessionState = session?.state.description ?? startupSessionState
+        startupCameraState = camera.map { String(describing: $0.stream.state) } ?? startupCameraState
+        let message = startupPhase.timeoutMessage(session: startupSessionState, stream: startupCameraState,
+            rawFrame: startupRawFrameReceived, decodedFrame: startupDecodedFrameReceived,
+            foreground: UIApplication.shared.applicationState == .active)
+        startupFailure = CameraDiagnostics.redact(message, secrets: wearables.devices)
+        writeDiagnostics()
+        return message
     }
     private func writeDiagnostics() {
         let secrets = wearables.devices + [quests.pairingCode]
@@ -335,6 +389,11 @@ final class CameraBridge: ObservableObject {
             lastCaptureStage: quests.lastCaptureStage,
             lastCaptureOutcome: CameraDiagnostics.redact(quests.lastCaptureOutcome, secrets: secrets),
             lastCaptureAt: quests.lastCaptureAt.map { formatter.string(from: $0) },
+            startupPhase: startupPhase.rawValue, startupSessionState: startupSessionState,
+            startupCameraState: startupCameraState, startupRawFrameReceived: startupRawFrameReceived,
+            startupDecodedFrameReceived: startupDecodedFrameReceived,
+            startupPermission: startupPermission,
+            startupFailure: CameraDiagnostics.redact(startupFailure, secrets: secrets),
             lastFrameReceived: lastCameraFrameAt != nil,
             lastFrameReceivedAt: lastCameraFrameAt.map { formatter.string(from: $0) },
             registrationState: wearables.registrationState.description,
@@ -350,6 +409,7 @@ final class CameraBridge: ObservableObject {
             for await error in errors {
                 guard let self, generation == self.generation, !Task.isCancelled else { return }
                 self.lastSessionError = error
+                if !self.startupDecodedFrameReceived { self.startupFailure = CameraDiagnostics.redact(error.localizedDescription, secrets: self.wearables.devices) }
                 self.updateCameraStatus(.error, error.localizedDescription)
                 print("Kith: session error: \(error.localizedDescription)")
             }
@@ -358,6 +418,7 @@ final class CameraBridge: ObservableObject {
             for await state in states {
                 guard let self, generation == self.generation, !Task.isCancelled else { return }
                 self.sessionStatus = "Session: \(state.description) · Camera: \(self.camera.map { String(describing: $0.stream.state) } ?? "off")"
+                self.startupSessionState = state.description
                 print("Kith: \(self.sessionStatus)")
                 if state == .paused {
                     self.phoneFrame = nil
@@ -386,7 +447,7 @@ final class CameraBridge: ObservableObject {
             }
             if let error = lastSessionError { throw error }
             guard ProcessInfo.processInfo.systemUptime < deadline else {
-                throw BridgeError.message("Glasses session timed out (\(target.state.description)). Stop any other glasses camera app, then retry. If it persists, use Update Meta glasses app below.")
+                throw BridgeError.message(startupTimeoutMessage())
             }
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -411,11 +472,17 @@ final class CameraBridge: ObservableObject {
     }
     private func attachCamera(_ session: DeviceSession, generation: Int) throws {
         guard camera == nil, let processor else { return }
+        startupPhase = .startingStream
         let configuration = StreamConfiguration(videoCodec: .raw, resolution: .low, frameRate: 7)
         guard let attached = try session.addCamera(config: configuration) else { throw BridgeError.message("Could not attach glasses camera.") }
         camera = attached
         // Camera capability only: the separate Bondimals web app owns the glasses display.
         streamTokens.append(attached.stream.videoFramePublisher.listen { [weak self] frame in
+            Task { @MainActor in
+                guard let self, generation == self.generation, !self.startupRawFrameReceived else { return }
+                self.startupRawFrameReceived = true
+                self.writeDiagnostics()
+            }
             guard let buffer = CMSampleBufferGetImageBuffer(frame.sampleBuffer) else {
                 Task { @MainActor in
                     guard let self, generation == self.generation else { return }
@@ -435,8 +502,12 @@ final class CameraBridge: ObservableObject {
             Task { @MainActor in
                 guard let self, generation == self.generation else { return }
                 self.sessionStatus = "Session: \(session.state.description) · Camera: \(state)"
+                self.startupCameraState = String(describing: state)
                 print("Kith: \(self.sessionStatus)")
-                if state == .streaming { self.hasStreamed = true; UIApplication.shared.isIdleTimerDisabled = true; self.quests.setCameraRunning(true); self.status = "Camera streaming. Waiting for the first image…" }
+                if state == .streaming {
+                    if !self.startupDecodedFrameReceived { self.startupPhase = .waitingForFrame }
+                    self.hasStreamed = true; UIApplication.shared.isIdleTimerDisabled = true; self.quests.setCameraRunning(true); self.status = "Camera streaming. Waiting for the first image…"
+                }
                 else if state == .paused { self.phoneFrame = nil; self.quests.setCameraRunning(false); self.updateCameraStatus(.paused, "Glasses camera paused. Waiting for fresh frames.") }
                 else if state == .stopped && self.hasStreamed { self.stop("Glasses camera stopped. Start again to reconnect.", cameraState: .paused) }
                 else if state == .starting {
@@ -457,7 +528,7 @@ final class CameraBridge: ObservableObject {
         firstFrameTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(20)) } catch { return }
             guard let self, generation == self.generation, self.phoneFrame == nil else { return }
-            self.stop("No camera image arrived after 20 seconds (camera: \(attached.stream.state)). Check Bluetooth and Local Network access for Kith Camera in device Settings, and stop any other glasses-camera session before retrying.", cameraState: .error)
+            self.stop(self.startupTimeoutMessage(), cameraState: .error)
         }
     }
     func stopIfStreamingInBackground() {
@@ -477,7 +548,14 @@ final class CameraBridge: ObservableObject {
         sessionStateTask?.cancel(); sessionStateTask = nil
         sessionErrorTask?.cancel(); sessionErrorTask = nil
         let oldTokens = streamTokens; streamTokens.removeAll()
-        Task { for token in oldTokens { await token.cancel() } }
+        let earlierListeners = pendingListenerRelease
+        let listenerRelease = UUID()
+        listenerReleaseID = listenerRelease
+        pendingListenerRelease = Task { [weak self] in
+            await earlierListeners?.value
+            for token in oldTokens { await token.cancel() }
+            if self?.listenerReleaseID == listenerRelease { self?.listenerReleaseID = nil }
+        }
         camera?.stop(); camera = nil
         let closingSession = session ?? (releasingSession?.state == .stopped ? nil : releasingSession)
         releasingSession = closingSession

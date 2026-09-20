@@ -66,7 +66,7 @@ Phone-preview update: the signed iOS build passed. The camera starts independent
 
 Kith Camera accepts `bondimals://quest-camera?server=ENCODED_HTTPS_ORIGIN&code=ONE_USE_CODE` on the paired **iPhone**. The code comes from the authenticated game's `/glasses/pair` endpoint and expires after five minutes. This link contains no player token or model API key. The server must match the HTTPS game server already selected in Kith Camera; credentials, extra paths, fragments, duplicate fields, unknown fields, and malformed codes are rejected before changing the current camera pairing.
 
-Opening a valid link enables quest controls and claims that one-use code. Pairing leaves the glasses camera closed. If registration is needed, Kith opens the usual Meta flow. A later explicit photo or clip command starts the real glasses camera, including any required camera permission prompt, and waits up to twenty seconds for fresh frames. Reopening the same link while its claim is in flight does not issue a second claim, and an already-running camera is reused. Unpairing or turning off quest controls cancels any pending automatic start. Manual server/code entry remains available for recovery.
+Opening a valid link enables quest controls and claims that one-use code. Pairing leaves the glasses camera closed. If registration is needed, Kith opens the usual Meta flow. A later explicit photo or clip command starts the real glasses camera, including any required camera permission prompt, and waits up to twenty-five seconds for fresh frames. Reopening the same link while its claim is in flight does not issue a second claim, and an already-running camera is reused. Unpairing or turning off quest controls cancels any pending automatic start. Manual server/code entry remains available for recovery.
 
 This is an iPhone setup link, not a claim that selecting a custom URL inside the glasses browser remotely launches an iPhone app. A connected-phone development install can open the link with `devicectl`; otherwise open it on the paired phone. Keep Kith Camera foregrounded while the glasses game runs. Camera/display concurrency still needs the hardware test described above.
 
@@ -105,4 +105,11 @@ Upload regression check:
 ```sh
 xcrun swiftc glasses-ios/BondimalsCamera/CameraResultUpload.swift scripts/glasses-camera-upload-tests.swift -o /tmp/kith-camera-upload-tests
 /tmp/kith-camera-upload-tests
+```
+
+Camera 8 records clips within a fixed six-second monotonic window after confirming fresh frames; it collects up to twelve chronological samples instead of prolonging recording to fill twelve slots. Startup, session release and upload are separate phases. Quest capture bypasses hand-pose Vision work, while optional manual hand preview retains it. Before another session starts, stopped session references are released and the previous listener cleanup must finish within two seconds. Private diagnostics preserve the startup phase, Meta permission result, session/stream states and whether raw or decoded frames arrived, even after cleanup. Timeout messages describe the observed stage rather than assuming a permission problem. The earlier device failure showed no decoded frame but did not record enough detail to establish its cause; physical startup still requires a new device check.
+
+```sh
+xcrun swiftc glasses-ios/BondimalsCamera/CameraCaptureTiming.swift scripts/glasses-camera-timing-tests.swift -o /tmp/kith-camera-timing-tests
+/tmp/kith-camera-timing-tests
 ```

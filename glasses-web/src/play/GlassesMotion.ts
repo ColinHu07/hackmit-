@@ -1,7 +1,7 @@
 import { browserVerticalG, StepDetector } from '../../../companion-web/src/StepDetector';
 import { WalkingTracker, type WalkingPose } from '../../../companion-web/src/WalkingTracker';
 
-export type GlassesMotionStatus = 'off' | 'requesting' | 'waiting' | 'live' | 'stale' | 'paused' | 'denied' | 'unavailable' | 'simulated';
+export type GlassesMotionStatus = 'off' | 'permission' | 'requesting' | 'waiting' | 'live' | 'stale' | 'paused' | 'denied' | 'unavailable' | 'simulated';
 export type GlassesMotionSource = 'sensors' | 'simulator' | null;
 export type GlassesPoseChange = 'heading' | 'step' | 'recenter';
 export type GlassesSensorReadiness = 'off' | 'permission' | 'denied' | 'unavailable' | 'paused' | 'waiting' | 'ready' | 'stale' | 'incomplete';
@@ -10,6 +10,8 @@ export interface GlassesMotionState {
   source: GlassesMotionSource;
   headingReady: boolean;
   motionReady: boolean;
+  /** At least one sensor needs start() from a trusted user activation. */
+  needsPermissionGesture: boolean;
   headStatus: GlassesSensorReadiness;
   stepStatus: GlassesSensorReadiness;
   readiness: string;
@@ -46,6 +48,7 @@ const wrapDegrees = (degrees: number) => ((degrees % 360) + 360) % 360;
 const signedDegrees = (degrees: number) => wrapDegrees(degrees + 180) - 180;
 const messages: Record<GlassesMotionStatus, string> = {
   off: 'Head tracking and walking are off.',
+  permission: 'Pinch once to allow head tracking and walking.',
   requesting: 'Allow head tracking and walking sensors.',
   waiting: 'Face forward. Waiting for orientation and motion data…',
   live: 'Head turns steer your pet. Rhythmic steps move it forward.',
@@ -58,9 +61,10 @@ const messages: Record<GlassesMotionStatus, string> = {
 
 /**
  * Foreground, relative-IMU gameplay; this is not positional tracking or a compass.
- * Call start() directly from an explicit button/Enter activation. It requests the
- * documented DeviceOrientationEvent and DeviceMotionEvent APIs together before
- * yielding the user activation. See docs/meta-capabilities.md for hardware limits.
+ * Call startWithoutPrompt() on entry to attach sensors that need no activation.
+ * If needsPermissionGesture is true, call start() from a trusted activation. It
+ * requests DeviceOrientationEvent and DeviceMotionEvent together before yielding
+ * that activation. See docs/meta-capabilities.md for hardware limits.
  *
  * The first alpha is forward at the current avatar yaw. Physical testing on the
  * user's Meta glasses confirmed yawSign=+1: increasing alpha is a right head turn.
@@ -104,6 +108,8 @@ export class GlassesMotion {
   private motionAttached = false;
   private headPermissionPending = false;
   private motionPermissionPending = false;
+  private headPermissionNeeded = false;
+  private motionPermissionNeeded = false;
   private headDenied = false;
   private motionDenied = false;
   private suspended = false;
@@ -120,6 +126,9 @@ export class GlassesMotion {
   get pose(): WalkingPose { return { ...this.walking.pose }; }
   get status(): GlassesMotionStatus { this.checkFreshness(); return this.currentStatus; }
   get state(): GlassesMotionState { this.checkFreshness(); return this.snapshot(); }
+  get needsPermissionGesture(): boolean {
+    return this.source === 'sensors' && (this.headPermissionNeeded || this.motionPermissionNeeded);
+  }
 
   /** Synchronize once on join/reconnect or an authoritative teleport, not every frame. */
   syncPose(pose: WalkingPose): void {
@@ -151,6 +160,28 @@ export class GlassesMotion {
     this.baselineYaw = this.walking.pose.yaw;
     this.detector.reset();
     this.options.onPose?.(this.pose, 'recenter');
+    return true;
+  }
+
+  /** Auto-start only sensors whose API needs no gesture. The caller owns the
+   * user's walking intent and must not call this after an explicit Pause. */
+  startWithoutPrompt(): boolean {
+    // Rejoining or showing a page must not reset a live stride or request again.
+    if (this.resume()) return true;
+    if (this.source === 'sensors' && (this.needsPermissionGesture || this.headDenied)) return false;
+    this.stop();
+    this.source = 'sensors';
+    const orientation = this.host.DeviceOrientationEvent;
+    const motion = this.host.DeviceMotionEvent;
+    if (!this.host.isSecureContext || !orientation) { this.setStatus('unavailable'); return false; }
+    this.headPermissionNeeded = typeof orientation.requestPermission === 'function';
+    this.motionPermissionNeeded = typeof motion?.requestPermission === 'function';
+    this.sensorAuthorized = !this.headPermissionNeeded;
+    this.motionAllowed = !!motion && !this.motionPermissionNeeded;
+    this.attachVisibility();
+    if (this.visibility.hidden) { this.suspended = true; this.setStatus('paused'); return false; }
+    if (!this.sensorAuthorized) { this.setStatus('permission'); return false; }
+    this.beginSensors();
     return true;
   }
 
@@ -213,6 +244,7 @@ export class GlassesMotion {
     this.motionAllowed = false;
     this.sensorAuthorized = false;
     this.headPermissionPending = this.motionPermissionPending = false;
+    this.headPermissionNeeded = this.motionPermissionNeeded = false;
     this.headDenied = this.motionDenied = false;
     this.suspended = this.permissionTimedOut = false;
     this.source = null;
@@ -229,6 +261,12 @@ export class GlassesMotion {
    * this ability. A hidden page never resumes, and stale footfalls are discarded. */
   resume(): boolean {
     if (this.visibility.hidden || this.source === null) return false;
+    if (this.source === 'sensors' && this.headPermissionNeeded) {
+      this.suspended = false;
+      this.attachVisibility();
+      this.setStatus('permission');
+      return false;
+    }
     if (this.source === 'sensors' && this.headPermissionPending) {
       this.suspended = false;
       this.attachVisibility();
@@ -440,7 +478,8 @@ export class GlassesMotion {
 
   private publishState(): void {
     const state = this.snapshot();
-    const signature = [state.status, state.source, state.headingReady, state.motionReady, state.headStatus, state.stepStatus, state.steps, state.message].join(':');
+    const signature = [state.status, state.source, state.headingReady, state.motionReady, state.needsPermissionGesture,
+      state.headStatus, state.stepStatus, state.steps, state.message].join(':');
     if (signature === this.publishedState) return;
     this.publishedState = signature;
     this.options.onStatus?.(state);
@@ -458,11 +497,11 @@ export class GlassesMotion {
     const headingReady = this.headingFresh();
     const motionReady = this.acceptingSamples() && this.source === 'sensors' && this.sampleFresh(this.lastMotionAt);
     const headStatus: GlassesSensorReadiness = this.source !== 'sensors' ? 'off'
-      : this.headDenied ? 'denied' : this.headPermissionPending ? 'permission'
+      : this.headDenied ? 'denied' : this.headPermissionNeeded || this.headPermissionPending ? 'permission'
         : !this.sensorAuthorized ? 'unavailable' : this.suspended ? 'paused'
           : headingReady ? 'ready' : Number.isFinite(this.lastHeadingAt) ? 'stale' : 'waiting';
     const stepStatus: GlassesSensorReadiness = this.source !== 'sensors' ? 'off'
-      : this.motionDenied ? 'denied' : this.motionPermissionPending ? 'permission'
+      : this.motionDenied ? 'denied' : this.motionPermissionNeeded || this.motionPermissionPending ? 'permission'
         : !this.motionAllowed ? 'unavailable' : this.suspended ? 'paused'
           : motionReady ? 'ready' : this.sampleFresh(this.lastIncompleteMotionAt) ? 'incomplete'
             : Number.isFinite(this.lastMotionAt) ? 'stale' : 'waiting';
@@ -472,11 +511,12 @@ export class GlassesMotion {
       source: this.source,
       headingReady,
       motionReady,
+      needsPermissionGesture: this.needsPermissionGesture,
       headStatus,
       stepStatus,
       readiness,
       steps: this.stepCount,
-      message: this.source === 'sensors' && !['off', 'paused', 'denied'].includes(this.currentStatus)
+      message: this.source === 'sensors' && !['off', 'permission', 'paused', 'denied'].includes(this.currentStatus)
         ? readiness : messages[this.currentStatus],
     };
   }

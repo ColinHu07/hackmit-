@@ -6,7 +6,7 @@ import { evidenceReadiness } from '../../../companion-web/src/EvidenceReadiness'
 import { GlassesMotion } from './GlassesMotion';
 import { GlassesPosePublisher } from './GlassesPosePublisher';
 import { GlassesCamera, isCameraConnectionError, type CaptureStatus } from './GlassesCamera';
-import { cameraAvailability, recordingPreview } from './CameraPresentation';
+import { cameraAvailability, capturePresentation } from './CameraPresentation';
 import { recoverCapture } from './CaptureRecovery';
 import type { EvidenceQuestId, PetActionKind } from '../../../shared/play-protocol';
 
@@ -45,11 +45,11 @@ let lastRoomNotice = '';
 let grassQuestAvailable: boolean | undefined;
 let renderedHappiness: number | undefined;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
-let walkingWanted = false;
+let walkingWanted = read('walking-paused') !== 'true';
 let pageInCache = false;
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header class="glass-header"><span class="brand">kith<small>Meadow 7</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
+  <header class="glass-header"><span class="brand">kith<small>Meadow 8</small></span><div class="glass-mood"><span id="mood-face">${beaverMoodFace(70)}</span><div><span id="mood-value">70%</span><div class="glass-mood-track"><div id="mood-fill" class="glass-mood-fill" style="width:70%"></div></div></div></div><span id="connection" class="connection">Not connected</span></header>
   <canvas id="playground" aria-label="Your shared beaver playground"></canvas>
   <div id="tracking-status" class="glass-status">Loading your beaver…</div><div id="notice" class="glass-notice" role="status"></div>
   <nav class="action-rail" aria-label="Game actions"><button id="walk" type="button" disabled>Walk</button><button data-action="wave" type="button" disabled>Wave</button><button data-action="feed" id="feed" type="button" disabled>Berry</button><button id="quests" type="button" disabled>Quests</button><button id="more" type="button">More</button></nav>
@@ -92,7 +92,6 @@ function updateGameControls(): void {
 function join(): void {
   try {
     server = normalizeServerUrl(server); save('server', server); save('name', name);
-    walkingWanted = false;
     motion.stop();
     camera.reset(); capture = null; captureQuest = null; captureSession = null;
     lastRoomNotice = ''; grassQuestAvailable = undefined;
@@ -125,10 +124,10 @@ const motion = new GlassesMotion({
     }
     if (ready) el('tracking-status').textContent = state.message;
     const resume = ['paused', 'stale'].includes(state.status);
-    el('walk').textContent = motionEnabled ? 'Pause' : state.status === 'requesting' ? 'Allow…' : resume ? 'Resume' : 'Walk';
+    el('walk').textContent = state.needsPermissionGesture ? 'Allow motion' : motionEnabled ? 'Pause' : state.status === 'requesting' ? 'Allow…' : resume || !walkingWanted ? 'Resume' : 'Motion';
     el<HTMLButtonElement>('walk').disabled = !ready || connection !== 'connected' || state.status === 'requesting';
     playground?.setWalkingPose(motionEnabled ? motion.pose : null);
-    if (el('enable-walking')) el('enable-walking').textContent = motionEnabled ? 'Pause walking' : 'Enable walking';
+    if (el('enable-walking')) el('enable-walking').textContent = state.needsPermissionGesture ? 'Allow motion' : motionEnabled ? 'Pause walking' : 'Resume walking';
     if (el('recenter')) el<HTMLButtonElement>('recenter').disabled = !motionEnabled;
   },
 });
@@ -145,7 +144,6 @@ const client = new RoomClient({
       if (pageInCache || state === 'reconnecting' || state === 'connecting') {
         motion.suspend();
       } else {
-        walkingWanted = false;
         motion.stop();
       }
       motionEnabled = false; playground?.setWalkingPose(null);
@@ -159,7 +157,7 @@ const client = new RoomClient({
     if (local && previousMember !== member.playerId) {
       previousMember = member.playerId;
       motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
-      if (walkingWanted && !document.hidden) motion.resume();
+      startAutomaticWalking();
       void recoverCameraCapture();
     }
     motion.setWorldLimit(next.worldLimit ?? 3);
@@ -202,23 +200,45 @@ function settings(message = ''): void {
 }
 
 async function enableWalking(): Promise<void> {
-  if (motionEnabled || motion.status === 'requesting') { walkingWanted = false; walkingRequest++; motion.stop(); return; }
+  if (!motion.needsPermissionGesture && (motionEnabled || motion.status === 'requesting')) {
+    walkingWanted = false; save('walking-paused', 'true'); walkingRequest++; motion.stop(); return;
+  }
   if (connection !== 'connected' || document.hidden) return;
   const local = snapshot?.players.find(player => player.id === member?.playerId);
   if (!local) return;
-  walkingWanted = true;
+  walkingWanted = true; save('walking-paused', 'false');
   const request = ++walkingRequest;
   motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
   simulatorHeading = 0;
-  if (motion.status === 'paused' && motion.resume()) { /* Reuse the user's existing permission request. */ }
+  if (!motion.needsPermissionGesture && motion.resume()) { /* Reuse the existing grant. */ }
   else if (simulator) motion.startSimulation();
   else await motion.start();
   if (request !== walkingRequest || connection !== 'connected' || document.hidden) return;
   closePanel();
 }
 
+function startAutomaticWalking(): void {
+  if (!walkingWanted || document.hidden || connection !== 'connected' || !member) return;
+  if (motion.resume()) return;
+  if (simulator) { simulatorHeading = 0; motion.startSimulation(); }
+  else motion.startWithoutPrompt();
+}
+
+// Glasses sensor APIs can attach immediately. Browsers with a required motion
+// permission gesture use the first normal interaction, without another Walk step.
+function allowMotionOnInteraction(event: Event): void {
+  if (!event.isTrusted || !walkingWanted || simulator || !motion.needsPermissionGesture
+    || connection !== 'connected' || document.hidden) return;
+  const target = event.target instanceof Element ? event.target.closest('button') : null;
+  if (target?.id === 'walk' || target?.id === 'enable-walking') return;
+  if (event instanceof KeyboardEvent && !['Enter', ' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+  void motion.start();
+}
+document.addEventListener('pointerdown', allowMotionOnInteraction, { capture: true });
+document.addEventListener('keydown', allowMotionOnInteraction, { capture: true });
+
 function more(): void {
-  panel('Your beaver', `<div class="button-row">${button('Jump', 'jump', connection !== 'connected')}${button('Play', 'play', connection !== 'connected')}${button('Dap', 'dap', connection !== 'connected')}</div><div class="button-row">${button(motionEnabled ? 'Pause walking' : 'Enable walking', 'enable-walking', connection !== 'connected')}${button('Recenter', 'recenter', !motionEnabled)}</div>${button('Glasses camera setup', 'pair-camera', connection !== 'connected')}${button('Connection & controls', 'settings')}<p id="panel-status" class="small">${simulator ? 'Simulator only: A / D turn, W walks a step. Arrow keys select buttons.' : 'Steps move your beaver; looking around changes its heading. Keep the phone camera bridge open for capture.'}</p>${button('Back to game', 'back')}`, 'more');
+  panel('Your beaver', `<div class="button-row">${button('Jump', 'jump', connection !== 'connected')}${button('Play', 'play', connection !== 'connected')}${button('Dap', 'dap', connection !== 'connected')}</div><div class="button-row">${button(motion.needsPermissionGesture ? 'Allow motion' : motionEnabled ? 'Pause walking' : 'Resume walking', 'enable-walking', connection !== 'connected')}${button('Recenter', 'recenter', !motionEnabled)}</div>${button('Glasses camera setup', 'pair-camera', connection !== 'connected')}${button('Connection & controls', 'settings')}<p id="panel-status" class="small">${simulator ? 'Simulator only: A / D turn, W walks a step. Arrow keys select buttons.' : 'Walking starts automatically. Steps move your beaver; looking around changes its heading. Keep the phone camera bridge open for capture.'}</p>${button('Back to game', 'back')}`, 'more');
   for (const action of ['jump', 'play', 'dap'] as const) bind(action, () => { client.action(action); closePanel(); });
   bind('enable-walking', enableWalking);
   bind('recenter', () => { motion.recenter(); closePanel(); });
@@ -317,7 +337,7 @@ async function recoverCameraCapture(showEmpty = false): Promise<void> {
       if (!currentPanel || ['capture', 'quest'].includes(currentPanel) && selectedQuest === state.questId) {
         selectedQuest = state.questId; questPanel();
       } else if (recorderQuestChanged) {
-        questPanel('This recording did not start. Your previous capture is still saved in its own quest. Choose Photo or Record 6s to try again.');
+        questPanel('This recording did not start. Your previous capture is still saved in its own quest. Choose Photo or Record clip to try again.');
       }
     } else if (state.questId && state.requestId && state.status === 'capturing') {
       if (!currentPanel || ['capture', 'quest'].includes(currentPanel) && selectedQuest === state.questId) {
@@ -328,8 +348,8 @@ async function recoverCameraCapture(showEmpty = false): Promise<void> {
       }
     } else if (currentPanel === 'capture') {
       captureSession = null; capture = null; captureQuest = null;
-      questPanel(state.error || 'No saved capture. Choose Photo or Record 6s to try again.');
-    } else if (run.showEmpty) cameraFeedback(state.error || 'Choose Photo or Record 6s to capture this quest.');
+      questPanel(state.error || 'No saved capture. Choose Photo or Record clip to try again.');
+    } else if (run.showEmpty) cameraFeedback(state.error || 'Choose Photo or Record clip to capture this quest.');
   } catch (error) {
     if (current()) {
       const message = error instanceof Error ? error.message : 'Could not restore your capture.';
@@ -355,7 +375,7 @@ function questPanel(message = ''): void {
   }
   const quest = quests.find(item => item.id === selectedQuest)!;
   const readiness = evidenceReadiness(selectedQuest, snapshot, member?.playerId, connection === 'connected');
-  panel(quest.title, `<p>${quest.instruction}</p><p id="panel-status" role="status" class="small">${escape(message || readiness.message)}</p><div class="button-row">${button('Photo', 'capture-photo', !readiness.ready || selectedQuest === 'dapHandshake')}${button('Record 6s', 'capture-clip', !readiness.ready)}</div><p class="small">Your capture stays in this quest. Submit it to Muse or retake it here. The display may pause while recording; reopen Kith when the camera stops.</p>${button('Back', 'back')}`, 'quest');
+  panel(quest.title, `<p>${quest.instruction}</p><p id="panel-status" role="status" class="small">${escape(message || readiness.message)}</p><div class="button-row">${button('Photo', 'capture-photo', !readiness.ready || selectedQuest === 'dapHandshake')}${button('Record clip', 'capture-clip', !readiness.ready)}</div><p class="small">Clips record for six seconds after the camera is ready. Opening the camera and saving take extra time. Reopen Kith to submit or retake in this quest.</p>${button('Back', 'back')}`, 'quest');
   bind('capture-photo', () => startCapture('photo'));
   bind('capture-clip', () => startCapture('clip'));
   bind('back', questList);
@@ -374,7 +394,7 @@ async function pairCamera(returnToQuest?: EvidenceQuestId): Promise<void> {
     const available = cameraAvailability(state);
     if (available.ready && returnToQuest) {
       selectedQuest = returnToQuest;
-      questPanel('Camera connected. Choose Photo or Record 6s, then submit from this quest.');
+      questPanel('Camera connected. Choose Photo or Record clip, then submit from this quest.');
       return;
     }
     el('panel-status').textContent = available.message;
@@ -429,7 +449,7 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
   if (!resumed && (!readiness.ready || kind === 'photo' && questId === 'dapHandshake')) return;
   cameraBusy = true; capture = null; captureQuest = questId;
   captureSession = session; cancelCaptureRequested = false;
-  panel(kind === 'photo' ? 'Glasses photo' : 'Record a 6-second clip', `<div class="recorder-view"><img id="recording-preview" alt="Live view from your glasses camera" hidden><p id="recording-placeholder">Connecting to your glasses camera…</p><span id="recording-clock" class="recording-clock">Preparing</span></div><p id="panel-status" class="small">The display may pause for recording. Reopen Kith after the camera stops to return to this quest and submit.</p><div class="button-row">${button('Try again', 'retry-capture', true)}${button('Cancel', 'cancel-capture')}</div>${button('Camera setup', 'recorder-setup')}`, 'capture');
+  panel(kind === 'photo' ? 'Glasses photo' : 'Record a clip', `<div class="recorder-view"><img id="recording-preview" alt="Live view from your glasses camera" hidden><p id="recording-placeholder">Connecting to your glasses camera…</p><span id="recording-clock" class="recording-clock">Preparing</span></div><p id="panel-status" class="small">Opening the camera… The six-second recording starts when the camera is ready. Reopen Kith after it closes to submit.</p><div class="button-row">${button('Try again', 'retry-capture', true)}${button('Cancel', 'cancel-capture')}</div>${button('Camera setup', 'recorder-setup')}`, 'capture');
   el('retry-capture').hidden = true; el('recorder-setup').hidden = true;
   const generation = cameraGeneration;
   const current = () => cameraViewMatches(generation, 'capture', session) && !cancelCaptureRequested;
@@ -438,7 +458,7 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
     el<HTMLImageElement>('recording-preview').hidden = true;
     el('recording-placeholder').hidden = false;
     el('recording-placeholder').textContent = 'Waiting for a fresh glasses camera frame…';
-    el('recording-clock').textContent = 'Preview paused';
+    el('recording-clock').textContent = 'Waiting for frames';
   };
   const showFailure = async (message: string, needsSetup = false) => {
     cameraBusy = false;
@@ -495,10 +515,11 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
     const request = resumed?.requestId ? { requestId: resumed.requestId } : await camera.capture(kind, questId);
     if (!current()) { cameraBusy = false; if (cancelCaptureRequested) await discardActiveCapture(); return; }
     cameraBusy = false;
-    el('panel-status').textContent = kind === 'photo' ? 'Taking a photo through your glasses…' : 'Recording starts when the camera is ready. If the display pauses, reopen Kith after recording to return to this quest and submit.';
+    el('panel-status').textContent = kind === 'photo' ? 'Taking a photo through your glasses…' : 'Opening the camera before your six-second clip. Reopen Kith when the camera closes to submit.';
     el('recording-placeholder').textContent = 'Waiting for the glasses camera…';
     const startedAt = resumed?.captureAt ?? Date.now();
     let lastSequence = 0;
+    let sawRecording = false;
     const poll = async () => {
       if (!current()) return;
       try {
@@ -510,20 +531,26 @@ async function startCapture(kind: 'photo' | 'clip', resumed?: CaptureStatus): Pr
           captureSession = null; capture = state; captureQuest = questId;
           selectedQuest = questId; questPanel(); return;
         }
-        const preview = recordingPreview(state, request.requestId);
+        const presentation = capturePresentation(state, request.requestId, kind, sawRecording);
+        const preview = presentation.preview;
+        if (presentation.stage !== 'recording') clearTimeout(recorderPreviewTimer);
+        el('recording-clock').textContent = presentation.clock;
+        el('panel-status').textContent = presentation.message;
+        if (!preview) {
+          el<HTMLImageElement>('recording-preview').hidden = true;
+          el('recording-placeholder').hidden = false;
+          el('recording-placeholder').textContent = presentation.title;
+        }
         if (preview && preview.sequence > lastSequence) {
-          lastSequence = preview.sequence;
+          lastSequence = preview.sequence; sawRecording = true;
           const image = el<HTMLImageElement>('recording-preview');
           image.src = preview.image; image.hidden = false;
           el('recording-placeholder').hidden = true;
-          el('recording-clock').textContent = preview.remaining ? `● REC · ${preview.remaining}s` : 'Finishing clip…';
-          el('panel-status').textContent = 'Recording from your glasses. Keep the action in view.';
           clearTimeout(recorderPreviewTimer);
           recorderPreviewTimer = setTimeout(expiredPreview, 3000);
         }
         // A reconnect clears the previous phone heartbeat. Give its polling
         // loop time to catch up; a fresh capture result can still arrive.
-        if (!state.connected) el('panel-status').textContent = 'Reconnecting to the camera. Your requested capture is being saved to this quest.';
         if (Date.now() - startedAt > 65_000) throw new Error('The glasses camera did not finish recording. Check Kith Camera on your phone and retry.');
         cameraPoll = setTimeout(() => { void poll(); }, 500);
       } catch (error) {
@@ -635,7 +662,7 @@ document.addEventListener('keydown', event => {
   const target = event.target as HTMLElement;
   if (target instanceof HTMLInputElement && target.type !== 'checkbox') return;
   if (simulator && !currentPanel && ['a', 'd', 'w'].includes(event.key.toLowerCase())) {
-    if (!motionEnabled) { tell('Select Walk to start simulator controls.'); return; }
+    if (!motionEnabled) { tell('Walking is paused. Select Resume to continue.'); return; }
     if (event.key.toLowerCase() === 'w') motion.simulateSteps(1);
     else { simulatorHeading += event.key.toLowerCase() === 'd' ? 10 : -10; motion.simulateHeading(simulatorHeading); }
     event.preventDefault(); return;
@@ -655,9 +682,8 @@ document.addEventListener('visibilitychange', () => {
     if (connection === 'connected' && walkingWanted) {
       const local = snapshot?.players.find(player => player.id === member?.playerId);
       if (local) motion.syncPose({ x: local.targetX, z: local.targetZ, yaw: local.yaw });
-      motion.resume();
+      startAutomaticWalking();
     }
-    else if (connection === 'connected') tell('Welcome back. Select Walk to enable head tracking and steps.');
     resumeCameraPanel();
   } else {
     walkingRequest++; posePublisher.clear();
@@ -699,7 +725,7 @@ try {
     if (motionEnabled) playground.setWalkingPose(motion.pose);
   }, { display: true });
   await playground.load(message => { el('tracking-status').textContent = message; }); ready = true;
-  el('tracking-status').textContent = walkingWanted ? motion.state.message : simulator ? 'Simulator · select Walk, then W / A / D' : 'Select Walk to enable head tracking and steps';
+  el('tracking-status').textContent = walkingWanted ? motion.state.message : 'Walking is paused. Select Resume to continue.';
   updateGameControls();
   if (el('join')) el<HTMLButtonElement>('join').disabled = false;
 } catch (error) { el('tracking-status').textContent = error instanceof Error ? error.message : 'Could not load the beaver. Reopen Kith to retry.'; }

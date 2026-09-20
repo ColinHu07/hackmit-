@@ -40,6 +40,142 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 const stepDistance = STEP_METERS * WALK_SCALE * STEP_MOVEMENT_GAIN;
 
+describe('automatic sensor startup', () => {
+  it('starts heading and rhythmic walking immediately when no gesture permission API exists', () => {
+    const t = setup();
+    expect(t.controller.startWithoutPrompt()).toBe(true);
+    expect(t.controller.state).toMatchObject({ status: 'waiting', source: 'sensors', needsPermissionGesture: false });
+    t.host.orientation(200); t.at(100); t.host.orientation(290);
+    expect(t.controller.pose.yaw).toBeCloseTo(Math.PI / 2);
+    t.walk(200, 1000, 290);
+    expect(t.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: true, steps: 2 });
+    expect(t.controller.pose.x).toBeCloseTo(2 * stepDistance);
+    t.controller.stop();
+  });
+
+  it('does not reset live sensor listeners, heading calibration, or stride on another automatic start', () => {
+    const t = setup();
+    const attach = vi.spyOn(t.host, 'addEventListener');
+    t.controller.startWithoutPrompt(); t.walk(0, 500);
+    expect(t.controller.startWithoutPrompt()).toBe(true);
+    t.walk(500, 500);
+    expect(t.controller.state.steps).toBe(2);
+    expect(attach.mock.calls.map(([event]) => event)).toEqual(['deviceorientation', 'deviceorientationabsolute', 'devicemotion']);
+    expect(vi.getTimerCount()).toBe(1);
+    t.controller.stop();
+  });
+
+  it('exposes a gesture requirement without invoking either permission prompt on automatic entry', async () => {
+    const t = setup();
+    const head = vi.fn(async () => 'granted'), motion = vi.fn(async () => 'granted');
+    t.host.DeviceOrientationEvent = { requestPermission: head };
+    t.host.DeviceMotionEvent = { requestPermission: motion };
+    expect(t.controller.startWithoutPrompt()).toBe(false);
+    expect(t.controller.startWithoutPrompt()).toBe(false);
+    expect(t.controller.needsPermissionGesture).toBe(true);
+    expect(t.controller.state).toMatchObject({ status: 'permission', headStatus: 'permission', stepStatus: 'permission', needsPermissionGesture: true });
+    t.walk(0, 1000);
+    expect(t.controller.state.steps).toBe(0);
+    expect(head).not.toHaveBeenCalled(); expect(motion).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    // The application's trusted gesture handler is the only caller of start().
+    const starting = t.controller.start();
+    expect(head).toHaveBeenCalledOnce(); expect(motion).toHaveBeenCalledOnce();
+    expect(await starting).toBe(true);
+    expect(t.controller.needsPermissionGesture).toBe(false);
+    t.walk(1000, 1000);
+    expect(t.controller.state.steps).toBe(2);
+    t.controller.stop();
+  });
+
+  it('auto-starts head steering while a separate walking permission awaits a gesture', async () => {
+    const t = setup();
+    const motion = vi.fn(async () => 'granted');
+    t.host.DeviceMotionEvent = { requestPermission: motion };
+    expect(t.controller.startWithoutPrompt()).toBe(true);
+    t.host.orientation(0); t.at(100); t.host.orientation(90);
+    expect(t.controller.state).toMatchObject({ status: 'live', headingReady: true, motionReady: false, stepStatus: 'permission', needsPermissionGesture: true });
+    expect(t.controller.pose.yaw).toBeCloseTo(Math.PI / 2);
+    t.walk(200, 1000, 90);
+    expect(t.controller.state.steps).toBe(0);
+    expect(motion).not.toHaveBeenCalled();
+    await t.controller.start();
+    t.walk(1200, 1000, 90);
+    expect(t.controller.state).toMatchObject({ status: 'live', motionReady: true, needsPermissionGesture: false, steps: 2 });
+    expect(motion).toHaveBeenCalledOnce();
+    t.controller.stop();
+  });
+
+  it('never starts hidden tracking, then resumes without a prompt or old footfalls', () => {
+    const t = setup();
+    const attach = vi.spyOn(t.host, 'addEventListener');
+    t.visibility.hide(true);
+    expect(t.controller.startWithoutPrompt()).toBe(false);
+    expect(t.controller.state.status).toBe('paused');
+    expect(attach).not.toHaveBeenCalled();
+    t.walk(0, 1000);
+    expect(t.controller.state.steps).toBe(0);
+    t.visibility.hide(false);
+    expect(t.controller.resume()).toBe(true);
+    t.walk(1000, 500);
+    expect(t.controller.state.steps).toBe(0);
+    t.walk(1500, 500);
+    expect(t.controller.state.steps).toBe(2);
+    t.controller.stop();
+  });
+
+  it('keeps gated sensors waiting for activation across background and foreground', () => {
+    const t = setup();
+    const head = vi.fn(async () => 'granted');
+    t.host.DeviceOrientationEvent = { requestPermission: head };
+    t.controller.startWithoutPrompt();
+    t.visibility.hide(true);
+    expect(t.controller.state).toMatchObject({ status: 'paused', needsPermissionGesture: true });
+    t.visibility.hide(false);
+    expect(t.controller.resume()).toBe(false);
+    expect(t.controller.state).toMatchObject({ status: 'permission', needsPermissionGesture: true });
+    expect(head).not.toHaveBeenCalled();
+    t.controller.stop();
+    expect(t.controller.needsPermissionGesture).toBe(false);
+    expect(t.controller.resume()).toBe(false);
+  });
+
+  it('reuses an explicit grant for automatic foreground recovery and never re-prompts denial', async () => {
+    const granted = setup();
+    const head = vi.fn(async () => 'granted');
+    granted.host.DeviceOrientationEvent = { requestPermission: head };
+    await granted.controller.start();
+    granted.controller.suspend();
+    expect(granted.controller.startWithoutPrompt()).toBe(true);
+    expect(head).toHaveBeenCalledOnce();
+    expect(granted.controller.needsPermissionGesture).toBe(false);
+    granted.controller.stop();
+    const denied = setup();
+    const refuse = vi.fn(async () => 'denied');
+    denied.host.DeviceOrientationEvent = { requestPermission: refuse };
+    await denied.controller.start();
+    expect(denied.controller.startWithoutPrompt()).toBe(false);
+    expect(denied.controller.state).toMatchObject({ status: 'denied', needsPermissionGesture: false });
+    expect(refuse).toHaveBeenCalledOnce();
+    denied.controller.stop();
+  });
+
+  it('reports unsupported contexts without requesting permissions or inventing movement', () => {
+    for (const secure of [true, false]) {
+      const t = setup();
+      const permission = vi.fn();
+      t.host.isSecureContext = secure;
+      t.host.DeviceOrientationEvent = secure ? undefined : { requestPermission: permission };
+      expect(t.controller.startWithoutPrompt()).toBe(false);
+      expect(t.controller.state).toMatchObject({ status: 'unavailable', needsPermissionGesture: false });
+      t.walk(0, 1000);
+      expect(t.controller.state.steps).toBe(0);
+      expect(permission).not.toHaveBeenCalled();
+      t.controller.stop();
+    }
+  });
+});
+
 describe('relative head facing and estimated walking', () => {
   it('calibrates first heading to current avatar yaw and crosses 0/360 by the short angle', async () => {
     const t = setup();

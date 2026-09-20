@@ -39,6 +39,7 @@ final class HandFrameProcessor: @unchecked Sendable {
     private var sequence = 0
     private var previewEnabled = false
     private var lastPreviewAt = -Double.infinity
+    private let trackHands: Bool
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
     let streamId = UUID().uuidString
     let orientation: CGImagePropertyOrientation
@@ -52,7 +53,8 @@ final class HandFrameProcessor: @unchecked Sendable {
         .ringMCP, .ringPIP, .ringDIP, .ringTip,
         .littleMCP, .littlePIP, .littleDIP, .littleTip,
     ]
-    init(rotation: Int, onFrame: @escaping (HandFrame) -> Void, onPhoneFrame: @escaping (PhoneCameraFrame) -> Void, onError: @escaping (String) -> Void) {
+    init(rotation: Int, trackHands: Bool = true, onFrame: @escaping (HandFrame) -> Void, onPhoneFrame: @escaping (PhoneCameraFrame) -> Void, onError: @escaping (String) -> Void) {
+        self.trackHands = trackHands
         orientation = [0: .up, 90: .right, 180: .down, 270: .left][rotation] ?? .up
         self.onFrame = onFrame
         self.onPhoneFrame = onPhoneFrame
@@ -75,7 +77,7 @@ final class HandFrameProcessor: @unchecked Sendable {
             defer { lock.lock(); busy = false; lock.unlock() }
             let oriented = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
             var hands: [TrackedHand] = []
-            do {
+            if trackHands { do {
                 try VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:]).perform([request])
                 var seenIds = Set<String>()
                 hands = (request.results ?? []).enumerated().compactMap { index, hand in
@@ -96,7 +98,7 @@ final class HandFrameProcessor: @unchecked Sendable {
                     }
                     return TrackedHand(id: id, score: Double(min(tip.confidence, wrist.confidence)), points: landmarks)
                 }
-            } catch { onError("Hand tracking: \(error.localizedDescription)") }
+            } catch { onError("Hand tracking: \(error.localizedDescription)") } }
             // Local visualization has no relay dependency and no JPEG/network overhead.
             if let image = imageContext.createCGImage(oriented, from: oriented.extent) {
                 onPhoneFrame(PhoneCameraFrame(image: image, hands: hands, receivedAt: uptime))
