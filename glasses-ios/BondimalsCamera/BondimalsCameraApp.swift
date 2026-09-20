@@ -14,10 +14,15 @@ struct BondimalsCameraApp: App {
         WindowGroup {
             NavigationStack {
                 Form {
+                    Section {
+                        Text("Camera \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")")
+                            .font(.caption.bold()).accessibilityIdentifier("camera-build-version")
+                        Text(bridge.status).accessibilityIdentifier("bridge-status")
+                        QuestSetupSummary(quests: bridge.quests)
+                    }
                     Section("Live glasses view") {
                         PhoneCameraPreview(frame: bridge.phoneFrame, running: bridge.running)
                         Text("The live glasses preview stays on this phone unless you enable optional desktop preview. Quest captures are shared only when you request them from your paired game.")
-                        Text(bridge.status).accessibilityIdentifier("bridge-status")
                         Text(bridge.handStatus).font(.caption.monospaced())
                         Text(bridge.sessionStatus).font(.caption.monospaced())
                     }
@@ -60,6 +65,22 @@ struct BondimalsCameraApp: App {
                  if phase == .background { bridge.stopIfStreamingInBackground() }
                  else if phase == .active { bridge.resumeForeground() }
              }
+             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                 bridge.resumeForeground()
+             }
+        }
+    }
+}
+
+private struct QuestSetupSummary: View {
+    @ObservedObject var quests: QuestCaptureBridge
+    var body: some View {
+        if quests.enabled || quests.connecting || quests.paired {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(quests.paired ? "Game camera connected" : quests.connecting ? "Connecting game camera…" : "Game camera setup")
+                    .font(.caption.bold())
+                Text(quests.status).font(.callout)
+            }.accessibilityIdentifier("quest-setup-summary")
         }
     }
 }

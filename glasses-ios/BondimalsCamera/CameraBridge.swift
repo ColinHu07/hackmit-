@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreMedia
+import Combine
 import MWDATCore
 import MWDATCamera
 
@@ -17,6 +18,9 @@ final class CameraBridge: ObservableObject {
     @Published var webStatus = "Web sharing is off. The camera preview works locally."
     @Published var deviceStatus = "Checking glasses connection…"
     @Published var sessionStatus = "Session: idle · Camera: off"
+    @Published private(set) var setupEvent = "app-opened"
+    private var diagnosticObservers = Set<AnyCancellable>()
+    private var lastCameraFrameAt: Date?
     private var webConnected = false
     private let wearables = Wearables.shared
     private let deviceSelector: AutoDeviceSelector
@@ -72,6 +76,22 @@ final class CameraBridge: ObservableObject {
             return camera.stream.capturePhoto(format: .jpeg)
         }
         quests.onUnpaired = { [weak self] in self?.questCameraStartRequested = false }
+        // Coalesce lifecycle/setup changes; frame receipt is sampled at most
+        // once every ten seconds, without retaining or serializing its image.
+        Publishers.MergeMany([
+            $status.map { _ in () }.eraseToAnyPublisher(),
+            $running.map { _ in () }.eraseToAnyPublisher(),
+            $setupEvent.map { _ in () }.eraseToAnyPublisher(),
+            $sessionStatus.map { _ in () }.eraseToAnyPublisher(),
+            quests.$status.map { _ in () }.eraseToAnyPublisher(),
+            quests.$paired.map { _ in () }.eraseToAnyPublisher(),
+            quests.$serverURL.map { _ in () }.eraseToAnyPublisher(),
+        ]).debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+            .sink { [weak self] in self?.writeDiagnostics() }.store(in: &diagnosticObservers)
+        $phoneFrame.map { $0 != nil }.filter { $0 }
+            .throttle(for: .seconds(10), scheduler: RunLoop.main, latest: true)
+            .sink { [weak self] _ in self?.writeDiagnostics() }.store(in: &diagnosticObservers)
+        writeDiagnostics()
     }
     deinit { deviceMonitor?.cancel(); registrationMonitor?.cancel(); setupRegistrationTask?.cancel() }
 
@@ -108,14 +128,16 @@ final class CameraBridge: ObservableObject {
     }
     func open(_ url: URL) {
         if url.host?.lowercased() == "quest-camera" {
+            setupEvent = "setup-link-received"
             do {
                 status = "Connecting your glasses game to its camera…"
                 try quests.openSetupLink(url) { [weak self] in
                     guard let self else { return }
+                    self.setupEvent = "camera-claim-succeeded"
                     self.questCameraStartRequested = true
                     self.continueQuestCameraSetup()
                 }
-            } catch { status = error.localizedDescription }
+            } catch { setupEvent = "setup-link-rejected"; status = error.localizedDescription }
             return
         }
         if url.host == "bridge" { pairingLink = url.absoluteString; status = "Pairing link loaded. Register, then Start."; return }
@@ -131,16 +153,20 @@ final class CameraBridge: ObservableObject {
     func resumeForeground() {
         quests.setForeground(true)
         continueQuestCameraSetup()
+        writeDiagnostics()
     }
     private func continueQuestCameraSetup() {
-        guard questCameraStartRequested, quests.paired, UIApplication.shared.applicationState == .active else { return }
+        guard questCameraStartRequested, quests.paired else { return }
+        guard UIApplication.shared.applicationState == .active else { setupEvent = "waiting-for-foreground"; return }
         if running { questCameraStartRequested = false; status = "Your glasses camera is connected to the game."; return }
         if wearables.registrationState == .registered {
+            setupEvent = "camera-start-requested"
             questCameraStartRequested = false
             start()
             return
         }
         status = "Complete camera registration in Meta AI. Kith will start the glasses camera when you return."
+        setupEvent = "meta-registration-required"
         guard setupRegistrationTask == nil, wearables.registrationState != .registering else { return }
         setupRegistrationTask = Task { [weak self] in
             guard let self else { return }
@@ -155,6 +181,7 @@ final class CameraBridge: ObservableObject {
     func start() {
         guard !running else { return }
         running = true
+        lastCameraFrameAt = nil
         generation += 1
         let generation = self.generation
         startTask = Task {
@@ -179,11 +206,13 @@ final class CameraBridge: ObservableObject {
                 }, onPhoneFrame: { [weak self] frame in
                     Task { @MainActor in
                         guard let self, generation == self.generation, self.running else { return }
+                        self.lastCameraFrameAt = Date()
                         self.phoneFrame = frame
                         self.quests.receive(frame)
                         if self.firstFrameTask != nil {
                             self.firstFrameTask?.cancel(); self.firstFrameTask = nil
                             self.status = "Glasses camera live. Move your hand into view to see the tracking overlay."
+                            self.setupEvent = "camera-frame-received"
                             print("Kith: first glasses-camera image received")
                         }
                     }
@@ -210,6 +239,22 @@ final class CameraBridge: ObservableObject {
                 }
             }
         }
+    }
+    private func writeDiagnostics() {
+        let secrets = wearables.devices + [quests.pairingCode]
+        let formatter = ISO8601DateFormatter()
+        CameraDiagnostics(
+            buildVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            serverOrigin: CameraDiagnostics.origin(quests.serverURL),
+            setupEvent: setupEvent,
+            setupStatus: CameraDiagnostics.redact(quests.status, secrets: secrets),
+            cameraStatus: CameraDiagnostics.redact(status, secrets: secrets),
+            paired: quests.paired, running: running,
+            lastFrameReceived: lastCameraFrameAt != nil,
+            lastFrameReceivedAt: lastCameraFrameAt.map { formatter.string(from: $0) },
+            registrationState: wearables.registrationState.description,
+            updatedAt: formatter.string(from: Date())
+        ).write()
     }
     private func observeSession(_ target: DeviceSession, generation: Int) {
         // Subscribe synchronously before start(): DAT's startup failures are

@@ -15,6 +15,7 @@ The display game uses a Meta Ray-Ban Display Web App. The phone camera app uses 
 - The display retries temporary transport failures during first connection as well as after joining. A rejected room is reported immediately. After retries are exhausted, use the connection panel's Join button to retry.
 - After reserving a Serveo hostname and registering this Mac's dedicated public key, run `node scripts/share-game-server.mjs --hostname YOUR_NAME.serveousercontent.com --identity /absolute/path/to/key`. This forwards port 8788, verifies the existing game server, pins Serveo's host key and reconnects the same hostname after an SSH interruption. It stops if Serveo substitutes an anonymous hostname. The private key stays outside the repository. The Mac and game server must remain running.
 - The native camera target is iOS 17.2+ with DAT 0.9.0. Build `glasses-ios/BondimalsCamera.xcodeproj`, scheme `BondimalsCamera`, with your signing team. This is separate from the Kith phone game.
+- For a signed camera update, use `npm run build:camera -- --server https://YOUR_GAME_HOST --team YOUR_TEAM --device YOUR_DEVICE_ID` (omit `--device` to build only). This requires an explicit server, isolates build output by hostname and checks the signed app's embedded server before installing. A successful build or app launch alone does not establish that camera pairing worked.
 
 ## Controls
 

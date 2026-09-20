@@ -78,3 +78,5 @@ Parser regression check:
 xcrun swiftc glasses-ios/BondimalsCamera/QuestCameraSetupLink.swift scripts/glasses-camera-setup-tests.swift -o /tmp/kith-camera-setup-tests
 /tmp/kith-camera-setup-tests
 ```
+
+Camera 4 shows its build number and quest connection status at the top of the phone screen. For device troubleshooting it also writes `Library/Caches/kith-camera-status.json` inside its private app container. This records setup stages, the server origin, registration state, pairing/running flags and the last frame time; it excludes camera images, pairing codes, tokens and device identifiers. Read it with `xcrun devicectl device copy from --device DEVICE_ID --domain-type appDataContainer --domain-identifier com.bondimals.camera --source Library/Caches/kith-camera-status.json --destination /tmp/kith-camera-status.json`. Confirm the build and server plus fresh camera frames; a successful process launch does not prove camera setup succeeded.
